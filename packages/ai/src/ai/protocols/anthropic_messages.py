@@ -537,11 +537,13 @@ def _handle_sse_event(
             if btype == "text":
                 results.append(TextDoneEvent(
                     index=index, text=block.get("text", ""),
+                    text_signature=block.get("text_signature"),
                     partial=output.snapshot(),
                 ))
             elif btype == "thinking":
                 results.append(ThinkingDoneEvent(
                     index=index, thinking=block.get("thinking", ""),
+                    thinking_signature=block.get("thinking_signature"),
                     partial=output.snapshot(),
                 ))
             elif btype == "toolCall":

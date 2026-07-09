@@ -113,7 +113,11 @@ def parse_request(body: dict[str, Any]) -> tuple[str, Context, StreamOptions, bo
         system_prompt = None
 
     # Messages
-    messages = tuple(_parse_message(m) for m in body.get("messages", []))
+    messages = tuple(
+        parsed
+        for m in body.get("messages", [])
+        for parsed in _parse_message(m)
+    )
 
     # Tools
     tools = None
@@ -152,14 +156,22 @@ def parse_request(body: dict[str, Any]) -> tuple[str, Context, StreamOptions, bo
     return model_id, context, options, is_stream
 
 
-def _parse_message(msg: dict[str, Any]) -> UserMessage | AssistantMessage | ToolResultMessage:
-    """Parse a single Anthropic message dict into an ai Message."""
+def _parse_message(msg: dict[str, Any]) -> list[UserMessage | AssistantMessage | ToolResultMessage]:
+    """Parse a single Anthropic message dict into a list of ai Messages.
+
+    A single Anthropic ``user`` message may bundle multiple ``tool_result``
+    blocks (parallel tool calls) alongside text/image parts. Each
+    ``tool_result`` becomes its own :class:`ToolResultMessage`; any remaining
+    text/image parts become a single :class:`UserMessage`. Returning a list
+    ensures every ``tool_use`` id issued by the assistant is answered, which
+    the upstream Anthropic API strictly requires.
+    """
     role = msg.get("role", "")
     content = msg.get("content", "")
 
     if role == "user":
         if isinstance(content, str):
-            return UserMessage(content=content)
+            return [UserMessage(content=content)]
         # Content blocks
         parts: list[Any] = []
         tool_results: list[ToolResultMessage] = []
@@ -185,19 +197,23 @@ def _parse_message(msg: dict[str, Any]) -> UserMessage | AssistantMessage | Tool
                     )
                 else:
                     tc = (TextContent(text=str(result_content)),)
-                return ToolResultMessage(
+                tool_results.append(ToolResultMessage(
                     tool_call_id=block.get("tool_use_id", ""),
                     tool_name="",
                     content=tc,
                     is_error=block.get("is_error", False),
-                )
+                ))
+        # Emit every tool_result (parallel tool calls), then any text/image parts.
+        out: list[UserMessage | AssistantMessage | ToolResultMessage] = list(tool_results)
         if parts:
-            return UserMessage(content=tuple(parts))
-        return UserMessage(content="")
+            out.append(UserMessage(content=tuple(parts)))
+        if not out:
+            out.append(UserMessage(content=""))
+        return out
 
     if role == "assistant":
         if isinstance(content, str):
-            return AssistantMessage(content=(TextContent(text=content),))
+            return [AssistantMessage(content=(TextContent(text=content),))]
         parts_out: list[Any] = []
         for block in content:
             btype = block.get("type", "")
@@ -214,9 +230,9 @@ def _parse_message(msg: dict[str, Any]) -> UserMessage | AssistantMessage | Tool
                     name=block.get("name", ""),
                     arguments=block.get("input", {}),
                 ))
-        return AssistantMessage(content=tuple(parts_out))
+        return [AssistantMessage(content=tuple(parts_out))]
 
-    return UserMessage(content=str(content))
+    return [UserMessage(content=str(content))]
 
 
 def _parse_tool(tool: dict[str, Any]) -> Tool:
