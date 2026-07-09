@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claw"
+version = "0.57.1"
+description = "AI agent orchestration runtime with long-term memory"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "ai",
+    "agent",
+    "tui",
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+    "aiosqlite>=0.20.0",
+]
+
+[project.optional-dependencies]
+search = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2"]
+all = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2", "croniter>=2.0.0"]
+
+[project.scripts]
+xdog = "claw.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claw"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

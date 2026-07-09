@@ -1,0 +1,51 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+# pyenv
+.python-version
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+# OS
+.DS_Store
+Thumbs.db
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+# Distribution
+*.tar.gz
+*.whl
+# --- Python ---
+# --- Virtualenv ---
+env/
+# --- Tooling caches ---
+.ruff_cache/
+# --- Env / secrets ---
+.env
+.env.*
+*.env
+!.env.example
+*.key
+*.pem
+*credential*
+*secret*
+# --- OS / editor ---
+# --- x-dog ---
+data/
+result.txt
+plan.txt

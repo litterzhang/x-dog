@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tui"
+version = "0.57.1"
+description = "Terminal UI library with differential rendering"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "wcwidth>=0.2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "x-dog"
+version = "0.57.1"
+description = "Tools for building AI agents and managing LLM deployments"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Mario Zechner" },
+]
+
+dependencies = [
+    "ai",
+    "agent",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3.14",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+
+[project.scripts]
+xdog-ai = "ai.cli:main"
+xdog-agent = "agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "packages/ai/src/ai",
+    "packages/agent/src/agent",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/ai",
+    "packages/agent",
+]
+
+[tool.uv.sources]
+ai = { workspace = true }
+agent = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = [
+    "packages/ai/tests",
+    "packages/agent/tests",
+]
+asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true

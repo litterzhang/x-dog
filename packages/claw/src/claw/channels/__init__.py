@@ -1,0 +1,1 @@
+"""Channel registry for claw."""

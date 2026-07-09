@@ -1,0 +1,58 @@
+import pytest
+from tui.keys import parse_key_events
+
+def test_escape():
+    events = parse_key_events(b'\x1b')
+    assert len(events) == 1
+    assert events[0].matches("escape")
+
+def test_arrows():
+    events = parse_key_events(b'\x1b[A')
+    assert len(events) == 1
+    assert events[0].matches("up")
+    
+    events = parse_key_events(b'\x1b[B')
+    assert len(events) == 1
+    assert events[0].matches("down")
+
+def test_multiple_keys():
+    events = parse_key_events(b'ab\x03')
+    assert len(events) == 3
+    assert events[0].matches("a")
+    assert events[1].matches("b")
+    assert events[2].matches("ctrl+c")
+    
+def test_tilde_sequences():
+    events = parse_key_events(b'\x1b[15~')
+    assert len(events) == 1
+    assert events[0].matches("f5")
+    
+    events = parse_key_events(b'\x1b[1;2A')
+    assert len(events) == 1
+    assert events[0].matches("shift+up")
+
+# ---------- Kitty keyboard protocol tests ----------
+
+from tui.keys import (
+    KeyEventType,
+    decode_kitty_printable,
+    is_key_release,
+    is_key_repeat,
+)
+
+def test_kitty_simple_letter():
+    """CSI 97 u  →  'a' key press (Kitty protocol)."""
+    events = parse_key_events(b"\x1b[97u")
+    assert len(events) == 1
+    assert events[0].key == "a"
+    assert events[0].event_type == KeyEventType.PRESS
+
+def test_kitty_release_event():
+    """CSI 97;1:3u  →  'a' key release (event type 3)."""
+    events = parse_key_events(b"\x1b[97;1:3u")
+    assert len(events) == 1
+    assert events[0].key == "a"
+    assert events[0].event_type == KeyEventType.RELEASE
+    assert is_key_release(events[0])
+    assert not is_key_repeat(events[0])
+

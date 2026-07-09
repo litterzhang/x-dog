@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent"
+version = "0.57.1"
+description = "Agent runtime with tool calling and state management"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "ai",
+]
+
+[project.scripts]
+xdog-agent = "agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
