@@ -16,6 +16,7 @@ authors = [
 dependencies = [
     "ai",
     "agent",
+    "flow",
 ]
 
 [dependency-groups]
@@ -30,27 +31,32 @@ dev = [
 [project.scripts]
 xdog-ai = "ai.cli:main"
 xdog-agent = "agent.cli:main"
+xdog-flow = "flow.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = [
     "packages/ai/src/ai",
     "packages/agent/src/agent",
+    "packages/flow/src/flow",
 ]
 
 [tool.uv.workspace]
 members = [
     "packages/ai",
     "packages/agent",
+    "packages/flow",
 ]
 
 [tool.uv.sources]
 ai = { workspace = true }
 agent = { workspace = true }
+flow = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
     "packages/ai/tests",
     "packages/agent/tests",
+    "packages/flow/tests",
 ]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib"

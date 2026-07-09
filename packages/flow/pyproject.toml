@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flow"
+version = "0.57.1"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "ai",
+    "agent",
+]
+
+[project.scripts]
+xdog-flow = "flow.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
