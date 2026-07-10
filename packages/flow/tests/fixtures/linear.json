@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "linear-workflow",
+  "provider": "anthropic",
+  "entry": "a",
+  "defaults": {
+    "model": "claude-haiku-4-5"
+  },
+  "state": {
+    "result": ""
+  },
+  "nodes": [
+    {"id": "a", "prompt": "Step A"},
+    {"id": "b", "prompt": "Step B"},
+    {"id": "c", "prompt": "Step C"}
+  ],
+  "edges": [
+    {"from": "a", "to": "b"},
+    {"from": "b", "to": "c"}
+  ]
+}
