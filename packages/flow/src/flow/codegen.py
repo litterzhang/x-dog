@@ -27,7 +27,8 @@ def _render_prompt(prompt: str) -> str:
     if not keys:
         return repr(prompt)
     fstr_body = pattern.sub(lambda m: "{STATE['" + m.group(1) + "']}", prompt)
-    return 'f"' + fstr_body.replace('"', '\\"') + '"'
+    escaped = fstr_body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    return 'f"""' + escaped + '"""'
 
 
 def _state_expr_from_str(s: str) -> str:
@@ -39,7 +40,8 @@ def _state_expr_from_str(s: str) -> str:
     inter = re.compile(r"\{\{\s*(\w+)\s*\}\}")
     if inter.search(s):
         body = inter.sub(lambda x: "{STATE.get('" + x.group(1) + "', '')}", s)
-        return 'f"' + body.replace('"', '\\"') + '"'
+        escaped = body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+        return 'f"""' + escaped + '"""'
     return repr(s)
 
 
@@ -64,6 +66,15 @@ def _condition_to_expr(cond: Condition) -> str:
     return "True"
 
 
+def _wrap_string_expr(expr: str, indent: int = 4) -> str:
+    """Return expr; append ``# noqa: E501`` if the assignment line would exceed 120 chars."""
+    prefix = " " * indent
+    # Account for "    _sys = " (indent + 7 chars)
+    if len(prefix) + 7 + len(expr) <= 120:
+        return expr
+    return expr + "  # noqa: E501"
+
+
 def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     node_map = {n.id: n for n in wf.nodes}
     node = node_map[node_id]
@@ -73,9 +84,13 @@ def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     user_prompt = _render_prompt(node.prompt)
     output_key = node.output or node_id
 
+    sys_lines = _wrap_string_expr(sys_prompt, indent=4)
+    usr_lines = _wrap_string_expr(user_prompt, indent=4)
     lines = [
         f"async def {fn_name}(provider: object) -> None:",
-        f'    result = await _run_agent(provider, "{model}", {sys_prompt}, {user_prompt})',
+        f"    _sys = {sys_lines}",
+        f"    _usr = {usr_lines}",
+        f'    result = await _run_agent(provider, "{model}", _sys, _usr)',
         f'    STATE["{output_key}"] = result',
     ]
     return "\n".join(lines)
