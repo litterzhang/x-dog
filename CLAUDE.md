@@ -325,7 +325,24 @@ Response -> [BlockChunker] -> [Channel] -> User
 - `store.py` — Persistence
 - `tools/` — Tool implementations: `attach`, `bash`, `edit`, `read`, `write`, `truncate`
 
-### 7. `pods` — GPU Pod Management CLI
+### 7. `flow` — Multi-Agent Workflow Engine & Code Generator
+
+**Purpose**: Define multi-agent pipelines as JSON, execute them at runtime, or compile them to a self-contained Python module.
+
+**Key Files**:
+- `models.py` — frozen dataclasses: `WorkflowDef`, `NodeDef`, `EdgeDef`, `Condition`
+- `loader.py` — `load_workflow(path)` — parse + validate JSON into `WorkflowDef`
+- `executor.py` — `execute(wf, ...)` — async thought-action-observation loop with conditional edges and bounded back-edge loops
+- `codegen.py` — `generate(wf)` — emit a self-contained Python module from a workflow
+- `graph.py` — `to_ascii()` / `to_mermaid()` — topology rendering
+- `cli.py` — `xdog-flow` CLI: `validate`, `run`, `generate`, `graph`
+- `examples/research_write_review.json` — 3-node research→write→review with conditional loop
+
+**Design**: Each node is an `agent.Agent` turn. Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. State is a flat `dict[str, str]`; `{{key}}` in prompts is interpolated from state. Provider is resolved once via `ai.provider()` and shared across all nodes.
+
+---
+
+### 8. `pods` — GPU Pod Management CLI
 
 **Purpose**: CLI for managing vLLM deployments on GPU pods.
 
