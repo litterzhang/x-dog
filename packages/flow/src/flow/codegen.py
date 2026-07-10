@@ -7,29 +7,7 @@ import re
 import string
 from collections import defaultdict
 
-from flow.models import WorkflowDef
-
-
-def _topo_linear(wf: WorkflowDef) -> list[str]:
-    """Return node IDs in linear topological order (entry first)."""
-    edges_from: dict[str, list[str]] = defaultdict(list)
-    for edge in wf.edges:
-        if edge.loop_max is None:
-            edges_from[edge.src].append(edge.dst)
-
-    order: list[str] = []
-    visited: set[str] = set()
-
-    def _visit(node_id: str) -> None:
-        if node_id in visited:
-            return
-        visited.add(node_id)
-        order.append(node_id)
-        for dst in edges_from[node_id]:
-            _visit(dst)
-
-    _visit(wf.entry)
-    return order
+from flow.models import Condition, EdgeDef, WorkflowDef
 
 
 def _safe_id(node_id: str) -> str:
@@ -44,16 +22,46 @@ def _render_initial_state(wf: WorkflowDef) -> str:
 
 def _render_prompt(prompt: str) -> str:
     """Emit prompt with {{key}} replaced by STATE['key'] lookups as an f-string."""
-    # Find all {{key}} placeholders
     pattern = re.compile(r"\{\{\s*(\w+)\s*\}\}")
     keys = pattern.findall(prompt)
     if not keys:
         return repr(prompt)
-    # Build an f-string: replace {{key}} with {STATE['key']}
     fstr_body = pattern.sub(lambda m: "{STATE['" + m.group(1) + "']}", prompt)
-    # Escape any existing curly braces that are NOT our replacements first:
-    # We already substituted placeholders to valid f-string refs, just wrap.
     return 'f"' + fstr_body.replace('"', '\\"') + '"'
+
+
+def _state_expr_from_str(s: str) -> str:
+    """Convert a possibly-interpolated string to a Python expression using STATE.get()."""
+    single = re.compile(r"^\{\{\s*(\w+)\s*\}\}$")
+    m = single.match(s.strip())
+    if m:
+        return f"STATE.get('{m.group(1)}', '')"
+    inter = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+    if inter.search(s):
+        body = inter.sub(lambda x: "{STATE.get('" + x.group(1) + "', '')}", s)
+        return 'f"' + body.replace('"', '\\"') + '"'
+    return repr(s)
+
+
+def _condition_to_expr(cond: Condition) -> str:
+    """Translate a Condition tree to a Python boolean expression over STATE lookups."""
+    if cond.op == "equals":
+        lhs = _state_expr_from_str(cond.value or "")
+        rhs = _state_expr_from_str(cond.text or "")
+        return f"{lhs} == {rhs}"
+    if cond.op == "contains":
+        text_e = _state_expr_from_str(cond.text or "")
+        val_e = _state_expr_from_str(cond.value or "")
+        return f"{text_e} in {val_e}"
+    if cond.op == "not":
+        return f"not ({_condition_to_expr(cond.children[0])})"
+    if cond.op == "and":
+        parts = [f"({_condition_to_expr(c)})" for c in cond.children]
+        return " and ".join(parts)
+    if cond.op == "or":
+        parts = [f"({_condition_to_expr(c)})" for c in cond.children]
+        return " or ".join(parts)
+    return "True"
 
 
 def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
@@ -73,9 +81,110 @@ def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
-def _render_main_body(order: list[str]) -> str:
-    calls = [f"    await node_{_safe_id(nid)}(provider)" for nid in order]
-    return "\n".join(calls)
+def _build_fwd_graph(
+    wf: WorkflowDef,
+) -> tuple[dict[str, list[EdgeDef]], dict[str, list[str]], list[EdgeDef]]:
+    """Split edges into forward (non-loop) and loop back-edges.
+
+    Returns:
+        fwd_from: node_id -> list[EdgeDef] for forward edges
+        fwd_preds: node_id -> list[predecessor node_ids] for forward edges
+        loop_edges: all EdgeDef where loop_max is not None
+    """
+    fwd_from: dict[str, list[EdgeDef]] = defaultdict(list)
+    fwd_preds: dict[str, list[str]] = defaultdict(list)
+    loop_edges: list[EdgeDef] = []
+    for e in wf.edges:
+        if e.loop_max is None:
+            fwd_from[e.src].append(e)
+            fwd_preds[e.dst].append(e.src)
+        else:
+            loop_edges.append(e)
+    return fwd_from, fwd_preds, loop_edges
+
+
+def _render_main_body(wf: WorkflowDef) -> str:
+    """Generate the body of async def main() for the given workflow.
+
+    Handles:
+    - Sequential execution (single node per BFS wave)
+    - Parallel fan-out/fan-in via asyncio.gather (multiple nodes per BFS wave)
+    - Conditional edges via ``if <expr>:`` blocks
+    - Bounded loops via ``for _loop_i in range(loop_max):``
+    """
+    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
+
+    # loop_entry_map: entry_node -> (exit_node, loop_max)
+    # The loop body is all nodes between entry_node and exit_node (inclusive) in
+    # the forward graph.  We emit a ``for`` block that opens at entry_node and
+    # closes after exit_node.
+    loop_entry_map: dict[str, tuple[str, int | None]] = {}
+    loop_exit_set: set[str] = set()
+    for le in loop_edges:
+        loop_entry_map[le.dst] = (le.src, le.loop_max)
+        loop_exit_set.add(le.src)
+
+    completed: set[str] = set()
+    pending: list[str] = [wf.entry]
+    lines: list[str] = []
+    loop_depth = 0
+
+    def ind() -> str:
+        return "    " * (1 + loop_depth)
+
+    while pending:
+        # All nodes whose forward predecessors are complete
+        ready = [n for n in pending if all(p in completed for p in fwd_preds.get(n, []))]
+        if not ready:
+            break
+        for n in ready:
+            pending.remove(n)
+
+        # Open a loop block if any ready node is a loop entry
+        for n in ready:
+            if n in loop_entry_map:
+                _, lmax = loop_entry_map[n]
+                lines.append(f"{ind()}for _loop_i in range({lmax}):")
+                loop_depth += 1
+                break
+
+        # Emit the wave
+        if len(ready) == 1:
+            n = ready[0]
+            # Detect if this node is only reachable via a conditional edge
+            cond_edges = [
+                e for p in fwd_preds.get(n, []) for e in fwd_from.get(p, []) if e.dst == n and e.when is not None
+            ]
+            unconditional_preds = [
+                e for p in fwd_preds.get(n, []) for e in fwd_from.get(p, []) if e.dst == n and e.when is None
+            ]
+            if cond_edges and not unconditional_preds:
+                cond_expr = _condition_to_expr(cond_edges[0].when)  # type: ignore[arg-type]
+                lines.append(f"{ind()}if {cond_expr}:")
+                lines.append(f"{ind()}    await node_{_safe_id(n)}(provider)")
+            else:
+                lines.append(f"{ind()}await node_{_safe_id(n)}(provider)")
+        else:
+            calls = [f"node_{_safe_id(n)}(provider)" for n in ready]
+            lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
+
+        for n in ready:
+            completed.add(n)
+
+        # Close loop block when the loop exit node is processed
+        for n in ready:
+            if n in loop_exit_set:
+                loop_depth -= 1
+                break
+
+        # Discover forward successors
+        for n in ready:
+            for e in fwd_from.get(n, []):
+                succ = e.dst
+                if succ not in completed and succ not in pending:
+                    pending.append(succ)
+
+    return "\n".join(lines)
 
 
 def generate(wf: WorkflowDef) -> str:
@@ -83,9 +192,8 @@ def generate(wf: WorkflowDef) -> str:
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
     tmpl_text = tmpl_path.read_text(encoding="utf-8")
 
-    order = _topo_linear(wf)
-    node_functions = "\n\n\n".join(_render_node_function(nid, wf) for nid in order)
-    main_body = _render_main_body(order)
+    node_functions = "\n\n\n".join(_render_node_function(n.id, wf) for n in wf.nodes)
+    main_body = _render_main_body(wf)
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
