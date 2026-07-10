@@ -73,3 +73,7 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["agent", "agent.*", "ai", "ai.*"]
+ignore_missing_imports = true
