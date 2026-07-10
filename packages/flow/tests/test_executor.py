@@ -8,7 +8,7 @@ from typing import Any
 from ai.types import AssistantMessage, DoneEvent, TextContent
 from ai.utils.event_stream import EventStream as AiEventStream
 from flow.executor import ExecResult, execute
-from flow.models import EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -286,3 +286,106 @@ async def test_parallel_diamond() -> None:
     # d's prompt could read both b and c outputs (verify via final state)
     assert result.final_state["vb"] in "output_from_b"
     assert result.final_state["vc"] in "output_from_c"
+
+
+# ---------------------------------------------------------------------------
+# Step 7: conditional edges + bounded loops
+# ---------------------------------------------------------------------------
+
+
+async def test_conditional_edge_not_taken() -> None:
+    """An edge whose ``when`` condition is False is not traversed."""
+    factory = _make_stream_fn({"m": "no_match"})
+
+    wf = WorkflowDef(
+        name="cond_skip",
+        provider="fake",
+        entry="a",
+        default_model="m",
+        nodes=(
+            NodeDef(id="a", model="m", prompt="first", output="va"),
+            NodeDef(id="b", model="m", prompt="second", output="vb"),
+        ),
+        edges=(
+            EdgeDef(
+                src="a",
+                dst="b",
+                when=Condition(op="contains", value="{{va}}", text="NEVER_PRESENT"),
+            ),
+        ),
+    )
+
+    result = await execute(wf, stream_fn_factory=factory)
+
+    assert "va" in result.final_state
+    assert "vb" not in result.final_state
+
+
+async def test_loop() -> None:
+    """review->write back-edge with loop_max=2.
+
+    fake stream_fn returns 'REVISE' on first pass then 'APPROVE'; write runs exactly twice.
+    """
+    write_run_count: list[int] = [0]
+    # review responses: pass1=REVISE, pass2=APPROVE
+    review_responses = ["REVISE", "APPROVE"]
+    review_call: list[int] = [0]
+
+    def _factory(model: str) -> Any:
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> AiEventStream[AssistantMessage]:
+            if model == "write-model":
+                write_run_count[0] += 1
+                text = "draft"
+            else:
+                idx = review_call[0]
+                review_call[0] += 1
+                text = review_responses[idx] if idx < len(review_responses) else "APPROVE"
+
+            msg = AssistantMessage(content=(TextContent(text=text),))
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    wf = WorkflowDef(
+        name="review_loop",
+        provider="fake",
+        entry="write",
+        default_model="write-model",
+        nodes=(
+            NodeDef(id="write", model="write-model", prompt="write something", output="draft"),
+            NodeDef(id="review", model="review-model", prompt="review {{draft}}", output="verdict"),
+        ),
+        edges=(
+            # Forward edge
+            EdgeDef(src="write", dst="review"),
+            # Back-edge: review -> write, only when verdict contains REVISE
+            EdgeDef(
+                src="review",
+                dst="write",
+                when=Condition(op="contains", value="{{verdict}}", text="REVISE"),
+                loop_max=2,
+            ),
+        ),
+    )
+
+    result = await execute(wf, stream_fn_factory=_factory)
+
+    # write ran exactly twice (once initial, once from loop)
+    assert write_run_count[0] == 2
+    # Final verdict should be APPROVE (second review call)
+    assert result.final_state["verdict"] == "APPROVE"
+    # Loop stopped — no infinite execution
+    assert review_call[0] == 2

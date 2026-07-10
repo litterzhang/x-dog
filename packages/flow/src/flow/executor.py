@@ -83,6 +83,8 @@ async def execute(
 
     # Track which nodes have finished
     completed: set[str] = set()
+    # Per-edge loop fire counter (loop_max edges only)
+    loop_counters: dict[EdgeDef, int] = {}
 
     async def _run_node(node_id: str) -> None:
         """Execute a single node and update shared state."""
@@ -139,12 +141,51 @@ async def execute(
         return True
 
     def _successors(node_id: str) -> list[str]:
-        """Return successor node IDs reachable from node_id given current state."""
+        """Return successor node IDs reachable from node_id given current state.
+
+        Loop back-edges are handled separately by _activate_loops.
+        """
         result: list[str] = []
         for edge in edges_from.get(node_id, []):
+            if edge.loop_max is not None:
+                continue  # loop edges handled separately
             if edge.when is None or evaluate(edge.when, state):
                 result.append(edge.dst)
         return result
+
+    def _transitive_successors(node_id: str) -> set[str]:
+        """Return all nodes reachable from node_id (forward edges only, not loop edges)."""
+        visited: set[str] = set()
+        queue = [node_id]
+        while queue:
+            cur = queue.pop()
+            for edge in edges_from.get(cur, []):
+                if edge.loop_max is not None:
+                    continue
+                if edge.dst not in visited:
+                    visited.add(edge.dst)
+                    queue.append(edge.dst)
+        return visited
+
+    def _activate_loops(just_finished: list[str], pending: set[str]) -> None:
+        """Check loop back-edges from just_finished nodes; re-activate dst if condition holds."""
+        for node_id in just_finished:
+            for edge in edges_from.get(node_id, []):
+                if edge.loop_max is None:
+                    continue
+                count = loop_counters.get(edge, 0)
+                if count >= edge.loop_max:
+                    continue
+                if edge.when is not None and not evaluate(edge.when, state):
+                    continue
+                # Fire the loop: increment counter, un-complete dst + its successors
+                loop_counters[edge] = count + 1
+                dst = edge.dst
+                to_reset = {dst} | _transitive_successors(dst)
+                for n in to_reset:
+                    completed.discard(n)
+                pending.add(dst)
+                logger.debug("Loop edge %r->%r fired (count %d/%d)", node_id, dst, loop_counters[edge], edge.loop_max)
 
     # --- Scheduler loop ---
     # pending: nodes whose predecessors are all done but haven't started yet.
@@ -169,6 +210,9 @@ async def execute(
 
         for n in ready:
             in_flight.discard(n)
+
+        # Check loop back-edges before discovering normal successors
+        _activate_loops(ready, pending)
 
         # Discover newly unblocked nodes
         for n in ready:
