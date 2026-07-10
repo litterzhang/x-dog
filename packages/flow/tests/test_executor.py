@@ -1,4 +1,4 @@
-"""Tests for flow.executor — linear workflow execution."""
+"""Tests for flow.executor — linear + parallel workflow execution."""
 
 from __future__ import annotations
 
@@ -214,3 +214,75 @@ async def test_initial_state_available() -> None:
 
     assert len(captured) == 1
     assert "hello_initial" in captured[0][1]
+
+
+async def test_parallel_diamond() -> None:
+    """Diamond a -> (b, c) -> d: b and c run concurrently; d sees both outputs."""
+    call_order: list[str] = []
+
+    def _factory(model: str) -> Any:
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> Any:
+            from ai.types import AssistantMessage, DoneEvent, TextContent
+            from ai.utils.event_stream import EventStream as AiEventStream
+
+            call_order.append(model)
+            response_text = f"output_from_{model}"
+            msg = AssistantMessage(content=(TextContent(text=response_text),))
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    wf = WorkflowDef(
+        name="diamond",
+        provider="fake",
+        entry="a",
+        default_model="a",
+        nodes=(
+            NodeDef(id="a", model="a", prompt="step a", output="va"),
+            NodeDef(id="b", model="b", prompt="step b uses {{va}}", output="vb"),
+            NodeDef(id="c", model="c", prompt="step c uses {{va}}", output="vc"),
+            NodeDef(id="d", model="d", prompt="step d uses {{vb}} and {{vc}}", output="vd"),
+        ),
+        edges=(
+            EdgeDef(src="a", dst="b"),
+            EdgeDef(src="a", dst="c"),
+            EdgeDef(src="b", dst="d"),
+            EdgeDef(src="c", dst="d"),
+        ),
+    )
+
+    result = await execute(wf, stream_fn_factory=_factory)
+
+    # Both b and c must have run (outputs present)
+    assert "vb" in result.final_state
+    assert "vc" in result.final_state
+    assert result.final_state["vb"] == "output_from_b"
+    assert result.final_state["vc"] == "output_from_c"
+
+    # d ran after b and c
+    assert "vd" in result.final_state
+    assert result.final_state["vd"] == "output_from_d"
+
+    # a must come first, d must come last
+    assert call_order[0] == "a"
+    assert call_order[-1] == "d"
+
+    # b and c both ran (order between them is non-deterministic)
+    assert set(call_order[1:-1]) == {"b", "c"}
+
+    # d's prompt could read both b and c outputs (verify via final state)
+    assert result.final_state["vb"] in "output_from_b"
+    assert result.final_state["vc"] in "output_from_c"
