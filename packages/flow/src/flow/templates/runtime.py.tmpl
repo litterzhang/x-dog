@@ -1,0 +1,39 @@
+"""$workflow_name — generated workflow module."""
+
+import asyncio
+
+import ai
+from agent import Agent
+from agent.core import AgentConfig, StreamFn
+from agent.events import TurnEndEvent
+from agent.helpers import stream_fn_from_provider
+from ai.types import AssistantMessage, TextContent
+
+STATE: dict[str, str] = $initial_state
+
+
+async def _run_agent(provider: object, model: str, system_prompt: str, prompt: str) -> str:
+    stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
+    agent = Agent(stream_fn, config=AgentConfig(model=model, system_prompt=system_prompt))
+    accumulated: list[str] = []
+    event_stream = await agent.prompt(prompt)
+    async for event in event_stream:
+        if isinstance(event, TurnEndEvent) and event.message is not None:
+            msg = event.message
+            if isinstance(msg, AssistantMessage):
+                for part in msg.content:
+                    if isinstance(part, TextContent):
+                        accumulated.append(part.text)
+    return "".join(accumulated)
+
+
+$node_functions
+
+
+async def main() -> None:
+    provider = ai.provider("$provider")
+$main_body
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
