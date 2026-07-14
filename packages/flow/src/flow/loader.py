@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,8 @@ def _parse_condition(data: Any) -> Condition:
 
 
 def _parse_node(data: dict[str, Any]) -> NodeDef:
+    raw_tools = data.get("tools", [])
+    tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
     return NodeDef(
         id=str(data["id"]),
         type=data.get("type", "agent"),
@@ -39,6 +42,8 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         system_prompt=data.get("system_prompt", ""),
         prompt=data.get("prompt", ""),
         output=data.get("output"),
+        tools=tools,
+        run=data.get("run"),
     )
 
 
@@ -101,6 +106,23 @@ def validate_workflow(wf: WorkflowDef) -> None:
     # entry exists
     if wf.entry not in node_index:
         raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes")
+
+    # per-node type constraints
+    _run_re = re.compile(r"^[\w.]+:[\w]+$")
+    for node in wf.nodes:
+        for tool in node.tools:
+            if not tool:
+                raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
+        if node.type == "script":
+            if not node.run:
+                raise WorkflowValidationError(f"Script node {node.id!r} must have a non-empty 'run' field")
+            if not _run_re.match(node.run):
+                raise WorkflowValidationError(
+                    f"Script node {node.id!r}: 'run' must match 'module.path:callable', got {node.run!r}"
+                )
+        elif node.type == "agent":
+            if node.run is not None:
+                raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
 
     # edges reference existing nodes; back-edges need loop_max
     for edge in wf.edges:

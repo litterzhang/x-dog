@@ -146,3 +146,56 @@ def test_parse_condition_and_or() -> None:
     assert cond.children[0].op == "equals"
     assert cond.children[1].op == "not"
     assert cond.children[1].children[0].op == "contains"
+
+
+def test_load_tools_script_ok() -> None:
+    wf = load_workflow(FIXTURES / "tools_script.json")
+    assert wf.provider == "copilot"
+    assert wf.default_model == "claude-sonnet-4.5"
+    assert wf.entry == "prep"
+    node_map = {n.id: n for n in wf.nodes}
+    prep = node_map["prep"]
+    analyze = node_map["analyze"]
+    assert prep.type == "script"
+    assert prep.run == "flow.tools:passthrough"
+    assert analyze.tools == ("echo",)
+    assert analyze.type == "agent"
+
+
+def test_script_node_missing_run_raises() -> None:
+    data = {
+        "name": "bad-script",
+        "provider": "copilot",
+        "entry": "s",
+        "nodes": [{"id": "s", "type": "script"}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="run"):
+        validate_workflow(wf)
+
+
+def test_agent_node_with_run_raises() -> None:
+    data = {
+        "name": "bad-agent",
+        "provider": "copilot",
+        "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "run": "flow.tools:passthrough"}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="must not set"):
+        validate_workflow(wf)
+
+
+def test_script_node_bad_run_format_raises() -> None:
+    data = {
+        "name": "bad-run",
+        "provider": "copilot",
+        "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "run": "not-valid-format"}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="module.path:callable"):
+        validate_workflow(wf)

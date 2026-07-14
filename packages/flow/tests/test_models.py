@@ -109,3 +109,29 @@ def test_workflow_def_initial_state() -> None:
         initial_state=(("key", "value"),),
     )
     assert wf.initial_state == (("key", "value"),)
+
+
+def test_node_def_script_type() -> None:
+    node = NodeDef(id="s1", type="script", run="flow.tools:passthrough", output="out")
+    assert node.type == "script"
+    assert node.run == "flow.tools:passthrough"
+    assert node.tools == ()
+    updated = dataclasses.replace(node, run="flow.tools:other")
+    assert updated.run == "flow.tools:other"
+    assert node.run == "flow.tools:passthrough"
+
+
+def test_node_def_agent_with_tools() -> None:
+    node = NodeDef(id="a1", tools=("echo", "search"))
+    assert node.type == "agent"
+    assert node.tools == ("echo", "search")
+    assert node.run is None
+    updated = dataclasses.replace(node, tools=("echo",))
+    assert updated.tools == ("echo",)
+    assert node.tools == ("echo", "search")
+
+
+def test_node_def_new_fields_default() -> None:
+    node = NodeDef(id="n1")
+    assert node.tools == ()
+    assert node.run is None

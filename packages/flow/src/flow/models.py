@@ -9,11 +9,13 @@ from typing import Literal
 @dataclass(frozen=True)
 class NodeDef:
     id: str
-    type: Literal["agent"] = "agent"
+    type: Literal["agent", "script"] = "agent"
     model: str | None = None
     system_prompt: str = ""
     prompt: str = ""
     output: str | None = None
+    tools: tuple[str, ...] = ()
+    run: str | None = None
 
 
 @dataclass(frozen=True)
