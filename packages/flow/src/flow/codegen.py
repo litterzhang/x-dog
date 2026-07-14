@@ -79,10 +79,19 @@ def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     node_map = {n.id: n for n in wf.nodes}
     node = node_map[node_id]
     fn_name = f"node_{_safe_id(node_id)}"
+    output_key = node.output or node_id
+
+    if node.type == "script":
+        safe = _safe_id(node_id)
+        lines = [
+            f"async def {fn_name}(provider: object) -> None:",
+            f'    STATE["{output_key}"] = await _script_{safe}(STATE)',
+        ]
+        return "\n".join(lines)
+
     model = node.model or wf.default_model
     sys_prompt = _render_prompt(node.system_prompt)
     user_prompt = _render_prompt(node.prompt)
-    output_key = node.output or node_id
 
     sys_lines = _wrap_string_expr(sys_prompt, indent=4)
     usr_lines = _wrap_string_expr(user_prompt, indent=4)
@@ -90,9 +99,14 @@ def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
         f"async def {fn_name}(provider: object) -> None:",
         f"    _sys = {sys_lines}",
         f"    _usr = {usr_lines}",
-        f'    result = await _run_agent(provider, "{model}", _sys, _usr)',
-        f'    STATE["{output_key}"] = result',
     ]
+    if node.tools:
+        tool_names = ", ".join(f'"{t}"' for t in node.tools)
+        lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
+        lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)')
+    else:
+        lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr)')
+    lines.append(f'    STATE["{output_key}"] = result')
     return "\n".join(lines)
 
 
@@ -202,6 +216,38 @@ def _render_main_body(wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def _render_script_imports(wf: WorkflowDef) -> str:
+    """Emit top-level imports for flow.tools registry and any script node run functions.
+
+    ``from flow.tools import default_registry`` is always emitted.  Script-node
+    imports are appended; if they also come from ``flow.tools`` they are merged
+    onto the same line to satisfy ruff isort.
+    """
+    # Collect script-node imports keyed by module
+    extra: dict[str, list[str]] = {}  # module -> ["func as alias", ...]
+    for node in wf.nodes:
+        if node.type == "script" and node.run:
+            module, func = node.run.rsplit(":", 1)
+            safe = _safe_id(node.id)
+            alias = f"{func} as _script_{safe}"
+            extra.setdefault(module, []).append(alias)
+
+    # Build the flow.tools import lines (always needed for default_registry).
+    # Keep aliased imports on a separate line from non-aliased ones so that
+    # ruff isort (combine-as-imports=false by default) does not reformat them.
+    flow_tools_aliases = extra.pop("flow.tools", [])
+    lines: list[str] = ["from flow.tools import default_registry"]
+    for alias in flow_tools_aliases:
+        lines.append(f"from flow.tools import {alias}")
+
+    # Remaining non-flow.tools script imports
+    for module, aliases in sorted(extra.items()):
+        for alias in aliases:
+            lines.append(f"from {module} import {alias}")
+
+    return "\n".join(lines) + "\n"
+
+
 def generate(wf: WorkflowDef) -> str:
     """Generate a complete Python module string for the given WorkflowDef."""
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
@@ -216,5 +262,6 @@ def generate(wf: WorkflowDef) -> str:
         node_functions=node_functions,
         provider=wf.provider,
         main_body=main_body,
+        script_imports=_render_script_imports(wf),
     )
     return result

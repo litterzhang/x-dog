@@ -174,3 +174,73 @@ def test_generate_loop() -> None:
         assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def test_generate_with_tools() -> None:
+    wf = WorkflowDef(
+        name="tools_workflow",
+        provider="anthropic",
+        entry="step1",
+        nodes=(
+            NodeDef(
+                id="step1",
+                model="claude-3-haiku",
+                system_prompt="You are a helper.",
+                prompt="Use echo.",
+                output="result",
+                tools=("echo",),
+            ),
+        ),
+        edges=(),
+        default_model="claude-3-haiku",
+    )
+    src = generate(wf)
+    assert "_REGISTRY.resolve(" in src
+    assert '"echo"' in src
+    compile(src, "<generated>", "exec")
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(src)
+        tmp = Path(f.name)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_generate_script() -> None:
+    wf = WorkflowDef(
+        name="script_workflow",
+        provider="anthropic",
+        entry="step1",
+        nodes=(
+            NodeDef(
+                id="step1",
+                type="script",
+                run="flow.tools:passthrough",
+                output="result",
+            ),
+        ),
+        edges=(),
+        default_model="claude-3-haiku",
+    )
+    src = generate(wf)
+    assert "passthrough as _script_" in src
+    assert "await _script_" in src
+    compile(src, "<generated>", "exec")
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(src)
+        tmp = Path(f.name)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
+    finally:
+        tmp.unlink(missing_ok=True)

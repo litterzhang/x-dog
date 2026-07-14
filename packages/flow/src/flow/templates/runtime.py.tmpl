@@ -4,17 +4,21 @@ import asyncio
 
 import ai
 from agent import Agent
-from agent.core import AgentConfig, StreamFn
+from agent.core import AgentConfig, AgentTool, StreamFn
 from agent.events import TurnEndEvent
 from agent.helpers import stream_fn_from_provider
 from ai.types import AssistantMessage, TextContent
-
+$script_imports
 STATE: dict[str, str] = $initial_state
 
+_REGISTRY = default_registry()
 
-async def _run_agent(provider: object, model: str, system_prompt: str, prompt: str) -> str:
+
+async def _run_agent(
+    provider: object, model: str, system_prompt: str, prompt: str, tools: tuple[AgentTool, ...] = ()
+) -> str:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
-    agent = Agent(stream_fn, config=AgentConfig(model=model, system_prompt=system_prompt))
+    agent = Agent(stream_fn, config=AgentConfig(model=model, system_prompt=system_prompt), tools=tools)
     accumulated: list[str] = []
     event_stream = await agent.prompt(prompt)
     async for event in event_stream:
