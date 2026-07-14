@@ -3,21 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from agent.agent import Agent
-from agent.core import AgentConfig, StreamFn
+from agent.core import AgentConfig, AgentTool, StreamFn
 from agent.events import TurnEndEvent
 from ai.types import AssistantMessage, TextContent
 
 from flow.conditions import evaluate
 from flow.interpolate import interpolate
 from flow.models import EdgeDef, WorkflowDef
+from flow.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+ScriptResolver = Callable[[str], Callable[..., Awaitable[str]]]
+
+
+def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
+    """Parse 'module:func' and import the callable."""
+    module_name, _, func_name = run.partition(":")
+    module = importlib.import_module(module_name)
+    fn: Callable[..., Awaitable[str]] = getattr(module, func_name)
+    return fn
 
 
 @dataclass(frozen=True)
@@ -33,6 +45,8 @@ async def execute(
     *,
     stream_fn_factory: Callable[[str], StreamFn] | None = None,
     timeout: float = 120.0,
+    tool_registry: ToolRegistry | None = None,
+    script_resolver: ScriptResolver | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -52,7 +66,19 @@ async def execute(
         in tests.
     timeout:
         Per-node wall-clock timeout in seconds.
+    tool_registry:
+        Registry of :class:`~agent.core.AgentTool` objects available to agent nodes.
+        Defaults to :func:`~flow.tools.default_registry`.
+    script_resolver:
+        Callable that maps a ``'module:func'`` string to an async callable for script nodes.
+        Defaults to the built-in importlib-based resolver.
     """
+    from flow.tools import default_registry as _default_registry
+
+    if tool_registry is None:
+        tool_registry = _default_registry()
+    if script_resolver is None:
+        script_resolver = _default_script_resolver
     if stream_fn_factory is None:
         import ai
         from agent.helpers import stream_fn_from_provider
@@ -93,6 +119,24 @@ async def execute(
         async with _state_lock:
             state_snapshot = dict(state)
 
+        if node.type == "script":
+            assert script_resolver is not None
+            if node.run is None:
+                raise ValueError(f"Script node {node_id!r} has no 'run' field")
+            fn = script_resolver(node.run)
+
+            async def _run_script() -> None:
+                result = await fn(dict(state_snapshot))
+                if node.output is not None:
+                    async with _state_lock:
+                        state[node.output] = result
+                        node_outputs[node.output] = result
+
+            await asyncio.wait_for(_run_script(), timeout=timeout)
+            completed.add(node_id)
+            return
+
+        # agent node
         sys_prompt = interpolate(node.system_prompt, state_snapshot)
         user_prompt = interpolate(node.prompt, state_snapshot)
 
@@ -101,9 +145,13 @@ async def execute(
         assert stream_fn_factory is not None
         stream_fn = stream_fn_factory(model)
 
+        assert tool_registry is not None
+        resolved_tools: tuple[AgentTool, ...] = tool_registry.resolve(node.tools)
+
         agent = Agent(
             stream_fn,
             config=AgentConfig(model=model, system_prompt=sys_prompt),
+            tools=resolved_tools,
         )
 
         logger.debug("Running node %r with model %r", node_id, model)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from agent.agent import Agent
 from ai.types import AssistantMessage, DoneEvent, TextContent
 from ai.utils.event_stream import EventStream as AiEventStream
 from flow.executor import ExecResult, execute
@@ -389,3 +390,103 @@ async def test_loop() -> None:
     assert result.final_state["verdict"] == "APPROVE"
     # Loop stopped — no infinite execution
     assert review_call[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# Step 18: script nodes + agent tools
+# ---------------------------------------------------------------------------
+
+
+async def test_script_node() -> None:
+    """Script node runs the resolved callable and stores output; stream_fn never called."""
+    stream_fn_called: list[bool] = []
+
+    def _never_factory(model: str) -> Any:
+        def _stream_fn(model_id: Any, context: Any, options: Any = None) -> Any:
+            stream_fn_called.append(True)
+            raise AssertionError("stream_fn should not be called for script nodes")
+
+        return _stream_fn
+
+    async def _my_script(state: dict[str, str]) -> str:
+        return "SCRIPTOUT"
+
+    wf = WorkflowDef(
+        name="script_test",
+        provider="fake",
+        entry="s1",
+        default_model="m",
+        nodes=(NodeDef(id="s1", type="script", run="dummy:fn", output="result"),),
+        edges=(),
+    )
+
+    result = await execute(
+        wf,
+        stream_fn_factory=_never_factory,
+        script_resolver=lambda _run: _my_script,
+    )
+
+    assert result.final_state["result"] == "SCRIPTOUT"
+    assert stream_fn_called == []
+
+
+async def test_agent_tools() -> None:
+    """Agent node with tools=('echo',) receives the resolved tool."""
+    from agent.core import AgentTool, AgentToolResult
+    from ai.types import TextContent as TC
+
+    # A spy tool to detect if it was passed to the Agent
+    tools_seen: list[tuple[AgentTool, ...]] = []
+
+    async def _spy_execute(
+        tool_call_id: str,
+        params: dict[str, Any],
+        cancel: Any = None,
+        on_update: Any = None,
+        ctx: Any = None,
+    ) -> AgentToolResult:
+        return AgentToolResult(content=(TC(text="echo_result"),))
+
+    spy_tool = AgentTool(
+        name="echo",
+        description="spy echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=_spy_execute,
+    )
+
+    from flow.tools import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(spy_tool)
+
+    # Capture what tools the Agent was constructed with by monkeypatching Agent.__init__
+    original_init = Agent.__init__
+
+    def _patching_init(self: Agent, stream_fn: Any, **kwargs: Any) -> None:
+        tools_arg = kwargs.get("tools")
+        if tools_arg is not None:
+            tools_seen.append(tuple(tools_arg))
+        original_init(self, stream_fn, **kwargs)
+
+    import agent.agent as _agent_module
+
+    _agent_module.Agent.__init__ = _patching_init  # type: ignore[method-assign]
+    try:
+        factory = _make_stream_fn({"m": "agent_result"})
+        wf = WorkflowDef(
+            name="tools_test",
+            provider="fake",
+            entry="n1",
+            default_model="m",
+            nodes=(NodeDef(id="n1", model="m", prompt="do work", output="out", tools=("echo",)),),
+            edges=(),
+        )
+
+        result = await execute(wf, stream_fn_factory=factory, tool_registry=registry)
+    finally:
+        _agent_module.Agent.__init__ = original_init  # type: ignore[method-assign]
+
+    assert result.final_state["out"] == "agent_result"
+    assert len(tools_seen) == 1
+    assert tools_seen[0] == (spy_tool,)
