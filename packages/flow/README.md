@@ -134,6 +134,95 @@ xdog-flow graph examples/research_write_review.json --mermaid
 
 ---
 
+## Script nodes
+
+A **script node** runs a plain async Python function instead of an LLM agent.
+Set `"type": "script"` and point `"run"` at a `module.path:callable` that
+accepts the current state mapping and returns a `str`:
+
+```jsonc
+{
+  "id": "prep",
+  "type": "script",
+  "run": "flow.tools:passthrough",   // "module:async_function"
+  "output": "prepped"                // STATE key where the return value is stored
+}
+```
+
+The callable signature must be:
+
+```python
+async def my_fn(state: Mapping[str, str]) -> str: ...
+```
+
+`flow.tools:passthrough` (the built-in demo) returns `state.get("topic", "")`.
+
+---
+
+## Per-node tools
+
+Agent nodes can declare a `"tools"` list.  Each name is resolved from the
+`ToolRegistry` at execution time:
+
+```jsonc
+{
+  "id": "analyze",
+  "type": "agent",
+  "tools": ["echo"],                 // resolved via ToolRegistry
+  "system_prompt": "You are an analyst.",
+  "prompt": "Analyse: {{prepped}}",
+  "output": "analysis"
+}
+```
+
+### ToolRegistry
+
+The executor ships a default registry pre-loaded with the `echo` built-in:
+
+```python
+from flow.tools import default_registry
+
+registry = default_registry()
+```
+
+Register custom tools before calling `execute()`:
+
+```python
+from agent.core import AgentTool
+from flow.executor import execute
+
+my_tool = AgentTool(name="my_tool", ...)
+registry = default_registry()
+registry.register(my_tool)
+
+result = await execute(wf, tool_registry=registry)
+```
+
+The generated module calls `_REGISTRY.resolve(("tool_name",))` at runtime,
+so the same registry API applies to compiled workflows too.
+
+---
+
+## Example: script node + per-node tools
+
+`examples/tools_script.json` demonstrates:
+
+- A **script node** (`prep`) that calls `flow.tools:passthrough` to copy
+  `state["topic"]` into `state["prepped"]`.
+- An **agent node** (`analyze`) that uses the built-in `echo` tool and
+  receives the prepared text via `{{prepped}}` interpolation.
+- Provider `copilot`, default model `claude-sonnet-4.5`.
+- Initial state: `{"topic": "workflow engines"}`.
+
+```bash
+xdog-flow validate examples/tools_script.json
+xdog-flow run     examples/tools_script.json --dry-run
+xdog-flow graph   examples/tools_script.json
+xdog-flow generate examples/tools_script.json -o out.py
+```
+
+---
+
 ## Example: research → write → review
 
 `examples/research_write_review.json` demonstrates:

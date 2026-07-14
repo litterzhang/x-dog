@@ -337,8 +337,10 @@ Response -> [BlockChunker] -> [Channel] -> User
 - `graph.py` — `to_ascii()` / `to_mermaid()` — topology rendering
 - `cli.py` — `xdog-flow` CLI: `validate`, `run`, `generate`, `graph`
 - `examples/research_write_review.json` — 3-node research→write→review with conditional loop
+- `examples/tools_script.json` — script node + per-node tools demo
+- `tools.py` — `ToolRegistry` (register/resolve `AgentTool` by name) + `default_registry()` + `passthrough` script-node function
 
-**Design**: Each node is an `agent.Agent` turn. Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. State is a flat `dict[str, str]`; `{{key}}` in prompts is interpolated from state. Provider is resolved once via `ai.provider()` and shared across all nodes.
+**Design**: Each node is an `agent.Agent` turn (type `"agent"`) or a plain async function (type `"script"`, resolved via `"run": "module:func"`). Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. State is a flat `dict[str, str]`; `{{key}}` in prompts is interpolated from state. Provider is resolved once via `ai.provider()` and shared across all nodes. Per-node `"tools"` lists are resolved via `ToolRegistry`; custom tools can be registered before calling `execute()`.
 
 ---
 

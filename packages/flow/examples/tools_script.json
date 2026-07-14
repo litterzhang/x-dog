@@ -1,0 +1,30 @@
+{
+  "name": "tools-script-workflow",
+  "provider": "copilot",
+  "entry": "prep",
+  "defaults": {
+    "model": "claude-sonnet-4.5"
+  },
+  "state": {
+    "topic": "workflow engines"
+  },
+  "nodes": [
+    {
+      "id": "prep",
+      "type": "script",
+      "run": "flow.tools:passthrough",
+      "output": "prepped"
+    },
+    {
+      "id": "analyze",
+      "type": "agent",
+      "tools": ["echo"],
+      "system_prompt": "You are an analyst.",
+      "prompt": "Analyse the topic below:\n\n{{prepped}}",
+      "output": "analysis"
+    }
+  ],
+  "edges": [
+    {"from": "prep", "to": "analyze"}
+  ]
+}

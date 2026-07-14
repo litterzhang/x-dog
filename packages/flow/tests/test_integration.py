@@ -199,3 +199,75 @@ async def test_generate_parity() -> None:
     finally:
         _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
         _ai.provider = original_ai_provider  # type: ignore[assignment]
+
+
+async def test_tools_script_dryrun() -> None:
+    """Load examples/tools_script.json; execute with dry-run factory + default registry.
+
+    The script node (prep) runs flow.tools:passthrough for real, copying
+    state['topic'] -> state['prepped'].  The agent node (analyze) uses the
+    stub stream_fn and must produce some output stored in state['analysis'].
+    """
+    wf_path = _EXAMPLES_DIR / "tools_script.json"
+    wf = load_workflow(wf_path)
+
+    def _dryrun_factory(m: str) -> Any:
+        dryrun_text = f"DRYRUN:{m}"
+
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> AiEventStream[AssistantMessage]:
+            msg = AssistantMessage(content=(TextContent(text=dryrun_text),))
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    from flow.tools import default_registry
+
+    result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
+
+    # Script node must have run flow.tools:passthrough and stored topic value
+    assert result.final_state.get("prepped") == "workflow engines"
+
+    # Agent node must have stored something under 'analysis'
+    assert "analysis" in result.final_state
+
+
+async def test_generate_tools_script_parity() -> None:
+    """Generate tools_script.json; ruff-check; compile; assert structural properties."""
+    wf_path = _EXAMPLES_DIR / "tools_script.json"
+    wf = load_workflow(wf_path)
+
+    src = generate(wf)
+
+    # --- structural: compiles ---
+    compile(src, "<generated>", "exec")
+
+    # --- structural: ruff-clean ---
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as tf:
+        tf.write(src)
+        tmp_path = pathlib.Path(tf.name)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    # --- structural: script node uses await _script_, agent node uses _REGISTRY.resolve ---
+    assert "await _script_prep" in src, "generated script node must call await _script_prep"
+    assert "_REGISTRY.resolve(" in src, "generated agent node must call _REGISTRY.resolve("
