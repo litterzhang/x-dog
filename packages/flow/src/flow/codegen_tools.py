@@ -125,7 +125,7 @@ async def verify_generated_module(state: Mapping[str, str]) -> str:
     if not module_file or not mypy_target or not test_file:
         return "FAIL: need module_file, mypy_target, and test_file in state"
 
-    ruff_rc, ruff_out = await _run([sys.executable, "-m", "ruff", "check", module_file], cwd=None)
+    ruff_rc, ruff_out = await _run([sys.executable, "-m", "ruff", "check", module_file, test_file], cwd=None)
     if ruff_rc != 0:
         return f"FAIL: ruff\n{ruff_out[-_REPORT_TAIL:]}"
 
@@ -141,20 +141,22 @@ async def verify_generated_module(state: Mapping[str, str]) -> str:
 
 
 async def autofix_module(state: Mapping[str, str]) -> str:
-    """Apply mechanical, deterministic fixes to a generated file before verifying.
+    """Apply mechanical, deterministic fixes to generated file(s) before verifying.
 
-    Runs ``ruff check --fix`` then ``ruff format`` on ``state['module_file']``.
+    Runs ``ruff check --fix`` then ``ruff format`` on ``state['module_file']`` and,
+    when present, ``state['test_file']`` (the double-blind pipelines generate both).
     These resolve import ordering (I001), unused imports (F401), and formatting —
     fixes a code generator should not have to get right by hand, and which would
     otherwise waste the review→implement loop.  Returns a short report; never
     fails the pipeline (formatting is best-effort).
     """
-    module_file = state.get("module_file", "")
-    if not module_file:
+    targets = [state.get("module_file", ""), state.get("test_file", "")]
+    files = [f for f in targets if f]
+    if not files:
         return "autofix skipped: no module_file"
-    await _run([sys.executable, "-m", "ruff", "check", "--fix", module_file], cwd=None)
-    await _run([sys.executable, "-m", "ruff", "format", module_file], cwd=None)
-    return f"autofixed {module_file}"
+    await _run([sys.executable, "-m", "ruff", "check", "--fix", *files], cwd=None)
+    await _run([sys.executable, "-m", "ruff", "format", *files], cwd=None)
+    return f"autofixed {', '.join(files)}"
 
 
 def registry_with_filesystem() -> ToolRegistry:
