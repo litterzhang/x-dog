@@ -70,10 +70,32 @@ _ECHO_TOOL = AgentTool(
 
 
 def default_registry() -> ToolRegistry:
-    """Return a fresh :class:`ToolRegistry` pre-loaded with built-in tools."""
+    """Return a fresh :class:`ToolRegistry` pre-loaded with built-in tools.
+
+    Includes the demo ``echo`` tool plus every agent-package builtin registered
+    via ``agent.tools`` (``bash``, ``filesystem``, ``current_time``,
+    ``submit_result``, …).  This means a workflow node can declare
+    ``"tools": ["filesystem"]`` and have it resolve out of the box — including
+    from the ``xdog-flow run`` CLI, which uses this registry by default.
+    """
     registry = ToolRegistry()
     registry.register(_ECHO_TOOL)
+    for tool in _agent_builtin_tools():
+        registry.register(tool)
     return registry
+
+
+def _agent_builtin_tools() -> tuple[AgentTool, ...]:
+    """Return the agent-package builtin tools, or empty if unavailable.
+
+    Imported lazily so ``flow.tools`` has no import-time dependency on the agent
+    tool registry being populated.
+    """
+    try:
+        from agent.tools.registry import get_registered_tools
+    except ImportError:  # pragma: no cover - agent always present in the workspace
+        return ()
+    return tuple(get_registered_tools())
 
 
 # ---------------------------------------------------------------------------

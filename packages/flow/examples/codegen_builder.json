@@ -1,0 +1,84 @@
+{
+  "name": "codegen-builder",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-opus-4.8"
+  },
+  "entry": "intake",
+  "state": {
+    "spec": "Create a Python module with a function add(a: int, b: int) -> int that returns a + b, plus a pytest test file that checks add(2, 3) == 5.",
+    "tasks": "[\"implement add() module with a passing pytest\"]",
+    "worktree_dir": "/tmp/flow-codegen-demo/worktree",
+    "target_path": "/tmp/flow-codegen-demo/worktree/generated"
+  },
+  "nodes": [
+    {
+      "id": "intake",
+      "type": "script",
+      "run": "flow.codegen_tools:next_task",
+      "output": "task"
+    },
+    {
+      "id": "setup",
+      "type": "agent",
+      "inputs": ["task"],
+      "tools": ["bash"],
+      "system_prompt": "You set up an isolated build environment. Use the bash tool. Create the directory in worktree_dir if it does not exist. If it is inside a git repository you may 'git worktree add', otherwise just create the directory. Keep it minimal.",
+      "prompt": "Prepare an isolated working directory at {{worktree_dir}} for this task:\n\n{{task}}",
+      "output": "setup_report"
+    },
+    {
+      "id": "design",
+      "type": "agent",
+      "inputs": ["task", "setup_report"],
+      "system_prompt": "You are a software designer. Produce a concrete, minimal plan for the requested code.",
+      "prompt": "Design the implementation for this task:\n\n{{task}}\n\nOriginal spec:\n{{spec}}",
+      "output": "plan",
+      "output_schema": {
+        "module_path": "string",
+        "test_path": "string",
+        "summary": "string"
+      }
+    },
+    {
+      "id": "implement",
+      "type": "agent",
+      "inputs": ["plan"],
+      "tools": ["filesystem"],
+      "system_prompt": "You are a coding agent. Use the filesystem tool's 'write' action to create the files described by the plan. Write clean, ruff-compliant, type-annotated Python. Write BOTH the module and its pytest test file under the target directory.",
+      "prompt": "Implement this plan by writing the files under {{target_path}}:\n\n{{plan}}\n\nThe module and test files must live inside {{target_path}}. After writing, briefly report the paths you created.",
+      "output": "impl_report"
+    },
+    {
+      "id": "verify",
+      "type": "script",
+      "run": "flow.codegen_tools:run_checks",
+      "output": "verdict"
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "inputs": ["verdict", "impl_report"],
+      "system_prompt": "You are a build reviewer. Read the verification verdict. If it starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must summarize what to fix.",
+      "prompt": "Verification verdict:\n\n{{verdict}}\n\nImplementation report:\n{{impl_report}}\n\nDecide the status.",
+      "output": "review_result",
+      "output_schema": {
+        "status": "string",
+        "feedback": "string"
+      }
+    }
+  ],
+  "edges": [
+    {"from": "intake", "to": "setup"},
+    {"from": "setup", "to": "design"},
+    {"from": "design", "to": "implement"},
+    {"from": "implement", "to": "verify"},
+    {"from": "verify", "to": "review"},
+    {
+      "from": "review",
+      "to": "implement",
+      "when": {"contains": {"text": "{{verdict}}", "value": "FAIL"}},
+      "loop": {"max": 2}
+    }
+  ]
+}

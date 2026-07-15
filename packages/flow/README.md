@@ -313,3 +313,50 @@ xdog-flow run     examples/research_write_review.json --dry-run
 xdog-flow graph   examples/research_write_review.json
 xdog-flow generate examples/research_write_review.json -o out.py
 ```
+
+## Example: codegen pipeline (capability demo)
+
+`examples/codegen_builder.json` demonstrates that `flow` can orchestrate a
+**code-generation pipeline** end to end with a real LLM:
+
+```
+intake (script: pop task queue)
+  -> setup    (agent + bash tool: prepare an isolated working dir)
+  -> design   (agent + output_schema: structured plan via submit_result)
+  -> implement(agent + filesystem tool: WRITE the .py files)
+  -> verify   (script: run ruff + pytest on the written files)
+  -> review   (agent + output_schema: status APPROVED / FAIL)
+        └─ when verdict contains "FAIL" -> loop back to implement (max 2)
+```
+
+It exercises every flow feature at once: script nodes, per-node tools
+(`bash`, `filesystem`), declared `inputs`, structured `output_schema`
+(the `submit_result` builtin tool), and a bounded conditional loop.
+
+Backing code lives in `flow/codegen_tools.py`:
+
+- `summarize_spec` / `next_task` — script-node helpers (task queue).
+- `run_checks` — a script node that shells out to `ruff` + `pytest` on
+  `state["target_path"]` and returns `PASS` / `FAIL: <tail>`; the `review`
+  node branches on that marker to drive the loop.
+- `registry_with_filesystem` — a registry with the `filesystem` + `bash` tools.
+  (As of this version, `default_registry()` already includes every agent
+  builtin — `bash`, `filesystem`, `submit_result`, … — so `xdog-flow run`
+  resolves node `tools` out of the box.)
+
+Run it (writes real files under the state's `target_path`):
+
+```bash
+xdog-flow validate examples/codegen_builder.json
+xdog-flow graph    examples/codegen_builder.json --mermaid
+xdog-flow run      examples/codegen_builder.json --provider copilot
+```
+
+**Limitations (this is an orchestration demo, not a production codegen gate):**
+the flow executor runs once and returns — it has **no git isolation and no
+revert-on-failure**. A `verify` FAIL only drives the bounded review→implement
+loop; it cannot roll back files the `implement` node already wrote. Script
+nodes are `state -> str`, so `run_checks` reports advisory text rather than
+hard-gating. For gated, revertible, git-isolated code generation, use the
+autobuild loop (which wraps a real ruff+mypy+pytest gate in a worktree), not a
+flow workflow.
