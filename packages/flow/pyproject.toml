@@ -10,6 +10,7 @@ license = "MIT"
 dependencies = [
     "ai",
     "agent",
+    "tui",
 ]
 
 [project.scripts]

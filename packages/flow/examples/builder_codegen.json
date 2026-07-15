@@ -1,0 +1,67 @@
+{
+  "name": "builder-codegen",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-opus-4.8"
+  },
+  "entry": "design",
+  "state": {
+    "spec": "Generate packages/flow/src/flow/builder/app.py: a Terminal-UI shell 'BuilderApp' for the flow workflow builder. It must satisfy the acceptance contract in packages/flow/tests/test_builder_app.py exactly.",
+    "module_file": "packages/flow/src/flow/builder/app.py",
+    "mypy_target": "packages/flow/src",
+    "test_file": "packages/flow/tests/test_builder_app.py"
+  },
+  "nodes": [
+    {
+      "id": "design",
+      "type": "agent",
+      "tools": ["filesystem"],
+      "system_prompt": "You are a Python software designer working in the x-dog monorepo. Read files with the filesystem tool before designing. Produce a precise, minimal plan.",
+      "prompt": "Design packages/flow/src/flow/builder/app.py.\n\nFIRST read these files to learn the exact API and contract:\n- packages/flow/tests/test_builder_app.py  (THE acceptance contract you must satisfy)\n- packages/flow/src/flow/builder/model.py   (BuilderModel, empty_model, model_from_workflow)\n- packages/flow/src/flow/builder/actions.py  (pure edit ops: add_node, remove_node, select, ...)\n- packages/flow/src/flow/graph.py            (to_ascii for the preview)\n- packages/tui/src/tui/tui.py                (Component base: render/handle_input; TUI; Container)\n- packages/tui/src/tui/keys.py               (KeyEvent shape)\n\nThe module must provide: class BuilderApp(Component); build_app(path) -> BuilderApp; run(path) -> None (blocking, may be excluded from coverage with a pragma). Output your plan.",
+      "output": "plan",
+      "output_schema": {
+        "module_summary": "string",
+        "public_symbols": "string",
+        "key_bindings": "string"
+      }
+    },
+    {
+      "id": "implement",
+      "type": "agent",
+      "inputs": ["plan"],
+      "tools": ["filesystem"],
+      "system_prompt": "You are a senior Python engineer. Write production code: `from __future__ import annotations`, full type annotations (the gate runs mypy --strict), ruff-clean (line-length 120), no unused imports. Read the referenced files with the filesystem tool, then WRITE the target file with the filesystem 'write' action. Do not write any other file.",
+      "prompt": "Implement packages/flow/src/flow/builder/app.py per this plan:\n\n{{plan}}\n\nRequirements:\n- class BuilderApp(Component) from tui.tui, with render(self, width: int) -> list[str] and handle_input(self, event: KeyEvent) -> bool.\n- Delegate ALL edits to flow.builder.actions (add_node/remove_node/select/...); hold a BuilderModel and expose it via a `model` property.\n- build_app(path: str | Path) -> BuilderApp: load via flow.loader.load_workflow + flow.builder.model.model_from_workflow if the path exists, else flow.builder.model.empty_model(name=<file stem>).\n- Keys: 'a' add agent node, 's' add script node, 'j'/'down' + 'k'/'up' move selection, 'd' remove selected; unknown keys return False.\n- render(width) returns a non-empty list[str] listing every node id plus a validation status line; use flow.graph.to_ascii for a preview.\n- run(path) -> None builds a TUI, adds the app, set_focus, start() in try/finally; mark it `# pragma: no cover`.\n- Read packages/flow/tests/test_builder_app.py again and make every test pass. WRITE the file, then report the path you wrote.",
+      "output": "impl_report"
+    },
+    {
+      "id": "verify",
+      "type": "script",
+      "run": "flow.codegen_tools:verify_generated_module",
+      "output": "verdict"
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "inputs": ["verdict"],
+      "system_prompt": "You are a build reviewer. If the verdict starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must quote the exact ruff/mypy/pytest errors to fix.",
+      "prompt": "Verification verdict:\n\n{{verdict}}\n\nDecide the status.",
+      "output": "review_result",
+      "output_schema": {
+        "status": "string",
+        "feedback": "string"
+      }
+    }
+  ],
+  "edges": [
+    {"from": "design", "to": "implement"},
+    {"from": "implement", "to": "verify"},
+    {"from": "verify", "to": "review"},
+    {
+      "from": "review",
+      "to": "implement",
+      "when": {"contains": {"text": "{{verdict}}", "value": "FAIL"}},
+      "loop": {"max": 3}
+    }
+  ]
+}

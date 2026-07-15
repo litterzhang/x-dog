@@ -135,6 +135,13 @@ def _cmd_graph(config_path: str, *, mermaid: bool) -> None:
         print(to_ascii(wf))
 
 
+def _cmd_build(config_path: str) -> None:
+    """Open the interactive TUI workflow builder on *config_path*."""
+    from flow.builder.app import run as run_builder
+
+    run_builder(config_path)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -168,6 +175,10 @@ def main(argv: list[str] | None = None) -> None:
     graph_p.add_argument("config", help="Path to workflow JSON file")
     graph_p.add_argument("--mermaid", action="store_true", help="Output Mermaid format")
 
+    # -- build ---------------------------------------------------------------
+    build_p = sub.add_parser("build", help="Interactively build/edit a workflow (TUI)")
+    build_p.add_argument("config", help="Path to workflow JSON file (created if missing)")
+
     args = parser.parse_args(argv)
 
     if args.command == "validate":
@@ -178,6 +189,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_generate(args.config, output=args.output)
     elif args.command == "graph":
         _cmd_graph(args.config, mermaid=args.mermaid)
+    elif args.command == "build":
+        _cmd_build(args.config)
     else:
         parser.print_help()
 

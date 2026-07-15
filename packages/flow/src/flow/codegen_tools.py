@@ -106,6 +106,40 @@ async def run_checks(state: Mapping[str, str]) -> str:
     return "PASS: ruff + pytest clean"
 
 
+async def verify_generated_module(state: Mapping[str, str]) -> str:
+    """Production gate for a generated source file.
+
+    Runs, in order, against paths taken from state:
+      1. ``ruff check`` on ``state['module_file']``
+      2. ``mypy --strict`` on ``state['mypy_target']``  (a src dir/file)
+      3. ``pytest`` on ``state['test_file']``            (the acceptance contract)
+
+    Returns ``PASS`` only if all three succeed, else ``FAIL: <stage>`` with the
+    failing output tail so the review node can drive the regeneration loop.  This
+    is the gate that makes flow codegen production-grade: a generated module must
+    lint, type-check under --strict, and satisfy its contract test.
+    """
+    module_file = state.get("module_file", "")
+    mypy_target = state.get("mypy_target", "")
+    test_file = state.get("test_file", "")
+    if not module_file or not mypy_target or not test_file:
+        return "FAIL: need module_file, mypy_target, and test_file in state"
+
+    ruff_rc, ruff_out = await _run([sys.executable, "-m", "ruff", "check", module_file], cwd=None)
+    if ruff_rc != 0:
+        return f"FAIL: ruff\n{ruff_out[-_REPORT_TAIL:]}"
+
+    mypy_rc, mypy_out = await _run([sys.executable, "-m", "mypy", "--strict", mypy_target], cwd=None)
+    if mypy_rc != 0:
+        return f"FAIL: mypy\n{mypy_out[-_REPORT_TAIL:]}"
+
+    pytest_rc, pytest_out = await _run([sys.executable, "-m", "pytest", "-q", test_file], cwd=None)
+    if pytest_rc != 0:
+        return f"FAIL: pytest\n{pytest_out[-_REPORT_TAIL:]}"
+
+    return "PASS: ruff + mypy --strict + pytest clean"
+
+
 def registry_with_filesystem() -> ToolRegistry:
     """Return a registry with the built-in demo tools plus real agent tools.
 

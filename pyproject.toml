@@ -45,12 +45,14 @@ members = [
     "packages/ai",
     "packages/agent",
     "packages/flow",
+    "packages/tui",
 ]
 
 [tool.uv.sources]
 ai = { workspace = true }
 agent = { workspace = true }
 flow = { workspace = true }
+tui = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
