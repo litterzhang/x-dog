@@ -199,3 +199,49 @@ def test_script_node_bad_run_format_raises() -> None:
     wf = parse_workflow(data)
     with pytest.raises(WorkflowValidationError, match="module.path:callable"):
         validate_workflow(wf)
+
+
+def test_load_linear_inputs_parsed() -> None:
+    wf = load_workflow(FIXTURES / "linear.json")
+    node_map = {n.id: n for n in wf.nodes}
+    assert node_map["a"].inputs == ()
+    assert node_map["b"].inputs == ("step_a_out",)
+    assert node_map["c"].inputs == ("step_b_out",)
+
+
+def test_load_tools_script_inputs_parsed() -> None:
+    wf = load_workflow(FIXTURES / "tools_script.json")
+    node_map = {n.id: n for n in wf.nodes}
+    assert node_map["prep"].inputs == ()
+    assert node_map["analyze"].inputs == ("prepped",)
+
+
+def test_bad_unreachable_input_raises() -> None:
+    with pytest.raises(WorkflowValidationError, match="missing_key"):
+        load_workflow(FIXTURES / "bad_unreachable_input.json")
+
+
+def test_input_in_initial_state_validates_ok() -> None:
+    data = {
+        "name": "ok-initial",
+        "provider": "anthropic",
+        "entry": "a",
+        "state": {"seed": "hello"},
+        "nodes": [{"id": "a", "inputs": ["seed"]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    validate_workflow(wf)  # should not raise
+
+
+def test_unreachable_input_inline_raises() -> None:
+    data = {
+        "name": "bad-inline",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "inputs": ["ghost"]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="ghost"):
+        validate_workflow(wf)

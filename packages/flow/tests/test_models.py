@@ -135,3 +135,21 @@ def test_node_def_new_fields_default() -> None:
     node = NodeDef(id="n1")
     assert node.tools == ()
     assert node.run is None
+
+
+def test_node_def_inputs_default() -> None:
+    node = NodeDef(id="n1")
+    assert node.inputs == ()
+
+
+def test_node_def_inputs_construction() -> None:
+    node = NodeDef(id="n1", inputs=("a", "b"))
+    assert node.inputs == ("a", "b")
+
+
+def test_node_def_inputs_replace() -> None:
+    node = NodeDef(id="n1", inputs=("a", "b"))
+    updated = dataclasses.replace(node, inputs=("c",))
+    assert updated.inputs == ("c",)
+    assert node.inputs == ("a", "b")
+    assert updated is not node

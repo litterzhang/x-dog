@@ -10,9 +10,9 @@
     "result": ""
   },
   "nodes": [
-    {"id": "a", "prompt": "Step A"},
-    {"id": "b", "prompt": "Step B"},
-    {"id": "c", "prompt": "Step C"}
+    {"id": "a", "prompt": "Step A", "output": "step_a_out"},
+    {"id": "b", "prompt": "Step B", "inputs": ["step_a_out"], "output": "step_b_out"},
+    {"id": "c", "prompt": "Step C", "inputs": ["step_b_out"]}
   ],
   "edges": [
     {"from": "a", "to": "b"},

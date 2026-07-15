@@ -16,6 +16,7 @@ class NodeDef:
     output: str | None = None
     tools: tuple[str, ...] = ()
     run: str | None = None
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

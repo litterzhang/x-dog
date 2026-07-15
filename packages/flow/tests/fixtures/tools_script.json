@@ -19,6 +19,7 @@
       "id": "analyze",
       "type": "agent",
       "tools": ["echo"],
+      "inputs": ["prepped"],
       "system_prompt": "You analyse.",
       "prompt": "Analyse: {{prepped}}",
       "output": "analysis"

@@ -35,6 +35,8 @@ def _parse_condition(data: Any) -> Condition:
 def _parse_node(data: dict[str, Any]) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
+    raw_inputs = data.get("inputs", [])
+    inputs: tuple[str, ...] = tuple(str(k) for k in raw_inputs) if raw_inputs else ()
     return NodeDef(
         id=str(data["id"]),
         type=data.get("type", "agent"),
@@ -44,6 +46,7 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         output=data.get("output"),
         tools=tools,
         run=data.get("run"),
+        inputs=inputs,
     )
 
 
@@ -134,6 +137,17 @@ def validate_workflow(wf: WorkflowDef) -> None:
         if node_index[edge.dst] <= node_index[edge.src]:
             if not (edge.loop_max is not None and edge.loop_max >= 1):
                 raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
+
+    # reachability: every declared input must be produced by initial_state or a strictly earlier node
+    produced: set[str] = {k for k, _ in wf.initial_state}
+    for node in wf.nodes:
+        for key in node.inputs:
+            if key not in produced:
+                raise WorkflowValidationError(
+                    f"Node {node.id!r}: input {key!r} is not produced by any upstream node or initial_state"
+                )
+        if node.output is not None:
+            produced.add(node.output)
 
 
 def load_workflow(path: str | Path) -> WorkflowDef:
