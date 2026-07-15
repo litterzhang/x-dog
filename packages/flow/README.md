@@ -134,6 +134,61 @@ xdog-flow graph examples/research_write_review.json --mermaid
 
 ---
 
+## Declared inputs
+
+Agent and script nodes can declare which state keys they consume via the `"inputs"` list.
+These are checked **statically at validate time**: every declared input must be produced by
+`state` (initial values) or a strictly earlier node.  Declaring inputs is optional but
+recommended — it documents intent and catches wiring mistakes before execution.
+
+```jsonc
+{
+  "id": "enrich",
+  "type": "agent",
+  "inputs": ["record"],            // must exist in state before this node runs
+  "prompt": "Enrich:\n\n{{record}}",
+  "output": "enriched"
+}
+```
+
+If a key listed in `"inputs"` is not reachable from upstream, `xdog-flow validate` raises
+a `WorkflowValidationError` immediately.
+
+---
+
+## Structured output (`output_schema`)
+
+When a node declares `"output_schema"`, the agent **must** call the built-in `submit_result`
+tool before finishing.  The executor validates the call and stores the result as a JSON string
+under the node's `"output"` key.
+
+```jsonc
+{
+  "id": "enrich",
+  "type": "agent",
+  "output": "enriched",
+  "output_schema": {               // field name -> JSON type
+    "category": "string",
+    "token": "string",
+    "summary": "string"
+  }
+}
+```
+
+Reading the result downstream:
+
+```python
+import json
+
+enriched = json.loads(final_state["enriched"])
+print(enriched["category"])   # "IoT / Wireless Infrastructure"
+```
+
+If the agent finishes without calling `submit_result`, the executor raises
+`WorkflowExecutionError("did not submit a result")`.
+
+---
+
 ## Script nodes
 
 A **script node** runs a plain async Python function instead of an LLM agent.
@@ -200,6 +255,25 @@ result = await execute(wf, tool_registry=registry)
 
 The generated module calls `_REGISTRY.resolve(("tool_name",))` at runtime,
 so the same registry API applies to compiled workflows too.
+
+---
+
+## Example: auto-enrich with structured output
+
+`examples/auto_enrich.json` demonstrates declared inputs and structured output:
+
+- A **script node** (`pull`) that copies `state["topic"]` into `state["record"]`.
+- An **agent node** (`enrich`) that declares `"inputs": ["record"]` and `"output_schema"`
+  with three fields.  The agent must call `submit_result`; the executor stores the
+  validated JSON under `state["enriched"]`.
+- A **script node** (`persist`) that echoes `state["topic"]` into `state["saved"]`.
+- Provider `copilot`, default model `claude-sonnet-4.5`.
+
+```bash
+xdog-flow validate examples/auto_enrich.json
+xdog-flow run     examples/auto_enrich.json --dry-run
+xdog-flow graph   examples/auto_enrich.json
+```
 
 ---
 

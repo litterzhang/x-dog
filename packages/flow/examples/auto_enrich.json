@@ -1,0 +1,42 @@
+{
+  "name": "auto-enrich",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.5"
+  },
+  "entry": "pull",
+  "state": {
+    "topic": "DePIN project Helium needs category, token, summary"
+  },
+  "nodes": [
+    {
+      "id": "pull",
+      "type": "script",
+      "run": "flow.tools:passthrough",
+      "output": "record"
+    },
+    {
+      "id": "enrich",
+      "type": "agent",
+      "inputs": ["record"],
+      "system_prompt": "You are a data-enrichment agent. Fill missing fields precisely; do not invent facts.",
+      "prompt": "Enrich this record, filling every field:\n\n{{record}}",
+      "output": "enriched",
+      "output_schema": {
+        "category": "string",
+        "token": "string",
+        "summary": "string"
+      }
+    },
+    {
+      "id": "persist",
+      "type": "script",
+      "run": "flow.tools:passthrough",
+      "output": "saved"
+    }
+  ],
+  "edges": [
+    {"from": "pull", "to": "enrich"},
+    {"from": "enrich", "to": "persist"}
+  ]
+}

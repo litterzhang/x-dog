@@ -338,9 +338,10 @@ Response -> [BlockChunker] -> [Channel] -> User
 - `cli.py` — `xdog-flow` CLI: `validate`, `run`, `generate`, `graph`
 - `examples/research_write_review.json` — 3-node research→write→review with conditional loop
 - `examples/tools_script.json` — script node + per-node tools demo
+- `examples/auto_enrich.json` — declared inputs + structured output via submit_result demo
 - `tools.py` — `ToolRegistry` (register/resolve `AgentTool` by name) + `default_registry()` + `passthrough` script-node function
 
-**Design**: Each node is an `agent.Agent` turn (type `"agent"`) or a plain async function (type `"script"`, resolved via `"run": "module:func"`). Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. State is a flat `dict[str, str]`; `{{key}}` in prompts is interpolated from state. Provider is resolved once via `ai.provider()` and shared across all nodes. Per-node `"tools"` lists are resolved via `ToolRegistry`; custom tools can be registered before calling `execute()`.
+**Design**: Each node is an `agent.Agent` turn (type `"agent"`) or a plain async function (type `"script"`, resolved via `"run": "module:func"`). Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. State is a flat `dict[str, str]`; `{{key}}` in prompts is interpolated from state. Provider is resolved once via `ai.provider()` and shared across all nodes. Per-node `"tools"` lists are resolved via `ToolRegistry`; custom tools can be registered before calling `execute()`. Agent nodes support `"inputs": [keys]` (declared consumed state keys, statically checked for reachability at validate time) and `"output_schema": {field: type}` (forces the agent to call the `submit_result` builtin tool; validated JSON stored under the node's output key).
 
 ---
 

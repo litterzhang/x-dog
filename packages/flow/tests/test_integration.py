@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import tempfile
 import types
 from typing import Any
 
-from ai.types import AssistantMessage, DoneEvent, TextContent
+from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
 from ai.utils.event_stream import EventStream as AiEventStream
 from flow.codegen import generate
 from flow.executor import execute
@@ -271,3 +272,80 @@ async def test_generate_tools_script_parity() -> None:
     # --- structural: script node uses await _script_, agent node uses _REGISTRY.resolve ---
     assert "await _script_prep" in src, "generated script node must call await _script_prep"
     assert "_REGISTRY.resolve(" in src, "generated agent node must call _REGISTRY.resolve("
+
+
+# ---------------------------------------------------------------------------
+# Step 25: auto_enrich example — declared inputs + structured output
+# ---------------------------------------------------------------------------
+
+_ENRICH_RESULT = {"category": "IoT / Wireless", "token": "HNT", "summary": "Decentralized wireless network"}
+
+
+def _make_submit_result_factory_integration(result_obj: dict[str, Any]) -> Any:
+    """Stream factory whose agent emits submit_result then stops (for integration test)."""
+
+    def _factory(model: str) -> Any:
+        call_count: list[int] = [0]
+
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> AiEventStream[AssistantMessage]:
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            if call_count[0] == 0:
+                call_count[0] += 1
+                tool_call = ToolCall(id="tc-enrich-1", name="submit_result", arguments={"result": result_obj})
+                msg = AssistantMessage(content=(tool_call,), stop_reason="toolUse")
+            else:
+                msg = AssistantMessage(content=(TextContent(text="done"),), stop_reason="stop")
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    return _factory
+
+
+async def test_auto_enrich_dryrun() -> None:
+    """Load examples/auto_enrich.json; execute with a fake stream that drives submit_result.
+
+    Assertions:
+    - validate passes (no exception from load_workflow)
+    - final_state['record'] equals the initial topic (passthrough copies state['topic'])
+    - final_state['enriched'] is present and json.loads() yields category/token/summary keys
+    - final_state['saved'] is present
+    """
+    wf_path = _EXAMPLES_DIR / "auto_enrich.json"
+    wf = load_workflow(wf_path)  # raises on validation failure
+
+    topic = dict(wf.initial_state).get("topic", "")
+
+    factory = _make_submit_result_factory_integration(_ENRICH_RESULT)
+
+    from flow.tools import default_registry
+
+    result = await execute(wf, stream_fn_factory=factory, tool_registry=default_registry())
+
+    # pull node: passthrough copies state['topic'] into state['record']
+    assert result.final_state.get("record") == topic, (
+        f"expected record={topic!r}, got {result.final_state.get('record')!r}"
+    )
+
+    # enrich node: structured output stored as JSON
+    assert "enriched" in result.final_state, "missing enriched key"
+    enriched = json.loads(result.final_state["enriched"])
+    assert "category" in enriched, f"enriched missing 'category': {enriched}"
+    assert "token" in enriched, f"enriched missing 'token': {enriched}"
+    assert "summary" in enriched, f"enriched missing 'summary': {enriched}"
+
+    # persist node: passthrough runs (state['topic'] still present)
+    assert "saved" in result.final_state, "missing saved key"
