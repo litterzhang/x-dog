@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from agent.agent import Agent
-from ai.types import AssistantMessage, DoneEvent, TextContent
+from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
 from ai.utils.event_stream import EventStream as AiEventStream
+from flow.errors import WorkflowExecutionError
 from flow.executor import ExecResult, execute
 from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
 
@@ -490,3 +492,125 @@ async def test_agent_tools() -> None:
     assert result.final_state["out"] == "agent_result"
     assert len(tools_seen) == 1
     assert tools_seen[0] == (spy_tool,)
+
+
+# ---------------------------------------------------------------------------
+# Step 24: output_schema / submit_result integration
+# ---------------------------------------------------------------------------
+
+
+def _make_submit_result_factory(result_obj: dict[str, Any]) -> Any:
+    """Return a stream_fn_factory whose agent emits a submit_result ToolCall then stops."""
+
+    def _factory(model: str) -> Any:
+        call_count: list[int] = [0]
+
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> AiEventStream[AssistantMessage]:
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            if call_count[0] == 0:
+                # First call: emit a tool_call to submit_result
+                call_count[0] += 1
+                tool_call = ToolCall(id="tc-1", name="submit_result", arguments={"result": result_obj})
+                msg = AssistantMessage(content=(tool_call,), stop_reason="toolUse")
+            else:
+                # Second call (after tool result): return plain stop
+                msg = AssistantMessage(content=(TextContent(text="done"),), stop_reason="stop")
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    return _factory
+
+
+def _make_no_submit_factory() -> Any:
+    """Return a stream_fn_factory whose agent never calls submit_result."""
+
+    def _factory(model: str) -> Any:
+        def _stream_fn(
+            model_id: Any,
+            context: Any,
+            options: Any = None,
+        ) -> AiEventStream[AssistantMessage]:
+            msg = AssistantMessage(content=(TextContent(text="I am done"),), stop_reason="stop")
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    return _factory
+
+
+async def test_output_schema_success() -> None:
+    """Node with output_schema stores JSON of the submitted result in state."""
+    valid_obj = {"summary": "all good", "score": 42}
+
+    wf = WorkflowDef(
+        name="schema_test",
+        provider="fake",
+        entry="n1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="n1",
+                model="m",
+                prompt="summarise",
+                output="out",
+                output_schema=(("summary", "string"), ("score", "integer")),
+            ),
+        ),
+        edges=(),
+    )
+
+    factory = _make_submit_result_factory(valid_obj)
+    result = await execute(wf, stream_fn_factory=factory)
+
+    assert "out" in result.final_state
+    parsed = json.loads(result.final_state["out"])
+    assert parsed == valid_obj
+
+
+async def test_output_schema_missing_submission() -> None:
+    """Agent that never calls submit_result raises WorkflowExecutionError."""
+    wf = WorkflowDef(
+        name="schema_missing",
+        provider="fake",
+        entry="n1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="n1",
+                model="m",
+                prompt="summarise",
+                output="out",
+                output_schema=(("summary", "string"),),
+            ),
+        ),
+        edges=(),
+    )
+
+    factory = _make_no_submit_factory()
+    import pytest
+
+    with pytest.raises(WorkflowExecutionError, match="did not submit a result"):
+        await execute(wf, stream_fn_factory=factory)

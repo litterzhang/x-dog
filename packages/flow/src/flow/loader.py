@@ -37,6 +37,12 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
     raw_inputs = data.get("inputs", [])
     inputs: tuple[str, ...] = tuple(str(k) for k in raw_inputs) if raw_inputs else ()
+    raw_output_schema = data.get("output_schema", {})
+    output_schema: tuple[tuple[str, str], ...]
+    if isinstance(raw_output_schema, dict) and raw_output_schema:
+        output_schema = tuple((str(k), str(v)) for k, v in raw_output_schema.items())
+    else:
+        output_schema = ()
     return NodeDef(
         id=str(data["id"]),
         type=data.get("type", "agent"),
@@ -47,6 +53,7 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         tools=tools,
         run=data.get("run"),
         inputs=inputs,
+        output_schema=output_schema,
     )
 
 

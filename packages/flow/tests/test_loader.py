@@ -245,3 +245,28 @@ def test_unreachable_input_inline_raises() -> None:
     wf = parse_workflow(data)
     with pytest.raises(WorkflowValidationError, match="ghost"):
         validate_workflow(wf)
+
+
+def test_output_schema_parsed() -> None:
+    data = {
+        "name": "schema-test",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "output_schema": {"name": "string", "count": "integer"}}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    node = wf.nodes[0]
+    assert set(node.output_schema) == {("name", "string"), ("count", "integer")}
+
+
+def test_output_schema_default_empty() -> None:
+    data = {
+        "name": "no-schema",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a"}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    assert wf.nodes[0].output_schema == ()

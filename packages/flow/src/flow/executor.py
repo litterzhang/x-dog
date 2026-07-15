@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,7 @@ from agent.events import TurnEndEvent
 from ai.types import AssistantMessage, TextContent
 
 from flow.conditions import evaluate
+from flow.errors import WorkflowExecutionError
 from flow.interpolate import interpolate
 from flow.models import EdgeDef, WorkflowDef
 from flow.tools import ToolRegistry
@@ -148,10 +150,31 @@ async def execute(
         assert tool_registry is not None
         resolved_tools: tuple[AgentTool, ...] = tool_registry.resolve(node.tools)
 
+        tool_ctx: dict[str, object] | None = None
+        sink: dict[str, object] = {}
+        final_sys_prompt = sys_prompt
+
+        if node.output_schema:
+            from agent.tools import create_submit_result_tool
+
+            submit_tool = create_submit_result_tool()
+            resolved_tools = resolved_tools + (submit_tool,)
+            tool_ctx = {
+                "flow_output_schema": dict(node.output_schema),
+                "flow_result_sink": sink,
+            }
+            field_names = ", ".join(f for f, _ in node.output_schema)
+            directive = (
+                f"\nWhen finished, you MUST call the submit_result tool"
+                f" with an object containing these fields: {field_names}."
+            )
+            final_sys_prompt = sys_prompt + directive
+
         agent = Agent(
             stream_fn,
-            config=AgentConfig(model=model, system_prompt=sys_prompt),
+            config=AgentConfig(model=model, system_prompt=final_sys_prompt),
             tools=resolved_tools,
+            tool_ctx=tool_ctx,
         )
 
         logger.debug("Running node %r with model %r", node_id, model)
@@ -170,7 +193,13 @@ async def execute(
 
         await asyncio.wait_for(_drain(), timeout=timeout)
 
-        output_text = "".join(accumulated)
+        if node.output_schema:
+            result_obj = sink.get("result")
+            if result_obj is None:
+                raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
+            output_text = json.dumps(result_obj, ensure_ascii=False, sort_keys=True)
+        else:
+            output_text = "".join(accumulated)
 
         if node.output is not None:
             async with _state_lock:

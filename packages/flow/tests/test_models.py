@@ -153,3 +153,21 @@ def test_node_def_inputs_replace() -> None:
     assert updated.inputs == ("c",)
     assert node.inputs == ("a", "b")
     assert updated is not node
+
+
+def test_node_def_output_schema_default() -> None:
+    node = NodeDef(id="n1")
+    assert node.output_schema == ()
+
+
+def test_node_def_output_schema_construction() -> None:
+    node = NodeDef(id="n1", output_schema=(("name", "string"), ("count", "integer")))
+    assert node.output_schema == (("name", "string"), ("count", "integer"))
+
+
+def test_node_def_output_schema_replace() -> None:
+    node = NodeDef(id="n1", output_schema=(("x", "string"),))
+    updated = dataclasses.replace(node, output_schema=(("y", "integer"),))
+    assert updated.output_schema == (("y", "integer"),)
+    assert node.output_schema == (("x", "string"),)
+    assert updated is not node
