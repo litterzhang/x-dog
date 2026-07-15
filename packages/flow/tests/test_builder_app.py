@@ -12,14 +12,27 @@ Contract for the generated ``flow/builder/app.py``:
 - ``BuilderApp`` is a ``tui.tui.Component`` (has ``render(width) -> list[str]``
   and ``handle_input(KeyEvent) -> bool``).
 - ``BuilderApp.model`` exposes the current ``BuilderModel``.
-- Key bindings on ``handle_input``:
+- Key bindings on ``handle_input`` (in normal mode):
   - ``a`` -> add an agent node; ``s`` -> add a script node.
   - ``j`` / ``down`` and ``k`` / ``up`` -> move node selection.
   - ``d`` -> remove the selected node.
   - ``w`` -> save the current workflow to the app's path via
     ``flow.builder.serialize.dump_workflow`` (only when valid); the model then
     becomes non-dirty.
-  - unknown keys -> return ``False`` (not consumed).
+  - ``p`` -> enter PROMPT-EDIT mode for the selected node (see below).
+  - ``e`` -> enter EDGE mode, remembering the selected node as the edge source.
+  - unknown keys in normal mode -> return ``False`` (not consumed).
+- PROMPT-EDIT mode (entered with ``p`` when a node is selected):
+  - printable single-character keys append to a text buffer seeded from the
+    node's current ``prompt``; ``backspace`` deletes the last char.
+  - ``enter`` commits the buffer via ``actions.set_field(model, node, "prompt", buf)``
+    and returns to normal mode.
+  - ``escape`` cancels (no change) and returns to normal mode.
+  - while in prompt-edit mode, ``handle_input`` returns ``True`` for these keys.
+- EDGE mode (entered with ``e`` when a node is selected):
+  - ``j``/``k`` (or arrows) move the selection to choose the destination node.
+  - ``enter`` adds an edge source->selected via ``actions.add_edge`` and returns
+    to normal mode; ``escape`` cancels.
 - ``build_app(path)`` retains *path* so ``w`` knows where to write.
 - ``render(width)`` returns a non-empty list of strings that includes each node
   id and a validation status line.
@@ -104,3 +117,82 @@ def test_render_lists_nodes_and_status(tmp_path: pathlib.Path) -> None:
     assert isinstance(lines, list) and lines
     joined = "\n".join(lines)
     assert "agent" in joined
+
+
+# --- prompt-edit mode ---------------------------------------------------------
+
+
+def _type(app: BuilderApp, text: str) -> None:
+    for ch in text:
+        app.handle_input(KeyEvent(key=ch))
+
+
+def test_prompt_edit_commits_on_enter(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))  # 'agent' selected
+    consumed = app.handle_input(KeyEvent(key="p"))  # enter prompt-edit mode
+    assert consumed is True
+    _type(app, "hello")
+    # while editing, printable keys are consumed (not treated as add-node etc.)
+    app.handle_input(KeyEvent(key="enter"))
+    assert app.model.wf.nodes[0].prompt == "hello"
+
+
+def test_prompt_edit_backspace(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="p"))
+    _type(app, "abc")
+    app.handle_input(KeyEvent(key="backspace"))
+    app.handle_input(KeyEvent(key="enter"))
+    assert app.model.wf.nodes[0].prompt == "ab"
+
+
+def test_prompt_edit_escape_cancels(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="p"))
+    _type(app, "discarded")
+    app.handle_input(KeyEvent(key="escape"))
+    assert app.model.wf.nodes[0].prompt == ""
+    # back in normal mode: 'a' adds a node again
+    app.handle_input(KeyEvent(key="a"))
+    assert len(app.model.wf.nodes) == 2
+
+
+def test_prompt_edit_does_not_add_nodes_while_typing(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))  # one node
+    app.handle_input(KeyEvent(key="p"))
+    _type(app, "a s d")  # these are text, not add/delete commands
+    app.handle_input(KeyEvent(key="enter"))
+    assert len(app.model.wf.nodes) == 1
+    assert app.model.wf.nodes[0].prompt == "a s d"
+
+
+# --- edge mode ----------------------------------------------------------------
+
+
+def test_edge_mode_connects_source_to_dest(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))  # 'agent'  (selected)
+    app.handle_input(KeyEvent(key="a"))  # 'agent2' (selected)
+    # select the source
+    app.handle_input(KeyEvent(key="k"))  # move selection up to 'agent'
+    assert app.model.selected == "agent"
+    app.handle_input(KeyEvent(key="e"))  # edge mode, source = 'agent'
+    app.handle_input(KeyEvent(key="j"))  # move dest selection to 'agent2'
+    app.handle_input(KeyEvent(key="enter"))  # commit edge agent -> agent2
+    assert any(edge.src == "agent" and edge.dst == "agent2" for edge in app.model.wf.edges)
+
+
+def test_edge_mode_escape_cancels(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="e"))
+    app.handle_input(KeyEvent(key="escape"))
+    assert app.model.wf.edges == ()
+    # normal mode restored
+    app.handle_input(KeyEvent(key="a"))
+    assert len(app.model.wf.nodes) == 3
