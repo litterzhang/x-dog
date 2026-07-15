@@ -18,7 +18,13 @@ from typing import Any
 
 from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
 from ai.utils.event_stream import EventStream as AiEventStream
-from flow.codegen_tools import next_task, registry_with_filesystem, run_checks
+from flow.codegen_tools import (
+    autofix_module,
+    next_task,
+    registry_with_filesystem,
+    run_checks,
+    verify_generated_module,
+)
 from flow.executor import execute
 from flow.loader import load_workflow
 
@@ -88,6 +94,32 @@ async def test_run_checks_fail_ruff(tmp_path: pathlib.Path) -> None:
 async def test_run_checks_no_target() -> None:
     report = await run_checks({})
     assert report.startswith("FAIL")
+
+
+# ---------------------------------------------------------------------------
+# verify_generated_module + autofix_module (production codegen gate)
+# ---------------------------------------------------------------------------
+
+
+async def test_verify_generated_module_needs_all_paths() -> None:
+    report = await verify_generated_module({"module_file": "x"})
+    assert report.startswith("FAIL")
+
+
+async def test_autofix_module_cleans_imports(tmp_path: pathlib.Path) -> None:
+    f = tmp_path / "mod.py"
+    # unused import + unsorted -> ruff --fix removes/reorders it
+    f.write_text("import sys\nimport os\n\n\ndef g() -> int:\n    return 1\n", encoding="utf-8")
+    report = await autofix_module({"module_file": str(f)})
+    assert "autofixed" in report
+    cleaned = f.read_text(encoding="utf-8")
+    assert "import os" not in cleaned
+    assert "import sys" not in cleaned
+
+
+async def test_autofix_module_no_target_is_safe() -> None:
+    report = await autofix_module({})
+    assert "skipped" in report
 
 
 # ---------------------------------------------------------------------------

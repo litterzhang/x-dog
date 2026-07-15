@@ -1,35 +1,63 @@
-"""flow.builder.app — a terminal-free-testable TUI shell for the workflow builder.
+"""flow.builder.app — terminal-facing shell wiring BuilderModel + actions to tui.
 
-``BuilderApp`` wraps a headless :class:`~flow.builder.model.BuilderModel`, applies
-pure edit operations from :mod:`flow.builder.actions` in response to key events,
-and renders a node list plus a validation status line.  No terminal I/O happens
-outside :func:`run`, so all key bindings and rendering are unit-testable by
-feeding synthetic :class:`~tui.keys.KeyEvent` objects.
+This module is the thin, terminal-touching layer over the headless
+:class:`~flow.builder.model.BuilderModel` and the pure functions in
+:mod:`flow.builder.actions`.  It translates single-char / arrow
+:class:`~tui.keys.KeyEvent` presses into action calls, renders the current node
+list plus a validation status line, and offers a blocking :func:`run` that
+mounts the app in a real :class:`~tui.tui.TUI`.
+
+Every state transition goes through the pure action functions, so the app stays
+trivially unit-testable by feeding synthetic ``KeyEvent`` objects.  Only
+:func:`run` touches the terminal and is excluded from coverage.
 """
 
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 
 from tui.keys import KeyEvent
 from tui.tui import TUI, Component
 
 from flow.builder import actions
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
+from flow.builder.serialize import dump_workflow
 from flow.graph import to_ascii
 from flow.loader import load_workflow
 
 
-class BuilderApp(Component):
-    """A headless, unit-testable TUI shell around a :class:`BuilderModel`."""
+def _fit(line: str, width: int) -> str:
+    """Truncate/pad *line* to exactly *width* columns (never negative width)."""
+    if width <= 0:
+        return ""
+    if len(line) > width:
+        return line[:width]
+    return line + " " * (width - len(line))
 
-    def __init__(self, model: BuilderModel) -> None:
+
+class BuilderApp(Component):
+    """A :class:`~tui.tui.Component` shell over a headless builder model."""
+
+    def __init__(self, model: BuilderModel, path: pathlib.Path) -> None:
         self._model = model
+        self._path = path
 
     @property
     def model(self) -> BuilderModel:
-        """The current (immutable) builder model."""
+        """The current :class:`~flow.builder.model.BuilderModel`."""
         return self._model
+
+    def render(self, width: int) -> list[str]:
+        model = self._model
+        lines: list[str] = [f"builder: {model.wf.name}"]
+        for node_id in model.node_ids:
+            marker = ">" if node_id == model.selected else " "
+            lines.append(f"{marker} {node_id}")
+        lines.extend(to_ascii(model.wf).splitlines())
+        status = "valid" if model.error is None else model.error
+        lines.append(f"status: {status}")
+        return [_fit(line, width) for line in lines]
 
     def handle_input(self, event: KeyEvent) -> bool:
         key = event.key
@@ -49,49 +77,45 @@ class BuilderApp(Component):
             if self._model.selected is not None:
                 self._model = actions.remove_node(self._model, self._model.selected)
             return True
+        if key == "w":
+            self._save()
+            return True
         return False
 
     def _move(self, delta: int) -> None:
-        node_ids = self._model.node_ids
-        if not node_ids:
+        ids = self._model.node_ids
+        if not ids:
             return
         try:
-            index = node_ids.index(self._model.selected) if self._model.selected is not None else 0
-        except ValueError:
-            index = 0
-        new_index = max(0, min(len(node_ids) - 1, index + delta))
-        self._model = actions.select(self._model, node_ids[new_index])
+            idx = ids.index(self._model.selected) if self._model.selected in ids else 0
+        except ValueError:  # pragma: no cover - defensive
+            idx = 0
+        new_idx = max(0, min(len(ids) - 1, idx + delta))
+        self._model = actions.select(self._model, ids[new_idx])
 
-    def render(self, width: int) -> list[str]:
-        lines: list[str] = [f"workflow: {self._model.wf.name}"]
-        for node_id in self._model.node_ids:
-            prefix = "> " if node_id == self._model.selected else "  "
-            lines.append(f"{prefix}{node_id}")
-        status = "valid" if self._model.error is None else self._model.error
-        lines.append(f"status: {status}")
-        if self._model.wf.nodes:
-            preview = to_ascii(self._model.wf)
-            lines.extend(preview.splitlines())
-        return lines
+    def _save(self) -> None:
+        if self._model.error is None:
+            dump_workflow(self._model.wf, self._path)
+            self._model = replace(self._model, dirty=False)
 
 
 def build_app(path: str | pathlib.Path) -> BuilderApp:
-    """Load the workflow at *path* if it exists, else start an empty model."""
-    path = pathlib.Path(path)
-    if path.exists():
-        model = model_from_workflow(load_workflow(path))
+    """Build a :class:`BuilderApp`, loading *path* if it exists else starting empty."""
+    p = pathlib.Path(path)
+    if p.exists():
+        model = model_from_workflow(load_workflow(p))
     else:
-        model = empty_model(name=path.stem)
-    return BuilderApp(model)
+        model = empty_model(name=p.stem)
+    return BuilderApp(model, p)
 
 
 def run(path: str | pathlib.Path) -> None:  # pragma: no cover
-    """Build the app, mount it in a TUI and start the blocking loop."""
+    """Build the app and run it in a real terminal (blocking)."""
     app = build_app(path)
     tui = TUI()
+    tui.add_child(app)
+    tui.set_focus(app)
     try:
-        tui.add_child(app)
-        tui.set_focus(app)
         tui.start()
     finally:
         tui.stop()

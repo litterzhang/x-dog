@@ -16,7 +16,11 @@ Contract for the generated ``flow/builder/app.py``:
   - ``a`` -> add an agent node; ``s`` -> add a script node.
   - ``j`` / ``down`` and ``k`` / ``up`` -> move node selection.
   - ``d`` -> remove the selected node.
+  - ``w`` -> save the current workflow to the app's path via
+    ``flow.builder.serialize.dump_workflow`` (only when valid); the model then
+    becomes non-dirty.
   - unknown keys -> return ``False`` (not consumed).
+- ``build_app(path)`` retains *path* so ``w`` knows where to write.
 - ``render(width)`` returns a non-empty list of strings that includes each node
   id and a validation status line.
 """
@@ -26,6 +30,7 @@ from __future__ import annotations
 import pathlib
 
 from flow.builder.app import BuilderApp, build_app
+from flow.loader import load_workflow
 from tui.keys import KeyEvent
 from tui.tui import Component
 
@@ -71,6 +76,20 @@ def test_press_d_removes_selected(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="a"))
     app.handle_input(KeyEvent(key="d"))
     assert app.model.node_ids == ()
+
+
+def test_press_w_saves_workflow_json(tmp_path: pathlib.Path) -> None:
+    """'w' writes the current workflow to the app's path as reloadable JSON."""
+    path = tmp_path / "wf.json"
+    app = build_app(path)
+    app.handle_input(KeyEvent(key="a"))  # one agent node -> valid
+    app.handle_input(KeyEvent(key="w"))  # save
+    assert path.exists()
+    # the saved file reloads to an equal workflow
+    reloaded = load_workflow(path)
+    assert reloaded == app.model.wf
+    # after a save the model is no longer dirty
+    assert app.model.dirty is False
 
 
 def test_unknown_key_not_consumed(tmp_path: pathlib.Path) -> None:

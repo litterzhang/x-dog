@@ -140,6 +140,23 @@ async def verify_generated_module(state: Mapping[str, str]) -> str:
     return "PASS: ruff + mypy --strict + pytest clean"
 
 
+async def autofix_module(state: Mapping[str, str]) -> str:
+    """Apply mechanical, deterministic fixes to a generated file before verifying.
+
+    Runs ``ruff check --fix`` then ``ruff format`` on ``state['module_file']``.
+    These resolve import ordering (I001), unused imports (F401), and formatting —
+    fixes a code generator should not have to get right by hand, and which would
+    otherwise waste the review→implement loop.  Returns a short report; never
+    fails the pipeline (formatting is best-effort).
+    """
+    module_file = state.get("module_file", "")
+    if not module_file:
+        return "autofix skipped: no module_file"
+    await _run([sys.executable, "-m", "ruff", "check", "--fix", module_file], cwd=None)
+    await _run([sys.executable, "-m", "ruff", "format", module_file], cwd=None)
+    return f"autofixed {module_file}"
+
+
 def registry_with_filesystem() -> ToolRegistry:
     """Return a registry with the built-in demo tools plus real agent tools.
 

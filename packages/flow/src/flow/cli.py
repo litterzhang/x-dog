@@ -76,6 +76,7 @@ async def _cmd_run(
     *,
     provider: str | None,
     dry_run: bool,
+    timeout: float = 120.0,
 ) -> None:
     """Execute a workflow and print the final state as JSON."""
     try:
@@ -86,7 +87,7 @@ async def _cmd_run(
 
     if dry_run:
         factory = _dry_run_stream_fn_factory
-        result = await execute(wf, stream_fn_factory=factory)
+        result = await execute(wf, stream_fn_factory=factory, timeout=timeout)
     else:
         if provider is not None:
             import ai
@@ -98,9 +99,9 @@ async def _cmd_run(
             def _factory(model: str) -> StreamFn:
                 return base_stream_fn
 
-            result = await execute(wf, stream_fn_factory=_factory)
+            result = await execute(wf, stream_fn_factory=_factory, timeout=timeout)
         else:
-            result = await execute(wf)
+            result = await execute(wf, timeout=timeout)
 
     print(json.dumps(result.final_state, indent=2))
 
@@ -164,6 +165,9 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("config", help="Path to workflow JSON file")
     run_p.add_argument("--provider", help="Override AI provider")
     run_p.add_argument("--dry-run", action="store_true", help="Inject stub LLM (offline)")
+    run_p.add_argument(
+        "--timeout", type=float, default=120.0, help="Per-node wall-clock timeout in seconds (default 120)"
+    )
 
     # -- generate ------------------------------------------------------------
     gen_p = sub.add_parser("generate", help="Generate Python code from a workflow")
@@ -184,7 +188,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "validate":
         _cmd_validate(args.config)
     elif args.command == "run":
-        asyncio.run(_cmd_run(args.config, provider=args.provider, dry_run=args.dry_run))
+        asyncio.run(_cmd_run(args.config, provider=args.provider, dry_run=args.dry_run, timeout=args.timeout))
     elif args.command == "generate":
         _cmd_generate(args.config, output=args.output)
     elif args.command == "graph":

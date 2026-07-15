@@ -35,6 +35,12 @@
       "output": "impl_report"
     },
     {
+      "id": "autofix",
+      "type": "script",
+      "run": "flow.codegen_tools:autofix_module",
+      "output": "autofix_report"
+    },
+    {
       "id": "verify",
       "type": "script",
       "run": "flow.codegen_tools:verify_generated_module",
@@ -55,7 +61,8 @@
   ],
   "edges": [
     {"from": "design", "to": "implement"},
-    {"from": "implement", "to": "verify"},
+    {"from": "implement", "to": "autofix"},
+    {"from": "autofix", "to": "verify"},
     {"from": "verify", "to": "review"},
     {
       "from": "review",
