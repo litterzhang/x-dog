@@ -89,6 +89,34 @@ async def _cmd_login() -> None:
     print("Login successful.", file=sys.stderr)
 
 
+def _parse_tool_ctx(raw: str | None) -> dict[str, Any]:
+    """Parse the --tool-ctx argument into a dict.
+
+    Accepts a JSON object, or ``@path`` to read the JSON from a file.
+    Returns ``{}`` when *raw* is ``None``.  Exits with an error if the
+    value is not valid JSON or does not decode to an object.
+    """
+    if raw is None:
+        return {}
+    text = raw
+    if raw.startswith("@"):
+        path = Path(raw[1:])
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"Error reading --tool-ctx file {path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"Error: --tool-ctx is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(parsed, dict):
+        print(f"Error: --tool-ctx must be a JSON object, got {type(parsed).__name__}", file=sys.stderr)
+        sys.exit(1)
+    return parsed
+
+
 async def _cmd_chat(
     *,
     model_id: str | None,
@@ -99,11 +127,14 @@ async def _cmd_chat(
     thinking: str | None,
     no_tools: bool,
     verbose: bool,
+    tool_ctx: str | None = None,
 ) -> None:
     """Run an interactive agent chat session."""
     import ai
     from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
     from agent.tools.registry import get_registered_tools
+
+    parsed_tool_ctx = _parse_tool_ctx(tool_ctx)
 
     # Load runtime from auth.json
     runtime = ai.load()
@@ -131,7 +162,13 @@ async def _cmd_chat(
 
     builtin_tools = get_registered_tools() if not no_tools else []
 
-    agent = Agent(stream_fn, config=config, web_search_fn=search_fn, tools=builtin_tools)
+    agent = Agent(
+        stream_fn,
+        config=config,
+        web_search_fn=search_fn,
+        tools=builtin_tools,
+        tool_ctx=parsed_tool_ctx,
+    )
 
     # Session state for slash commands
     session = _Session(agent=agent, runtime=runtime, verbose=verbose)
@@ -198,6 +235,8 @@ async def _cmd_chat(
                 stream = await agent.prompt(user_input)
 
             await _consume_agent_stream(stream, session=session)
+            if parsed_tool_ctx:
+                _print_tool_ctx(parsed_tool_ctx, verbose=verbose)
         except KeyboardInterrupt:
             print(f"\n{_dim('[interrupted]')}", file=sys.stderr)
             agent.abort()
@@ -443,6 +482,21 @@ def _extract_result_text(result: AgentToolResult | None) -> str:
     return " ".join(parts) if parts else "(no text)"
 
 
+def _print_tool_ctx(tool_ctx: dict[str, Any], *, verbose: bool) -> None:
+    """Print the shared tool context after a turn.
+
+    Tools mutate values inside ``tool_ctx`` (e.g. a ``flow_result_sink`` dict
+    populated by ``submit_result``).  Since ToolDef passes handlers a shallow
+    copy of the context, only mutations to shared *values* are visible here —
+    which is exactly the sink-handoff pattern.
+    """
+    try:
+        rendered = json.dumps(tool_ctx, ensure_ascii=False, indent=2, default=str)
+    except (TypeError, ValueError):
+        rendered = repr(tool_ctx)
+    print(f"\n{_dim('[tool-ctx]')} {rendered}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # Input helpers
 # ---------------------------------------------------------------------------
@@ -492,6 +546,15 @@ def main() -> None:
     )
     chat_p.add_argument("--no-tools", action="store_true", help="Disable built-in tools")
     chat_p.add_argument("--verbose", action="store_true", help="Show thinking, usage, and cost")
+    chat_p.add_argument(
+        "--tool-ctx",
+        metavar="JSON",
+        help=(
+            "Shared tool context passed to every tool's execute(ctx=...). "
+            "A JSON object, or '@path' to read the JSON from a file. "
+            "Example: --tool-ctx '{\"flow_output_schema\": {\"summary\": \"string\"}}'"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -507,6 +570,7 @@ def main() -> None:
             thinking=args.thinking,
             no_tools=args.no_tools,
             verbose=args.verbose,
+            tool_ctx=args.tool_ctx,
         ))
     else:
         parser.print_help()
