@@ -122,15 +122,19 @@ def _cmd_generate(config_path: str, *, output: str | None) -> None:
         Path(output).write_text(code, encoding="utf-8")
 
 
-def _cmd_graph(config_path: str, *, mermaid: bool) -> None:
-    """Print the workflow graph as ASCII or Mermaid."""
+def _cmd_graph(config_path: str, *, mermaid: bool, svg: bool) -> None:
+    """Print the workflow graph as ASCII, Mermaid, or SVG."""
     try:
         wf = load_workflow(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
 
-    if mermaid:
+    if svg:
+        from flow.builder.svg_doc import workflow_to_svg_document
+
+        print(workflow_to_svg_document(wf))
+    elif mermaid:
         print(to_mermaid(wf))
     else:
         print(to_ascii(wf))
@@ -178,6 +182,7 @@ def main(argv: list[str] | None = None) -> None:
     graph_p = sub.add_parser("graph", help="Print workflow graph")
     graph_p.add_argument("config", help="Path to workflow JSON file")
     graph_p.add_argument("--mermaid", action="store_true", help="Output Mermaid format")
+    graph_p.add_argument("--svg", action="store_true", help="Output SVG document (with embedded JSON)")
 
     # -- build ---------------------------------------------------------------
     build_p = sub.add_parser("build", help="Interactively build/edit a workflow (TUI)")
@@ -192,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "generate":
         _cmd_generate(args.config, output=args.output)
     elif args.command == "graph":
-        _cmd_graph(args.config, mermaid=args.mermaid)
+        _cmd_graph(args.config, mermaid=args.mermaid, svg=args.svg)
     elif args.command == "build":
         _cmd_build(args.config)
     else:

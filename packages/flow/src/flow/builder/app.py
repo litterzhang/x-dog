@@ -20,10 +20,9 @@ from tui.keys import KeyEvent
 from tui.tui import TUI, Component
 
 from flow.builder import actions
+from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
-from flow.builder.serialize import dump_workflow
 from flow.graph import to_ascii
-from flow.loader import load_workflow
 
 
 def _fit(line: str, width: int) -> str:
@@ -175,7 +174,7 @@ class BuilderApp(Component):
 
     def _save(self) -> None:
         if self._model.error is None:
-            dump_workflow(self._model.wf, self._path)
+            dump_any(self._model.wf, self._path)
             self._model = model_from_workflow(self._model.wf)
 
 
@@ -183,7 +182,7 @@ def build_app(path: str | pathlib.Path) -> BuilderApp:
     """Build a :class:`BuilderApp`, loading *path* if it exists else starting empty."""
     p = pathlib.Path(path)
     if p.exists():
-        model = model_from_workflow(load_workflow(p))
+        model = model_from_workflow(load_any(p))
     else:
         model = empty_model(name=p.stem)
     return BuilderApp(model, p)

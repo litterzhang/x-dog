@@ -119,6 +119,25 @@ def test_render_lists_nodes_and_status(tmp_path: pathlib.Path) -> None:
     assert "agent" in joined
 
 
+def test_builder_saves_and_reloads_svg(tmp_path: pathlib.Path) -> None:
+    """Saving to a .svg writes an editable SVG; reopening it restores the model."""
+    path = tmp_path / "wf.svg"
+    app = build_app(path)
+    app.handle_input(KeyEvent(key="a"))  # one agent node -> valid
+    app.handle_input(KeyEvent(key="w"))  # save as .svg (embeds JSON)
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    assert "<svg" in text and "flow-workflow" in text  # a real SVG carrying the source
+    # reopening the same .svg restores an equal workflow
+    reopened = build_app(path)
+    assert reopened.model.wf == app.model.wf
+    # and it can keep being edited + re-saved
+    reopened.handle_input(KeyEvent(key="a"))  # add another agent node (stays valid)
+    reopened.handle_input(KeyEvent(key="w"))
+    again = build_app(path)
+    assert again.model.node_ids == ("agent", "agent2")
+
+
 # --- prompt-edit mode ---------------------------------------------------------
 
 
