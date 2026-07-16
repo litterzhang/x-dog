@@ -45,6 +45,51 @@ def to_ascii(wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def to_ascii_diagram(wf: WorkflowDef) -> str:
+    """Return a boxed ASCII flow diagram: each node in a box, edges as arrows.
+
+    Nodes are drawn top-to-bottom in declaration order.  An edge between two
+    consecutive nodes is drawn as a plain down-arrow.  Any other edge (a skip,
+    a back-edge/loop, or a conditional edge) is listed beneath the arrow as a
+    labelled side-connector, so branches and loops are visible without a full
+    2-D layout.  Deterministic and dependency-free.
+    """
+    if not wf.nodes:
+        return "(empty workflow)"
+
+    order = {node.id: i for i, node in enumerate(wf.nodes)}
+    lines: list[str] = []
+
+    for i, node in enumerate(wf.nodes):
+        label = f" {node.id} [{node.type}]"
+        if node.id == wf.entry:
+            label += " *"
+        inner = label
+        top = "┌" + "─" * len(inner) + "┐"
+        mid = "│" + inner + "│"
+        bot = "└" + "─" * len(inner) + "┘"
+        lines.append(top)
+        lines.append(mid)
+        lines.append(bot)
+
+        # Edges leaving this node.
+        outgoing = [e for e in wf.edges if e.src == node.id]
+        # A plain sequential edge to the very next node draws a simple arrow.
+        seq = [e for e in outgoing if order.get(e.dst) == i + 1 and e.when is None and e.loop_max is None]
+        other = [e for e in outgoing if e not in seq]
+        if seq:
+            lines.append("   │")
+            lines.append("   ▼")
+        for e in other:
+            lbl = _edge_label(e)
+            tag = f" [{lbl}]" if lbl else ""
+            back = order.get(e.dst, -1) <= i
+            arrow = "↺" if back else "→"
+            lines.append(f"   ├─{arrow} {e.dst}{tag}")
+
+    return "\n".join(lines)
+
+
 def _mermaid_edge(edge: EdgeDef) -> str:
     if edge.when is not None:
         label = _condition_label(edge.when)

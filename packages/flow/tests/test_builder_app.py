@@ -263,14 +263,26 @@ def test_render_has_visible_content_and_status(tmp_path: pathlib.Path) -> None:
 
 
 def test_render_does_not_duplicate_node_list(tmp_path: pathlib.Path) -> None:
-    """The node id must not appear once per rendering path (was doubled by an
-    inline to_ascii dump alongside the node list)."""
+    """The NODES section lists each node exactly once (no redundant full dump)."""
     app = build_app(tmp_path / "wf.json")
-    # load a known 3-node workflow so counts are stable
     app.handle_input(KeyEvent(key="a"))  # agent
     app.handle_input(KeyEvent(key="a"))  # agent2
     lines = app.render(80)
-    # 'agent2' should appear at most twice (node-list row + optional graph edge),
-    # definitely not 3+ times from redundant full-workflow dumps.
-    count = sum(line.count("agent2") for line in lines)
-    assert count <= 2, f"'agent2' rendered {count} times: {lines}"
+    # Rows in the NODES section look like '  agent  [agent]  (entry)' — the id is
+    # the first token. Count how many NODES-style rows name 'agent' (exact id).
+    nodes_rows = [
+        line for line in lines if line.strip().split("  ")[0].strip(" >*") == "agent"
+    ]
+    assert len(nodes_rows) == 1, f"'agent' listed in {len(nodes_rows)} NODES rows: {nodes_rows}"
+
+
+def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
+    """The DETAILS section shows the selected node's fields."""
+    app = build_app(tmp_path / "wf.json")
+    app.handle_input(KeyEvent(key="a"))  # agent selected
+    app.handle_input(KeyEvent(key="p"))  # edit prompt
+    _type(app, "hello world")
+    app.handle_input(KeyEvent(key="enter"))
+    joined = "\n".join(app.render(80))
+    assert "DETAILS:" in joined
+    assert "hello world" in joined  # the prompt is visible in details

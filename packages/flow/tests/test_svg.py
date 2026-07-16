@@ -125,3 +125,27 @@ def test_fallback_empty_workflow_is_valid() -> None:
     wf = WorkflowDef(name="empty", provider="copilot", entry="", nodes=(), edges=())
     root = _svg_root(_to_svg_fallback(wf))
     assert root.tag in ("svg", f"{{{_SVG_NS}}}svg")
+
+
+# --- to_ascii_diagram (boxed ASCII flow) -------------------------------------
+
+
+def test_ascii_diagram_boxes_and_edges() -> None:
+    from flow.graph import to_ascii_diagram
+
+    d = to_ascii_diagram(_wf())
+    # every node appears inside a box
+    for node_id in ("a", "b", "c"):
+        assert node_id in d
+    # box drawing chars present
+    assert "┌" in d and "└" in d and "│" in d
+    # a sequential arrow and the conditional/loop back-edge marker
+    assert "▼" in d
+    assert "↺" in d  # c -> b is a back-edge (loop)
+
+
+def test_ascii_diagram_empty() -> None:
+    from flow.graph import to_ascii_diagram
+
+    wf = WorkflowDef(name="e", provider="copilot", entry="", nodes=(), edges=())
+    assert to_ascii_diagram(wf) == "(empty workflow)"

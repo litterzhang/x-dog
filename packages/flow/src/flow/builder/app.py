@@ -23,7 +23,7 @@ from tui.tui import TUI, Component
 from flow.builder import actions
 from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
-from flow.graph import to_ascii
+from flow.graph import to_ascii_diagram
 
 _MIN_WIDTH = 40
 _KEYHINT = "keys: a/s add  j/k move  d del  p prompt  e edge  w save  q quit"
@@ -74,11 +74,15 @@ class BuilderApp(Component):
                 lines.append(f"{marker}{node.id}  [{node.type}]{entry}")
         else:
             lines.append("  (empty — press 'a' to add an agent node)")
+        # DETAILS of the selected node.
+        lines.append(rule)
+        lines.append("DETAILS:")
+        lines.extend(self._detail_lines())
         # The topology is shown ONCE here (the node list above is the editable
         # index; this is the wiring view) — no second inline node dump.
         lines.append(rule)
         lines.append("GRAPH:")
-        for gl in to_ascii(model.wf).splitlines():
+        for gl in to_ascii_diagram(model.wf).splitlines():
             lines.append(f"  {gl}")
         lines.append(rule)
         status = "valid" if model.error is None else model.error
@@ -185,6 +189,31 @@ class BuilderApp(Component):
         return True
 
     # -- helpers ---------------------------------------------------------------
+
+    def _detail_lines(self) -> list[str]:
+        """Field-by-field detail of the currently selected node."""
+        selected = self._model.selected
+        node = next((n for n in self._model.wf.nodes if n.id == selected), None)
+        if node is None:
+            return ["  (no node selected)"]
+        out: list[str] = [f"  id:      {node.id}", f"  type:    {node.type}"]
+        if node.type == "script":
+            out.append(f"  run:     {node.run or '(unset)'}")
+        else:
+            out.append(f"  model:   {node.model or '(default)'}")
+            if node.system_prompt:
+                out.append(f"  system:  {node.system_prompt}")
+            if node.prompt:
+                out.append(f"  prompt:  {node.prompt}")
+            if node.tools:
+                out.append(f"  tools:   {', '.join(node.tools)}")
+            if node.output_schema:
+                fields = ", ".join(f"{k}:{v}" for k, v in node.output_schema)
+                out.append(f"  schema:  {fields}")
+        if node.inputs:
+            out.append(f"  inputs:  {', '.join(node.inputs)}")
+        out.append(f"  output:  {node.output or '(none)'}")
+        return out
 
     def _selected_prompt(self) -> str:
         selected = self._model.selected
