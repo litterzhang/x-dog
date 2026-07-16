@@ -149,14 +149,26 @@ xdog-flow build my_workflow.json      # opens the TUI (creates the file if missi
 xdog-flow build my_workflow.svg       # same, but persists as an editable SVG (see below)
 ```
 
-Keys inside the builder: `a` add an agent node, `s` add a script node, `j`/`k`
-(or arrows) move the selection, `d` delete the selected node, `p` edit the
-selected node's prompt (type, `enter` to commit, `escape` to cancel), `e`
-connect an edge (choose the destination, `enter`), `w` save (only when the
-workflow is valid), `q` quit. The bottom pane shows a live ASCII graph and a
-validation status line, so wiring mistakes (unreachable inputs, loop edges
-missing a bound) surface as you edit. Saved files are immediately runnable with
-`xdog-flow run` / `validate` / `generate`.
+**Layout.** The builder is a **two-panel** UI. The left panel stacks three
+boxed blocks — **Graph**, **Nodes**, and **Edges** — and `Tab` cycles which one
+is focused (the focused box is highlighted). The right panel follows the focus:
+
+| Focused block | Right panel shows |
+|---------------|-------------------|
+| **Graph** | the live ASCII flow diagram (boxed nodes + arrows/loops) |
+| **Nodes** | the selected node's details (id, type, model/prompt/tools, or script `code`/`run` + typed I/O) |
+| **Edges** | the selected edge as `src → dst`, its guard/loop, and the **parameter flow** (which state key the source produces and the destination consumes) |
+
+Keys inside the builder: `Tab` switch the focused block, `a` add an agent node,
+`s` add a script node, `j`/`k` (or arrows) move the selection **within the
+focused block** (nodes when Nodes/Graph is focused, edges when Edges is
+focused), `d` delete the focused element (the selected edge in the Edges block,
+otherwise the selected node), `p` edit the selected node's prompt (type, `enter`
+to commit, `escape` to cancel), `e` connect an edge (choose the destination,
+`enter`), `w` save (only when the workflow is valid), `q` quit. A footer shows
+the current `[mode·focus]` and a validation status line, so wiring mistakes
+(unreachable inputs, loop edges missing a bound) surface as you edit. Saved
+files are immediately runnable with `xdog-flow run` / `validate` / `generate`.
 
 **SVG as an editable document.** If the path ends in `.svg`, saving writes a
 **rendered diagram that also embeds the full workflow JSON** (like draw.io) — the

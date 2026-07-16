@@ -290,3 +290,86 @@ def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
     joined = strip_ansi("\n".join(app.render(100)))
     assert "DETAILS" in joined
     assert "hello world" in joined  # the prompt is visible in details
+
+
+# --- three-block layout: Tab-cycled focus (Graph / Nodes / Edges) -------------
+
+_RWR = "packages/flow/examples/research_write_review.json"
+
+
+def _rwr_app() -> BuilderApp:
+    return build_app(pathlib.Path(_RWR))
+
+
+def test_left_panel_has_three_boxed_blocks() -> None:
+    """The left panel always shows Graph, Nodes, and Edges as boxed blocks."""
+    joined = strip_ansi("\n".join(_rwr_app().render(100)))
+    assert "Graph" in joined and "Nodes" in joined and "Edges" in joined
+    assert "┌" in joined and "└" in joined  # boxes are drawn
+
+
+def test_tab_cycles_focus_nodes_edges_graph() -> None:
+    """Tab advances focus nodes -> edges -> graph -> nodes (wrapping)."""
+    app = _rwr_app()
+    assert app._focus == "nodes"  # default focus
+    app.handle_input(KeyEvent(key="tab"))
+    assert app._focus == "edges"
+    app.handle_input(KeyEvent(key="tab"))
+    assert app._focus == "graph"
+    app.handle_input(KeyEvent(key="tab"))
+    assert app._focus == "nodes"  # wrapped
+
+
+def test_graph_focus_shows_diagram_on_right() -> None:
+    """With the Graph block focused, the right panel shows the ASCII diagram."""
+    app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> edges
+    app.handle_input(KeyEvent(key="tab"))  # -> graph
+    joined = strip_ansi("\n".join(app.render(100)))
+    assert "GRAPH" in joined
+    # the boxed node diagram from to_ascii_diagram is present
+    assert "[agent]" in joined
+
+
+def test_edges_focus_shows_edge_detail_and_param_flow() -> None:
+    """With the Edges block focused, the right panel shows 'src -> dst' + param flow."""
+    app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> edges
+    joined = strip_ansi("\n".join(app.render(100)))
+    assert "EDGE" in joined
+    assert "research → write" in joined  # edge expressed as node -> node
+    assert "parameter flow" in joined  # produces/consumes wiring shown
+
+
+def test_jk_navigate_edges_when_edges_focused() -> None:
+    """In the Edges block, j/k move the edge selection (not the node selection)."""
+    app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> edges
+    selected_before = app.model.selected
+    assert app._edge_idx == 0
+    app.handle_input(KeyEvent(key="j"))
+    assert app._edge_idx == 1
+    app.handle_input(KeyEvent(key="k"))
+    assert app._edge_idx == 0
+    # node selection is untouched while navigating edges
+    assert app.model.selected == selected_before
+
+
+def test_d_deletes_edge_when_edges_focused() -> None:
+    """In the Edges block, 'd' removes the selected edge, leaving nodes intact."""
+    app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> edges
+    edges_before = len(app.model.wf.edges)
+    nodes_before = len(app.model.wf.nodes)
+    app.handle_input(KeyEvent(key="d"))
+    assert len(app.model.wf.edges) == edges_before - 1
+    assert len(app.model.wf.nodes) == nodes_before  # nodes untouched
+
+
+def test_equal_width_across_all_foci() -> None:
+    """Every focus renders equal-width rows (columns stay aligned under color)."""
+    app = _rwr_app()
+    for _ in range(3):
+        widths = {visible_width(line) for line in app.render(100)}
+        assert widths == {100}, f"unequal widths at focus {app._focus}: {sorted(widths)}"
+        app.handle_input(KeyEvent(key="tab"))
