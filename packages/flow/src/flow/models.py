@@ -18,6 +18,10 @@ class NodeDef:
     run: str | None = None
     inputs: tuple[str, ...] = ()
     output_schema: tuple[tuple[str, str], ...] = ()
+    # Script-node typing + inline code (agent nodes leave these empty).
+    code: str | None = None
+    input_schema: tuple[tuple[str, str], ...] = ()
+    output_type: str | None = None
 
 
 @dataclass(frozen=True)

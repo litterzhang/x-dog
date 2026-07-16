@@ -85,9 +85,10 @@ async def _cmd_run(
         print(str(exc))
         raise SystemExit(1)
 
+    base_dir = Path(config_path).resolve().parent
     if dry_run:
         factory = _dry_run_stream_fn_factory
-        result = await execute(wf, stream_fn_factory=factory, timeout=timeout)
+        result = await execute(wf, stream_fn_factory=factory, timeout=timeout, base_dir=base_dir)
     else:
         if provider is not None:
             import ai
@@ -99,9 +100,9 @@ async def _cmd_run(
             def _factory(model: str) -> StreamFn:
                 return base_stream_fn
 
-            result = await execute(wf, stream_fn_factory=_factory, timeout=timeout)
+            result = await execute(wf, stream_fn_factory=_factory, timeout=timeout, base_dir=base_dir)
         else:
-            result = await execute(wf, timeout=timeout)
+            result = await execute(wf, timeout=timeout, base_dir=base_dir)
 
     print(json.dumps(result.final_state, indent=2))
 

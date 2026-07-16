@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -32,11 +33,40 @@ def _parse_condition(data: Any) -> Condition:
     raise WorkflowValidationError(f"Unknown condition keys: {list(data.keys())}")
 
 
+def _parse_inputs(raw: Any) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    """Parse a node's ``inputs``, accepting bare names or ``{name,type}`` objects.
+
+    Returns ``(names, schema)`` where *names* is the reachability list and *schema*
+    is the ``(name, jsontype)`` pairs (empty when inputs are bare names).
+    """
+    if not raw:
+        return (), ()
+    names: list[str] = []
+    schema: list[tuple[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = str(item["name"])
+            names.append(name)
+            schema.append((name, str(item.get("type", "string"))))
+        else:
+            names.append(str(item))
+    return tuple(names), tuple(schema)
+
+
+def _parse_output(raw: Any) -> tuple[str | None, str | None]:
+    """Parse a node's ``output``: a bare name or ``{name,type}`` → (name, type)."""
+    if raw is None:
+        return None, None
+    if isinstance(raw, dict):
+        return str(raw["name"]), str(raw.get("type", "string"))
+    return str(raw), None
+
+
 def _parse_node(data: dict[str, Any]) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
-    raw_inputs = data.get("inputs", [])
-    inputs: tuple[str, ...] = tuple(str(k) for k in raw_inputs) if raw_inputs else ()
+    inputs, input_schema = _parse_inputs(data.get("inputs", []))
+    output_name, output_type = _parse_output(data.get("output"))
     raw_output_schema = data.get("output_schema", {})
     output_schema: tuple[tuple[str, str], ...]
     if isinstance(raw_output_schema, dict) and raw_output_schema:
@@ -49,12 +79,16 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         model=data.get("model"),
         system_prompt=data.get("system_prompt", ""),
         prompt=data.get("prompt", ""),
-        output=data.get("output"),
+        output=output_name,
         tools=tools,
         run=data.get("run"),
         inputs=inputs,
         output_schema=output_schema,
+        code=data.get("code"),
+        input_schema=input_schema,
+        output_type=output_type,
     )
+
 
 
 def _parse_edge(data: dict[str, Any]) -> EdgeDef:
@@ -100,6 +134,47 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
     )
 
 
+def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
+    """Validate a script node: exactly one code source; inline code compiles and
+    has a ``ctx``-first signature whose remaining params match the declared inputs."""
+    has_code = node.code is not None
+    has_run = bool(node.run)
+    if has_code and has_run:
+        raise WorkflowValidationError(f"Script node {node.id!r}: set either 'code' or 'run', not both")
+    if not has_code and not has_run:
+        raise WorkflowValidationError(f"Script node {node.id!r}: must set 'code' or 'run'")
+
+    if has_run:
+        assert node.run is not None
+        if not run_re.match(node.run):
+            raise WorkflowValidationError(
+                f"Script node {node.id!r}: 'run' must match 'module.path:callable', got {node.run!r}"
+            )
+        return
+
+    # Inline code: must compile, and its function must be (ctx, *inputs).
+    assert node.code is not None
+    try:
+        tree = ast.parse(node.code, filename=f"<{node.id}>", mode="exec")
+    except SyntaxError as exc:
+        raise WorkflowValidationError(f"Script node {node.id!r}: invalid code — {exc}") from exc
+    funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
+    if len(funcs) != 1:
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: 'code' must define exactly one top-level function, found {len(funcs)}"
+        )
+    fn = funcs[0]
+    arg_names = [a.arg for a in fn.args.args]
+    if not arg_names or arg_names[0] != "ctx":
+        raise WorkflowValidationError(f"Script node {node.id!r}: function's first parameter must be 'ctx'")
+    declared = set(node.inputs)
+    got = set(arg_names[1:])
+    if got != declared:
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: function params {sorted(got)} != declared inputs {sorted(declared)}"
+        )
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
     node_ids = [n.id for n in wf.nodes]
@@ -124,15 +199,12 @@ def validate_workflow(wf: WorkflowDef) -> None:
             if not tool:
                 raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
         if node.type == "script":
-            if not node.run:
-                raise WorkflowValidationError(f"Script node {node.id!r} must have a non-empty 'run' field")
-            if not _run_re.match(node.run):
-                raise WorkflowValidationError(
-                    f"Script node {node.id!r}: 'run' must match 'module.path:callable', got {node.run!r}"
-                )
+            _validate_script_node(node, _run_re)
         elif node.type == "agent":
             if node.run is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
+            if node.code is not None:
+                raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
 
     # edges reference existing nodes; back-edges need loop_max
     for edge in wf.edges:

@@ -270,3 +270,93 @@ def test_output_schema_default_empty() -> None:
     }
     wf = parse_workflow(data)
     assert wf.nodes[0].output_schema == ()
+
+
+# --- typed inline script nodes (code XOR run, signature validation) ----------
+
+
+def _wf_with_script(node: dict) -> dict:
+    return {
+        "name": "t",
+        "provider": "copilot",
+        "entry": node["id"],
+        "nodes": [node],
+        "edges": [],
+    }
+
+
+def test_inline_script_parses_typed_io() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow({
+        "name": "t",
+        "provider": "copilot",
+        "entry": "add",
+        "state": {"a": "3", "b": "4"},  # inputs reachable from initial state
+        "nodes": [{
+            "id": "add",
+            "type": "script",
+            "code": "def add(ctx, a, b):\n    return a + b",
+            "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
+            "output": {"name": "sum", "type": "integer"},
+        }],
+        "edges": [],
+    })
+    validate_workflow(wf)  # must not raise
+    n = wf.nodes[0]
+    assert n.inputs == ("a", "b")
+    assert n.input_schema == (("a", "integer"), ("b", "integer"))
+    assert n.output == "sum"
+    assert n.output_type == "integer"
+    assert n.code is not None
+
+
+def test_inline_bad_syntax_raises() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow(_wf_with_script({
+        "id": "x", "type": "script", "code": "def x(ctx):\n    return (", "output": "y",
+    }))
+    with pytest.raises(WorkflowValidationError, match="invalid code"):
+        validate_workflow(wf)
+
+
+def test_inline_first_param_must_be_ctx() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow(_wf_with_script({
+        "id": "x", "type": "script", "code": "def x(a):\n    return a",
+        "inputs": [{"name": "a", "type": "string"}], "output": "y",
+    }))
+    with pytest.raises(WorkflowValidationError, match="first parameter must be 'ctx'"):
+        validate_workflow(wf)
+
+
+def test_inline_params_must_match_inputs() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow(_wf_with_script({
+        "id": "x", "type": "script", "code": "def x(ctx, a, b):\n    return a",
+        "inputs": [{"name": "a", "type": "string"}], "output": "y",
+    }))
+    with pytest.raises(WorkflowValidationError, match="!= declared inputs"):
+        validate_workflow(wf)
+
+
+def test_script_code_and_run_both_set_raises() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow(_wf_with_script({
+        "id": "x", "type": "script", "code": "def x(ctx):\n    return ''",
+        "run": "m:f", "output": "y",
+    }))
+    with pytest.raises(WorkflowValidationError, match="not both"):
+        validate_workflow(wf)
+
+
+def test_script_neither_code_nor_run_raises() -> None:
+    from flow.loader import parse_workflow, validate_workflow
+
+    wf = parse_workflow(_wf_with_script({"id": "x", "type": "script", "output": "y"}))
+    with pytest.raises(WorkflowValidationError, match="must set 'code' or 'run'"):
+        validate_workflow(wf)

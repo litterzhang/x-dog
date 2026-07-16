@@ -1,0 +1,36 @@
+{
+  "name": "pure-script",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.5"
+  },
+  "entry": "add",
+  "state": {
+    "a": "3",
+    "b": "4"
+  },
+  "nodes": [
+    {
+      "id": "add",
+      "type": "script",
+      "code": "def add(ctx, a, b):\n    return a + b",
+      "inputs": [
+        {"name": "a", "type": "integer"},
+        {"name": "b", "type": "integer"}
+      ],
+      "output": {"name": "sum", "type": "integer"}
+    },
+    {
+      "id": "label",
+      "type": "script",
+      "inputs": [
+        {"name": "sum", "type": "integer"}
+      ],
+      "code": "def label(ctx, sum):\n    return f'total is {sum}'",
+      "output": {"name": "message", "type": "string"}
+    }
+  ],
+  "edges": [
+    {"from": "add", "to": "label"}
+  ]
+}

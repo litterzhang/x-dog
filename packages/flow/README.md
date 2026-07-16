@@ -233,26 +233,47 @@ If the agent finishes without calling `submit_result`, the executor raises
 
 ## Script nodes
 
-A **script node** runs a plain async Python function instead of an LLM agent.
-Set `"type": "script"` and point `"run"` at a `module.path:callable` that
-accepts the current state mapping and returns a `str`:
+A **script node** runs a plain Python function (`def` or `async def`) instead of
+an LLM agent. Its signature is **`f(ctx, <inputs by name>) -> output`**: the first
+parameter is always `ctx` (a `RuntimeContext`), and each declared input arrives as
+a keyword argument, coerced to its declared type. The return value is coerced back
+and stored under the output name. Inputs/outputs are **typed** with JSON types
+(`string`/`integer`/`number`/`boolean`/`array`/`object`).
+
+Two code sources — a workflow is self-contained either way:
+
+**Inline `code`** (fully decoupled — the JSON carries the function):
 
 ```jsonc
 {
-  "id": "prep",
+  "id": "add",
   "type": "script",
-  "run": "flow.tools:passthrough",   // "module:async_function"
-  "output": "prepped"                // STATE key where the return value is stored
+  "code": "def add(ctx, a, b):\n    return a + b",
+  "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
+  "output": {"name": "sum", "type": "integer"}
 }
 ```
+Here `state["a"]="3"`, `state["b"]="4"` are coerced to ints, so `sum` is `"7"`
+(not `"34"`). See `examples/pure_script.json`.
 
-The callable signature must be:
+**Ref `run`** (imports a `.py` sitting next to the workflow file — JSON + sibling
+`.py` = a portable bundle; the workflow's own directory is put on `sys.path` for
+the import, not the global path):
 
-```python
-async def my_fn(state: Mapping[str, str]) -> str: ...
+```jsonc
+{ "id": "prep", "type": "script", "run": "myscript:prep",
+  "inputs": [{"name": "topic", "type": "string"}], "output": {"name": "brief", "type": "string"} }
 ```
 
-`flow.tools:passthrough` (the built-in demo) returns `state.get("topic", "")`.
+`ctx` exposes `ctx.state` (full state snapshot), `ctx.workflow_name`, `ctx.node_id`
+for scripts that need the wider picture (e.g. config-only scripts read `ctx.state`).
+
+**Validation** at load time: a script node sets exactly one of `code`/`run`;
+inline `code` must compile and its function must be `ctx`-first with parameter
+names matching the declared inputs.
+
+> **Security:** inline `code` is `exec`'d — it runs arbitrary Python. Only load
+> workflows from a trusted author. (This is a local authoring tool, not a service.)
 
 ---
 

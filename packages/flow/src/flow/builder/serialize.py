@@ -38,13 +38,24 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
     if node.prompt:
         data["prompt"] = node.prompt
     if node.output is not None:
-        data["output"] = node.output
+        # Typed output round-trips as {name, type}; bare output stays a string.
+        if node.output_type is not None:
+            data["output"] = {"name": node.output, "type": node.output_type}
+        else:
+            data["output"] = node.output
     if node.tools:
         data["tools"] = list(node.tools)
     if node.run is not None:
         data["run"] = node.run
+    if node.code is not None:
+        data["code"] = node.code
     if node.inputs:
-        data["inputs"] = list(node.inputs)
+        # Typed inputs round-trip as [{name, type}]; bare names stay strings.
+        if node.input_schema:
+            type_of = dict(node.input_schema)
+            data["inputs"] = [{"name": n, "type": type_of.get(n, "string")} for n in node.inputs]
+        else:
+            data["inputs"] = list(node.inputs)
     if node.output_schema:
         data["output_schema"] = {k: v for k, v in node.output_schema}
     return data

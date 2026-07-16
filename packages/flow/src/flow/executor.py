@@ -3,27 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
+import inspect
 import json
 import logging
+import sys
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from agent.agent import Agent
 from agent.core import AgentConfig, AgentTool, StreamFn
 from agent.events import TurnEndEvent
 from ai.types import AssistantMessage, TextContent
 
+from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowExecutionError
 from flow.interpolate import interpolate
-from flow.models import EdgeDef, WorkflowDef
+from flow.models import EdgeDef, NodeDef, WorkflowDef
+from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 ScriptResolver = Callable[[str], Callable[..., Awaitable[str]]]
+ScriptFn = Callable[..., Any]
 
 
 def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
@@ -31,6 +39,37 @@ def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
     module_name, _, func_name = run.partition(":")
     module = importlib.import_module(module_name)
     fn: Callable[..., Awaitable[str]] = getattr(module, func_name)
+    return fn
+
+
+def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
+    """Resolve a script node's callable from inline ``code`` or a ``run`` ref.
+
+    Inline code is ``exec``'d and the single top-level function returned.  A
+    ``run`` ref is imported with *base_dir* (the workflow's own directory)
+    temporarily on ``sys.path`` so a workflow bundles its sibling ``.py`` files.
+    """
+    if node.code is not None:
+        namespace: dict[str, Any] = {}
+        exec(node.code, namespace)  # noqa: S102 - inline workflow code, trusted author
+        funcs = [v for v in namespace.values() if inspect.isfunction(v)]
+        if len(funcs) != 1:
+            raise WorkflowExecutionError(f"Script node {node.id!r}: code must define one function")
+        return funcs[0]
+    if node.run is None:
+        raise WorkflowExecutionError(f"Script node {node.id!r}: no code or run")
+    module_name, _, func_name = node.run.partition(":")
+    if base_dir is not None:
+        sys.path.insert(0, str(base_dir))
+        importlib.invalidate_caches()
+        try:
+            module = importlib.import_module(module_name)
+        finally:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(str(base_dir))
+    else:
+        module = importlib.import_module(module_name)
+    fn: ScriptFn = getattr(module, func_name)
     return fn
 
 
@@ -49,6 +88,7 @@ async def execute(
     timeout: float = 120.0,
     tool_registry: ToolRegistry | None = None,
     script_resolver: ScriptResolver | None = None,
+    base_dir: Path | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -79,8 +119,6 @@ async def execute(
 
     if tool_registry is None:
         tool_registry = _default_registry()
-    if script_resolver is None:
-        script_resolver = _default_script_resolver
     if stream_fn_factory is None:
         import ai
         from agent.helpers import stream_fn_from_provider
@@ -122,17 +160,38 @@ async def execute(
             state_snapshot = dict(state)
 
         if node.type == "script":
-            assert script_resolver is not None
-            if node.run is None:
-                raise ValueError(f"Script node {node_id!r} has no 'run' field")
-            fn = script_resolver(node.run)
+            if node.code is not None:
+                fn = _resolve_script_fn(node, base_dir)
+            elif script_resolver is not None:
+                fn = script_resolver(node.run or "")
+            else:
+                fn = _resolve_script_fn(node, base_dir)
 
-            async def _run_script() -> None:
-                result = await fn(dict(state_snapshot))
+            async def _run_script(fn: ScriptFn = fn) -> None:
+                ctx = RuntimeContext(
+                    state=dict(state_snapshot),
+                    workflow_name=wf.name,
+                    node_id=node_id,
+                )
+                sig_params = list(inspect.signature(fn).parameters.values())
+                first = sig_params[0].name if sig_params else ""
+                if first == "ctx":
+                    # New convention: fn(ctx, **typed-inputs-by-name).
+                    type_of = dict(node.input_schema)
+                    kwargs = {
+                        name: to_python(state_snapshot.get(name, ""), type_of.get(name, "string"))
+                        for name in node.inputs
+                    }
+                    raw = fn(ctx, **kwargs)
+                else:
+                    # Legacy convention: fn(state_dict).
+                    raw = fn(dict(state_snapshot))
+                value = await raw if inspect.isawaitable(raw) else raw
                 if node.output is not None:
+                    stored = to_state(value, node.output_type) if node.output_type else str(value)
                     async with _state_lock:
-                        state[node.output] = result
-                        node_outputs[node.output] = result
+                        state[node.output] = stored
+                        node_outputs[node.output] = stored
 
             await asyncio.wait_for(_run_script(), timeout=timeout)
             completed.add(node_id)
