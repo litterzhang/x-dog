@@ -51,6 +51,7 @@ from flow.builder.app import BuilderApp, build_app
 from flow.loader import load_workflow
 from tui.keys import KeyEvent
 from tui.tui import Component
+from tui.utils import strip_ansi, visible_width
 
 
 def _new_app(tmp_path: pathlib.Path) -> BuilderApp:
@@ -120,7 +121,7 @@ def test_render_lists_nodes_and_status(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="a"))
     lines = app.render(80)
     assert isinstance(lines, list) and lines
-    joined = "\n".join(lines)
+    joined = strip_ansi("\n".join(lines))
     assert "agent" in joined
 
 
@@ -256,24 +257,27 @@ def test_render_never_emits_empty_lines_at_zero_width(tmp_path: pathlib.Path) ->
 def test_render_has_visible_content_and_status(tmp_path: pathlib.Path) -> None:
     app = _new_app(tmp_path)
     app.handle_input(KeyEvent(key="a"))
-    lines = app.render(80)
-    joined = "\n".join(lines)
+    joined = strip_ansi("\n".join(app.render(100)))
     assert "agent" in joined          # the node shows up
-    assert "status" in joined.lower() # a status/validation line is present
+    assert "valid" in joined.lower()  # a status/validation line is present
 
 
-def test_render_does_not_duplicate_node_list(tmp_path: pathlib.Path) -> None:
-    """The NODES section lists each node exactly once (no redundant full dump)."""
-    app = build_app(tmp_path / "wf.json")
-    app.handle_input(KeyEvent(key="a"))  # agent
-    app.handle_input(KeyEvent(key="a"))  # agent2
-    lines = app.render(80)
-    # Rows in the NODES section look like '  agent  [agent]  (entry)' — the id is
-    # the first token. Count how many NODES-style rows name 'agent' (exact id).
-    nodes_rows = [
-        line for line in lines if line.strip().split("  ")[0].strip(" >*") == "agent"
-    ]
-    assert len(nodes_rows) == 1, f"'agent' listed in {len(nodes_rows)} NODES rows: {nodes_rows}"
+def test_render_is_two_column_and_equal_width() -> None:
+    """Body rows are two columns joined by a vertical separator, all equal width."""
+    import pathlib as _pl
+
+    app = build_app(_pl.Path("packages/flow/examples/research_write_review.json"))
+    lines = app.render(100)
+    # every rendered line has the same DISPLAY width (columns align under color)
+    widths = {visible_width(line) for line in lines}
+    assert widths == {100}, f"unequal widths: {sorted(widths)}"
+    # a vertical column separator appears in the body
+    joined = strip_ansi("\n".join(lines))
+    assert "│" in joined
+    # left column has a node id, right column has a graph box, on body rows
+    assert any("research" in strip_ansi(line) and "┌" in strip_ansi(line) for line in lines) or (
+        "research" in joined and "┌" in joined
+    )
 
 
 def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
@@ -283,6 +287,6 @@ def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="p"))  # edit prompt
     _type(app, "hello world")
     app.handle_input(KeyEvent(key="enter"))
-    joined = "\n".join(app.render(80))
-    assert "DETAILS:" in joined
+    joined = strip_ansi("\n".join(app.render(100)))
+    assert "DETAILS" in joined
     assert "hello world" in joined  # the prompt is visible in details

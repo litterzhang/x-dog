@@ -19,23 +19,17 @@ from collections.abc import Callable
 
 from tui.keys import KeyEvent
 from tui.tui import TUI, Component
+from tui.utils import visible_width
 
-from flow.builder import actions
+from flow.builder import actions, style
 from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.graph import to_ascii_diagram
 
-_MIN_WIDTH = 40
-_KEYHINT = "keys: a/s add  j/k move  d del  p prompt  e edge  w save  q quit"
-
-
-def _fit(line: str, width: int) -> str:
-    """Truncate/pad *line* to exactly *width* columns (never negative width)."""
-    if width <= 0:
-        return line
-    if len(line) > width:
-        return line[:width]
-    return line + " " * (width - len(line))
+_MIN_WIDTH = 60
+_LEFT_MAX = 44
+_SEP = "  │  "
+_KEYHINT = "a/s add   j/k move   d del   p prompt   e edge   w save   q quit"
 
 
 class BuilderApp(Component):
@@ -59,41 +53,75 @@ class BuilderApp(Component):
         # Guard against zero/negative widths (a pty can report width 0), so the
         # UI never collapses to all-empty lines.
         w = max(width, _MIN_WIDTH)
-        rule = "-" * w
+        left_w = min(_LEFT_MAX, max(20, w * 2 // 5))
+        right_w = max(20, w - left_w - visible_width(_SEP))
         model = self._model
-        lines: list[str] = [f"flow builder — {model.wf.name}", rule, "NODES:"]
+
+        left = self._left_column(left_w)
+        right = self._right_column(right_w)
+
+        out: list[str] = []
+        # Title bar.
+        title = style.bold(style.fg(f" flow builder — {model.wf.name} ", style.TITLE))
+        out.append(style.pad(title, w))
+        out.append(style.dim("─" * w))
+        # Zip the two columns row by row.
+        rows = max(len(left), len(right))
+        sep = style.dim(_SEP)
+        for i in range(rows):
+            lcell = left[i] if i < len(left) else ""
+            rcell = right[i] if i < len(right) else ""
+            out.append(style.pad(style.pad(lcell, left_w) + sep + style.pad(rcell, right_w), w))
+        # Footer: status + mode + keyhint.
+        out.append(style.dim("─" * w))
+        if model.error is None:
+            status = style.fg("● valid", style.OK)
+        else:
+            status = style.fg(f"✗ {model.error}", style.ERR)
+        mode = style.dim(f"[{self._mode}]")
+        out.append(style.pad(f"{status}   {mode}", w))
+        if self._mode == "prompt":
+            out.append(style.pad(style.fg(f"prompt> {self._buf}", style.ENTRY), w))
+        if self._message:
+            out.append(style.pad(style.dim(self._message), w))
+        out.append(style.pad(style.dim(_KEYHINT), w))
+        return [style.pad(line, w) for line in out]
+
+    def _left_column(self, w: int) -> list[str]:
+        model = self._model
+        lines: list[str] = [style.bold("NODES")]
         if model.node_ids:
             for node in model.wf.nodes:
-                if node.id == model.selected:
-                    marker = "> "
-                elif self._mode == "edge" and node.id == self._edge_src:
-                    marker = "* "
-                else:
-                    marker = "  "
-                entry = "  (entry)" if node.id == model.wf.entry else ""
-                lines.append(f"{marker}{node.id}  [{node.type}]{entry}")
+                accent = style.AGENT if node.type == "agent" else style.SCRIPT
+                tag = style.fg(f"[{node.type}]", accent)
+                entry = style.fg(" *", style.ENTRY) if node.id == model.wf.entry else ""
+                selected = node.id == model.selected
+                edge_src = self._mode == "edge" and node.id == self._edge_src
+                marker = "▸ " if selected else ("◆ " if edge_src else "  ")
+                row = f"{marker}{node.id} {tag}{entry}"
+                if selected:
+                    row = style.bg(style.pad(row, w), style.SELECT_BG)
+                lines.append(row)
         else:
-            lines.append("  (empty — press 'a' to add an agent node)")
-        # DETAILS of the selected node.
-        lines.append(rule)
-        lines.append("DETAILS:")
+            lines.append(style.dim("  (press 'a' to add a node)"))
+        lines.append(style.dim("─" * w))
+        lines.append(style.bold("DETAILS"))
         lines.extend(self._detail_lines())
-        # The topology is shown ONCE here (the node list above is the editable
-        # index; this is the wiring view) — no second inline node dump.
-        lines.append(rule)
-        lines.append("GRAPH:")
-        for gl in to_ascii_diagram(model.wf).splitlines():
-            lines.append(f"  {gl}")
-        lines.append(rule)
-        status = "valid" if model.error is None else model.error
-        lines.append(f"status: {status}")
-        lines.append(f"mode: {self._mode}")
-        if self._mode == "prompt":
-            lines.append(f"prompt> {self._buf}")
-        if self._message:
-            lines.append(self._message)
-        lines.append(_KEYHINT)
-        return [_fit(line, w) for line in lines]
+        return lines
+
+    def _right_column(self, w: int) -> list[str]:
+        lines: list[str] = [style.bold("GRAPH")]
+        for gl in to_ascii_diagram(self._model.wf).splitlines():
+            stripped = gl.strip()
+            if stripped.startswith(("┌", "└", "│")):
+                lines.append(style.dim(gl))
+            elif "↺" in gl:
+                lines.append(style.fg(gl, style.ERR))
+            elif gl.strip() in ("│", "▼") or "├─" in gl:
+                lines.append(style.fg(gl, style.MUTED))
+            else:
+                lines.append(gl)
+        return lines
 
     def handle_input(self, event: KeyEvent) -> bool:
         if self._mode == "prompt":
@@ -191,28 +219,32 @@ class BuilderApp(Component):
     # -- helpers ---------------------------------------------------------------
 
     def _detail_lines(self) -> list[str]:
-        """Field-by-field detail of the currently selected node."""
+        """Field-by-field detail of the currently selected node (dim labels)."""
         selected = self._model.selected
         node = next((n for n in self._model.wf.nodes if n.id == selected), None)
         if node is None:
-            return ["  (no node selected)"]
-        out: list[str] = [f"  id:      {node.id}", f"  type:    {node.type}"]
+            return [style.dim("  (no node selected)")]
+
+        def row(label: str, value: str) -> str:
+            return "  " + style.dim(f"{label:<8}") + value
+
+        out: list[str] = [row("id", node.id), row("type", node.type)]
         if node.type == "script":
-            out.append(f"  run:     {node.run or '(unset)'}")
+            out.append(row("run", node.run or "(unset)"))
         else:
-            out.append(f"  model:   {node.model or '(default)'}")
+            out.append(row("model", node.model or "(default)"))
             if node.system_prompt:
-                out.append(f"  system:  {node.system_prompt}")
+                out.append(row("system", node.system_prompt))
             if node.prompt:
-                out.append(f"  prompt:  {node.prompt}")
+                out.append(row("prompt", node.prompt))
             if node.tools:
-                out.append(f"  tools:   {', '.join(node.tools)}")
+                out.append(row("tools", ", ".join(node.tools)))
             if node.output_schema:
                 fields = ", ".join(f"{k}:{v}" for k, v in node.output_schema)
-                out.append(f"  schema:  {fields}")
+                out.append(row("schema", fields))
         if node.inputs:
-            out.append(f"  inputs:  {', '.join(node.inputs)}")
-        out.append(f"  output:  {node.output or '(none)'}")
+            out.append(row("inputs", ", ".join(node.inputs)))
+        out.append(row("output", node.output or "(none)"))
         return out
 
     def _selected_prompt(self) -> str:
