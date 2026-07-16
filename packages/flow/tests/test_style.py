@@ -54,3 +54,22 @@ def test_pad_truncates_colored_without_bleeding() -> None:
 
 def test_pad_zero_width() -> None:
     assert style.pad("abc", 0) == ""
+
+
+def test_pad_flattens_embedded_newlines_and_tabs() -> None:
+    """A cell with embedded newlines/tabs stays a SINGLE physical line.
+
+    Regression: a node's multiline prompt (``"a\\n\\nb"``) leaked its newlines
+    into the rendered row, so one list element spanned several terminal lines —
+    corrupting the differential renderer (duplicated/broken boxes) when moving
+    the selection.  ``pad`` must collapse control whitespace to spaces first.
+    """
+    padded = style.pad("a\n\nb", 10)
+    assert "\n" not in padded and "\r" not in padded and "\t" not in padded
+    assert visible_width(padded) == 10
+    # a run of control whitespace collapses to a single space
+    assert strip_ansi(padded) == "a b" + " " * 7
+
+    tabbed = style.pad("x\ty", 10)
+    assert "\t" not in tabbed
+    assert visible_width(tabbed) == 10

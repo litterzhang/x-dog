@@ -373,3 +373,29 @@ def test_equal_width_across_all_foci() -> None:
         widths = {visible_width(line) for line in app.render(100)}
         assert widths == {100}, f"unequal widths at focus {app._focus}: {sorted(widths)}"
         app.handle_input(KeyEvent(key="tab"))
+
+
+def test_multiline_field_does_not_corrupt_layout(tmp_path: pathlib.Path) -> None:
+    """A node whose prompt contains newlines must not break the single-line rows.
+
+    Regression: selecting a node with a multiline prompt spilled the newline into
+    a rendered row, so one element spanned multiple physical lines — the moving
+    selection then corrupted the box layout (duplicated/broken frames).
+    """
+    app = build_app(tmp_path / "wf.json")
+    app.handle_input(KeyEvent(key="a"))  # agent selected
+    app.handle_input(KeyEvent(key="p"))  # edit prompt
+    _type(app, "line one")
+    # inject a real newline (as a loaded workflow would carry) via the action layer
+    app.handle_input(KeyEvent(key="enter"))
+    from flow.builder import actions
+
+    app._model = actions.set_field(app.model, "agent", "prompt", "line one\n\nline two")
+    lines = app.render(100)
+    # no rendered element carries an embedded newline/tab (each row is one line)
+    assert all("\n" not in line and "\t" not in line for line in lines)
+    # joining and splitting yields the SAME number of physical lines (no spill)
+    assert len("\n".join(lines).split("\n")) == len(lines)
+    # both prompt fragments are still visible (flattened onto one row)
+    joined = strip_ansi("\n".join(lines))
+    assert "line one" in joined and "line two" in joined

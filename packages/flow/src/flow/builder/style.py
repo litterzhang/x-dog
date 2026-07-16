@@ -10,11 +10,25 @@ for the selection highlight.  Padding/truncation use :func:`tui.visible_width`
 
 from __future__ import annotations
 
+import re
+
 from tui import strip_ansi, visible_width
 
 _FG_RESET = "\x1b[39m"
 _BG_RESET = "\x1b[49m"
 _RESET = "\x1b[0m"
+
+# Whitespace that would break single-line cell rendering: newlines/carriage
+# returns split a fixed-width cell across physical rows (corrupting the
+# differential renderer and box borders), and tabs advance to a tab stop rather
+# than one column — both defeat display-width accounting.  A cell is always one
+# physical line, so we flatten these to a single space before measuring/padding.
+_CONTROL_WS = re.compile(r"[\n\r\t\v\f]+")
+
+
+def _flatten(text: str) -> str:
+    """Collapse embedded control whitespace (newlines/tabs/…) to single spaces."""
+    return _CONTROL_WS.sub(" ", text)
 
 
 def _rgb(hex_color: str) -> tuple[int, int, int]:
@@ -59,9 +73,12 @@ def pad(cell: str, width: int) -> str:
 
     Uses :func:`tui.visible_width` so styled cells align.  Truncation drops
     trailing (visible) characters; any dangling ANSI is closed with a full reset.
+    Embedded newlines/tabs are flattened to spaces first, so a cell is always a
+    single physical line of exactly *width* columns.
     """
     if width <= 0:
         return ""
+    cell = _flatten(cell)
     vis = visible_width(cell)
     if vis == width:
         return cell
