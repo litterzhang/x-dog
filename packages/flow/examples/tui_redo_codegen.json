@@ -1,0 +1,74 @@
+{
+  "name": "tui-redo-codegen",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-opus-4.8"
+  },
+  "entry": "design",
+  "state": {
+    "spec": "Rewrite packages/flow/src/flow/builder/app.py so BuilderApp is a REAL, usable TUI (currently it renders flat text, has no quit, and collapses to empty at width<=0). Satisfy the contract in packages/flow/tests/test_builder_app.py EXACTLY. Requirements: (1) BuilderApp keeps its existing API: __init__(self, model, path), the `model` property, handle_input(event)->bool, render(width)->list[str], the normal/prompt/edge modes, and helpers. (2) NEW: a public settable attribute `on_quit: Callable[[], None] | None = None` (init to None). In normal mode, pressing 'q' calls self.on_quit() if it is not None, and returns True (consumed). (3) render(width) must NEVER collapse to all-empty lines: guard width — use an effective width of max(width, 40) internally for fitting/padding so that even width=0 or negative yields visible content (the pty passes width=0 sometimes). Every returned line list is non-empty and at least one line has non-whitespace content. (4) render(width) is a VERTICAL SECTIONED layout, NOT a flat dump and NOT a duplicated node list: a header/title line (e.g. 'flow builder — <name>'), a horizontal rule (a line of '-' fitted to width) separating sections, a NODES section listing each node id with a leading marker ('> ' for the selected node, '* ' for the edge-source in edge mode, '  ' otherwise) and its [type], a horizontal rule, a GRAPH section rendering flow.graph.to_ascii(model.wf) (this is the ONLY place the topology is shown — do NOT also inline a second node list, so a node id appears at most twice total across the whole render), a horizontal rule, and a STATUS footer line showing 'status: valid' or the validation error, plus a 'mode: <mode>' line and a short keybind hint line (a s j k d p e w q). (5) run(path)->None must: build the app, create a TUI, add the app as a child, set focus, wire app.on_quit = tui.stop (so 'q' exits), call tui.start() in try/finally with tui.stop() in finally. Mark run() with `# pragma: no cover`. (6) Keep imports clean; from tui.tui import TUI, Component; from tui.keys import KeyEvent. Full type annotations (mypy --strict), ruff-clean line-length 120. The whole point: after this, `xdog-flow build file.svg` shows a sectioned UI in a real terminal AND 'q' exits.",
+    "module_file": "/data/workspaces/pyspace/x-dog/packages/flow/src/flow/builder/app.py",
+    "mypy_target": "/data/workspaces/pyspace/x-dog/packages/flow/src",
+    "test_file": "/data/workspaces/pyspace/x-dog/packages/flow/tests/test_builder_app.py"
+  },
+  "nodes": [
+    {
+      "id": "design",
+      "type": "agent",
+      "tools": ["filesystem"],
+      "system_prompt": "You are a Python TUI designer in the x-dog monorepo. Read files with the filesystem tool before designing. Produce a precise, minimal plan.",
+      "prompt": "Design the BuilderApp TUI rewrite.\n\nFIRST read these:\n- /data/workspaces/pyspace/x-dog/packages/flow/tests/test_builder_app.py  (THE contract: modes, q/on_quit, width<=0 non-empty, no-duplicate-node-list, status visible)\n- /data/workspaces/pyspace/x-dog/packages/flow/src/flow/builder/app.py  (current impl to rewrite)\n- /data/workspaces/pyspace/x-dog/packages/flow/src/flow/builder/actions.py  (edit ops)\n- /data/workspaces/pyspace/x-dog/packages/flow/src/flow/builder/model.py  (BuilderModel)\n- /data/workspaces/pyspace/x-dog/packages/flow/src/flow/graph.py  (to_ascii)\n- /data/workspaces/pyspace/x-dog/packages/tui/src/tui/tui.py  (TUI.start/stop/add_child/set_focus, Component)\n\nNote: tui has NO border/columns components — Container only stacks vertically, Box only pads. So the sectioned layout is achieved with header/rule/section/rule text lines inside render(), not with framed panels. Output the plan.",
+      "output": "plan",
+      "output_schema": {
+        "render_layout": "string",
+        "quit_wiring": "string",
+        "width_guard": "string"
+      }
+    },
+    {
+      "id": "implement",
+      "type": "agent",
+      "inputs": ["plan"],
+      "tools": ["filesystem"],
+      "system_prompt": "You are a senior Python engineer. Production code: `from __future__ import annotations`, full type annotations (mypy --strict), ruff-clean (line-length 120), no unused imports. Use the filesystem tool: READ the target file first, then WRITE the whole file.",
+      "prompt": "Implement per this plan:\n\n{{plan}}\n\nWRITE /data/workspaces/pyspace/x-dog/packages/flow/src/flow/builder/app.py in full. It MUST make every test in packages/flow/tests/test_builder_app.py pass — especially: on_quit attribute default None + 'q' calls it; render(0) and render(-5) return non-empty with visible non-whitespace content; render shows a header + status + node ids but does NOT duplicate the node list (a node id appears at most twice total); run() wires app.on_quit = tui.stop. Keep build_app() and all existing modes/keys working. After writing, report what changed.",
+      "output": "impl_report"
+    },
+    {
+      "id": "autofix",
+      "type": "script",
+      "run": "flow.codegen_tools:autofix_module",
+      "output": "autofix_report"
+    },
+    {
+      "id": "verify",
+      "type": "script",
+      "run": "flow.codegen_tools:verify_generated_module",
+      "output": "verdict"
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "inputs": ["verdict"],
+      "system_prompt": "You are a build reviewer. If the verdict starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must quote the exact ruff/mypy/pytest errors to fix.",
+      "prompt": "Verification verdict:\n\n{{verdict}}\n\nDecide the status.",
+      "output": "review_result",
+      "output_schema": {
+        "status": "string",
+        "feedback": "string"
+      }
+    }
+  ],
+  "edges": [
+    {"from": "design", "to": "implement"},
+    {"from": "implement", "to": "autofix"},
+    {"from": "autofix", "to": "verify"},
+    {"from": "verify", "to": "review"},
+    {
+      "from": "review",
+      "to": "implement",
+      "when": {"contains": {"text": "{{verdict}}", "value": "FAIL"}},
+      "loop": {"max": 5}
+    }
+  ]
+}

@@ -15,6 +15,7 @@ trivially unit-testable by feeding synthetic ``KeyEvent`` objects.  Only
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 
 from tui.keys import KeyEvent
 from tui.tui import TUI, Component
@@ -24,11 +25,14 @@ from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.graph import to_ascii
 
+_MIN_WIDTH = 40
+_KEYHINT = "keys: a/s add  j/k move  d del  p prompt  e edge  w save  q quit"
+
 
 def _fit(line: str, width: int) -> str:
     """Truncate/pad *line* to exactly *width* columns (never negative width)."""
     if width <= 0:
-        return ""
+        return line
     if len(line) > width:
         return line[:width]
     return line + " " * (width - len(line))
@@ -43,6 +47,8 @@ class BuilderApp(Component):
         self._mode = "normal"
         self._buf = ""
         self._edge_src: str | None = None
+        self._message = ""
+        self.on_quit: Callable[[], None] | None = None
 
     @property
     def model(self) -> BuilderModel:
@@ -50,21 +56,40 @@ class BuilderApp(Component):
         return self._model
 
     def render(self, width: int) -> list[str]:
+        # Guard against zero/negative widths (a pty can report width 0), so the
+        # UI never collapses to all-empty lines.
+        w = max(width, _MIN_WIDTH)
+        rule = "-" * w
         model = self._model
-        lines: list[str] = [f"builder: {model.wf.name}"]
-        for node_id in model.node_ids:
-            if node_id == model.selected:
-                marker = ">"
-            elif self._mode == "edge" and node_id == self._edge_src:
-                marker = "*"
-            else:
-                marker = " "
-            lines.append(f"{marker} {node_id}")
-        lines.extend(to_ascii(model.wf).splitlines())
+        lines: list[str] = [f"flow builder — {model.wf.name}", rule, "NODES:"]
+        if model.node_ids:
+            for node in model.wf.nodes:
+                if node.id == model.selected:
+                    marker = "> "
+                elif self._mode == "edge" and node.id == self._edge_src:
+                    marker = "* "
+                else:
+                    marker = "  "
+                entry = "  (entry)" if node.id == model.wf.entry else ""
+                lines.append(f"{marker}{node.id}  [{node.type}]{entry}")
+        else:
+            lines.append("  (empty — press 'a' to add an agent node)")
+        # The topology is shown ONCE here (the node list above is the editable
+        # index; this is the wiring view) — no second inline node dump.
+        lines.append(rule)
+        lines.append("GRAPH:")
+        for gl in to_ascii(model.wf).splitlines():
+            lines.append(f"  {gl}")
+        lines.append(rule)
         status = "valid" if model.error is None else model.error
         lines.append(f"status: {status}")
         lines.append(f"mode: {self._mode}")
-        return [_fit(line, width) for line in lines]
+        if self._mode == "prompt":
+            lines.append(f"prompt> {self._buf}")
+        if self._message:
+            lines.append(self._message)
+        lines.append(_KEYHINT)
+        return [_fit(line, w) for line in lines]
 
     def handle_input(self, event: KeyEvent) -> bool:
         if self._mode == "prompt":
@@ -106,6 +131,10 @@ class BuilderApp(Component):
             if model.selected is not None:
                 self._mode = "edge"
                 self._edge_src = model.selected
+            return True
+        if key == "q":
+            if self.on_quit is not None:
+                self.on_quit()
             return True
         return False
 
@@ -194,6 +223,7 @@ def run(path: str | pathlib.Path) -> None:  # pragma: no cover
     tui = TUI()
     tui.add_child(app)
     tui.set_focus(app)
+    app.on_quit = tui.stop  # 'q' exits the loop
     try:
         tui.start()
     finally:

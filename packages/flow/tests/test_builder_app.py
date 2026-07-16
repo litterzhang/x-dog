@@ -21,7 +21,11 @@ Contract for the generated ``flow/builder/app.py``:
     becomes non-dirty.
   - ``p`` -> enter PROMPT-EDIT mode for the selected node (see below).
   - ``e`` -> enter EDGE mode, remembering the selected node as the edge source.
+  - ``q`` -> quit: invoke the ``on_quit`` callback if one is set (``run()`` wires
+    it to ``tui.stop()``); returns ``True``.
   - unknown keys in normal mode -> return ``False`` (not consumed).
+- ``BuilderApp`` exposes a settable ``on_quit: Callable[[], None] | None``
+  attribute (default ``None``); pressing ``q`` calls it when set.
 - PROMPT-EDIT mode (entered with ``p`` when a node is selected):
   - printable single-character keys append to a text buffer seeded from the
     node's current ``prompt``; ``backspace`` deletes the last char.
@@ -35,7 +39,8 @@ Contract for the generated ``flow/builder/app.py``:
     to normal mode; ``escape`` cancels.
 - ``build_app(path)`` retains *path* so ``w`` knows where to write.
 - ``render(width)`` returns a non-empty list of strings that includes each node
-  id and a validation status line.
+  id and a validation status line, WITHOUT duplicating the node list (the header
+  and status line each appear at most once).
 """
 
 from __future__ import annotations
@@ -215,3 +220,57 @@ def test_edge_mode_escape_cancels(tmp_path: pathlib.Path) -> None:
     # normal mode restored
     app.handle_input(KeyEvent(key="a"))
     assert len(app.model.wf.nodes) == 3
+
+
+# --- quit + real-UI contract (added after the flat-render/no-quit bug) --------
+
+
+def test_q_invokes_on_quit_callback(tmp_path: pathlib.Path) -> None:
+    """Pressing 'q' calls the on_quit callback (run() wires it to tui.stop)."""
+    app = _new_app(tmp_path)
+    called = []
+    app.on_quit = lambda: called.append(True)
+    consumed = app.handle_input(KeyEvent(key="q"))
+    assert consumed is True
+    assert called == [True]
+
+
+def test_on_quit_defaults_to_none_and_q_is_safe(tmp_path: pathlib.Path) -> None:
+    """With no on_quit set, 'q' must not raise (just consumed)."""
+    app = _new_app(tmp_path)
+    assert app.on_quit is None
+    assert app.handle_input(KeyEvent(key="q")) is True
+
+
+def test_render_never_emits_empty_lines_at_zero_width(tmp_path: pathlib.Path) -> None:
+    """width<=0 must not collapse the whole UI to empty strings (the pty bug)."""
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    for w in (0, -5):
+        lines = app.render(w)
+        assert isinstance(lines, list) and lines
+        # not every line is empty — there is real, visible content
+        assert any(line.strip() for line in lines)
+
+
+def test_render_has_visible_content_and_status(tmp_path: pathlib.Path) -> None:
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    lines = app.render(80)
+    joined = "\n".join(lines)
+    assert "agent" in joined          # the node shows up
+    assert "status" in joined.lower() # a status/validation line is present
+
+
+def test_render_does_not_duplicate_node_list(tmp_path: pathlib.Path) -> None:
+    """The node id must not appear once per rendering path (was doubled by an
+    inline to_ascii dump alongside the node list)."""
+    app = build_app(tmp_path / "wf.json")
+    # load a known 3-node workflow so counts are stable
+    app.handle_input(KeyEvent(key="a"))  # agent
+    app.handle_input(KeyEvent(key="a"))  # agent2
+    lines = app.render(80)
+    # 'agent2' should appear at most twice (node-list row + optional graph edge),
+    # definitely not 3+ times from redundant full-workflow dumps.
+    count = sum(line.count("agent2") for line in lines)
+    assert count <= 2, f"'agent2' rendered {count} times: {lines}"
