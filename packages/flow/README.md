@@ -123,14 +123,22 @@ if __name__ == "__main__":
 
 ### graph
 
-Print an ASCII topology map or a Mermaid diagram.
+Print an ASCII topology map, a Mermaid diagram, or an SVG.
 
 ```bash
 xdog-flow graph examples/research_write_review.json
 # research -> write -> review --(REVISE, max 2)--> write
 
 xdog-flow graph examples/research_write_review.json --mermaid
+xdog-flow graph examples/research_write_review.json --svg > diagram.svg
 ```
+
+The `--svg` output uses **Graphviz** (via `pydot` + the system `dot` binary) for
+automatic layout — ranked levels, routed edges, fan-out for parallel branches,
+and nodes colour-coded by type (agent vs script). If `dot` is not installed,
+`to_svg` transparently falls back to a dependency-free hand-drawn renderer, so
+SVG output always works (just plainer). The SVG also embeds the workflow JSON,
+so it stays re-openable in `xdog-flow build` (see below).
 
 ### build
 
