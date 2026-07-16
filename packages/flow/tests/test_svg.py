@@ -32,7 +32,7 @@ def _wf() -> WorkflowDef:
         default_model="m",
         nodes=(
             NodeDef(id="a", type="agent", prompt="p", output="x"),
-            NodeDef(id="b", type="script", run="flow.tools:passthrough", output="y"),
+            NodeDef(id="b", type="script", run="myscripts:prep", output="y"),
             NodeDef(id="c", type="agent", prompt="q", output="z"),
         ),
         edges=(

@@ -12,8 +12,8 @@
     {
       "id": "prep",
       "type": "script",
-      "run": "flow.tools:passthrough",
-      "output": "prepped"
+      "code": "def prep(ctx):\n    return ctx.state.get('topic', '')",
+      "output": {"name": "prepped", "type": "string"}
     },
     {
       "id": "analyze",

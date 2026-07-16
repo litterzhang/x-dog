@@ -30,7 +30,8 @@ _REPORT_TAIL = 4000
 async def summarize_spec(state: Mapping[str, str]) -> str:
     """Entry script node: surface the spec into the pipeline state.
 
-    Mirrors :func:`flow.tools.passthrough`; returns ``state['spec']`` (or empty).
+    Returns ``state['spec']`` (or empty).  A legacy ``state``-signature helper
+    kept for the ``run``-ref codegen examples.
     """
     return state.get("spec", "")
 

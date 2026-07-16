@@ -15,8 +15,9 @@
     {
       "id": "spec",
       "type": "script",
-      "run": "flow.tools:passthrough",
-      "output": "brief"
+      "inputs": ["spec"],
+      "code": "def spec(ctx, spec):\n    return spec",
+      "output": {"name": "brief", "type": "string"}
     },
     {
       "id": "write_tests",

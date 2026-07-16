@@ -12,8 +12,8 @@
     {
       "id": "pull",
       "type": "script",
-      "run": "flow.tools:passthrough",
-      "output": "record"
+      "code": "def pull(ctx):\n    return ctx.state.get('topic', '')",
+      "output": {"name": "record", "type": "string"}
     },
     {
       "id": "enrich",
@@ -31,8 +31,9 @@
     {
       "id": "persist",
       "type": "script",
-      "run": "flow.tools:passthrough",
-      "output": "saved"
+      "inputs": ["record"],
+      "code": "def persist(ctx, record):\n    return record",
+      "output": {"name": "saved", "type": "string"}
     }
   ],
   "edges": [

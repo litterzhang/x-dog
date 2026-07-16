@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from typing import Any
 
 from agent.core import AgentTool, AgentToolResult
@@ -96,13 +96,3 @@ def _agent_builtin_tools() -> tuple[AgentTool, ...]:
     except ImportError:  # pragma: no cover - agent always present in the workspace
         return ()
     return tuple(get_registered_tools())
-
-
-# ---------------------------------------------------------------------------
-# Demo script-node function (referenced as 'flow.tools:passthrough')
-# ---------------------------------------------------------------------------
-
-
-async def passthrough(state: Mapping[str, str]) -> str:
-    """Return *state['topic']* or an empty string — demo script-node function."""
-    return state.get("topic", "")

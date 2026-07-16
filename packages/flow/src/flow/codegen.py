@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.resources
 import re
 import string
 from collections import defaultdict
 
-from flow.models import Condition, EdgeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
 
 
 def _safe_id(node_id: str) -> str:
     """Convert a node id to a valid Python identifier."""
     return re.sub(r"[^0-9a-zA-Z_]", "_", node_id)
+
+
+def _ESC(text: str) -> str:
+    """Escape *text* for embedding inside a double-quoted string literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _render_initial_state(wf: WorkflowDef) -> str:
@@ -75,6 +81,75 @@ def _wrap_string_expr(expr: str, indent: int = 4) -> str:
     return expr + "  # noqa: E501"
 
 
+def _script_is_async(node: NodeDef) -> bool:
+    """Whether a script node's function is ``async``.
+
+    Inline ``code`` is inspected via AST (the loader guarantees one top-level
+    function).  A ``run`` ref is assumed async — the shipped ``run``-backed
+    script helpers are all ``async def`` — matching the executor's ``await`` of
+    any awaitable return.
+    """
+    if node.code is None:
+        return True
+    tree = ast.parse(node.code)
+    return any(isinstance(s, ast.AsyncFunctionDef) for s in tree.body)
+
+
+def _render_script_node(node: NodeDef, fn_name: str, output_key: str) -> str:
+    """Render a script node's async wrapper: build ctx, pass typed inputs, store.
+
+    Mirrors the executor's ``ctx``-first dispatch: the resolved function is
+    called as ``fn(ctx, **typed_inputs)`` and its return value is coerced back to
+    a state string via ``to_state`` (falling back to ``str`` when the output is
+    untyped).  Both inline ``code`` and ``run`` refs resolve to a top-level
+    ``_script_<id>`` callable (see :func:`_render_inline_scripts` /
+    :func:`_render_script_imports`).
+    """
+    safe = _safe_id(node.id)
+    type_of = dict(node.input_schema)
+    lines = [
+        f"async def {fn_name}(provider: object) -> None:",
+        f'    _ctx = RuntimeContext(state=dict(STATE), workflow_name="{_ESC(node.id)}", node_id="{_ESC(node.id)}")',
+    ]
+    call_args = ["_ctx"]
+    for name in node.inputs:
+        jtype = type_of.get(name, "string")
+        lines.append(f'    _in_{name} = to_python(STATE.get("{name}", ""), "{jtype}")')
+        call_args.append(f"{name}=_in_{name}")
+    await_kw = "await " if _script_is_async(node) else ""
+    lines.append(f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})")
+    if node.output_type:
+        lines.append(f'    STATE["{output_key}"] = to_state(_val, "{node.output_type}")')
+    else:
+        lines.append(f'    STATE["{output_key}"] = str(_val)')
+    return "\n".join(lines)
+
+
+def _rename_inline_fn(code: str, alias: str) -> str:
+    """Return *code* with its single top-level function renamed to *alias*.
+
+    The loader has already validated that inline ``code`` defines exactly one
+    top-level function, so we rewrite that definition's name to a stable,
+    collision-free ``_script_<id>`` symbol emitted at module top level.
+    """
+    tree = ast.parse(code)
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
+            stmt.name = alias
+            break
+    return ast.unparse(tree)
+
+
+def _render_inline_scripts(wf: WorkflowDef) -> str:
+    """Emit each inline-``code`` script node's function as a top-level ``_script_<id>``."""
+    blocks: list[str] = []
+    for node in wf.nodes:
+        if node.type == "script" and node.code is not None:
+            alias = f"_script_{_safe_id(node.id)}"
+            blocks.append(_rename_inline_fn(node.code, alias))
+    return "\n\n\n".join(blocks)
+
+
 def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     node_map = {n.id: n for n in wf.nodes}
     node = node_map[node_id]
@@ -82,12 +157,7 @@ def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
     output_key = node.output or node_id
 
     if node.type == "script":
-        safe = _safe_id(node_id)
-        lines = [
-            f"async def {fn_name}(provider: object) -> None:",
-            f'    STATE["{output_key}"] = await _script_{safe}(STATE)',
-        ]
-        return "\n".join(lines)
+        return _render_script_node(node, fn_name, output_key)
 
     model = node.model or wf.default_model
     sys_prompt = _render_prompt(node.system_prompt)
@@ -237,6 +307,23 @@ def _render_script_imports(wf: WorkflowDef) -> str:
     # ruff isort (combine-as-imports=false by default) does not reformat them.
     flow_tools_aliases = extra.pop("flow.tools", [])
     lines: list[str] = ["from flow.tools import default_registry"]
+
+    # Script nodes use the executor's ctx-first typed dispatch.  Emit only the
+    # coercers actually referenced by the generated code, so an unused import
+    # never trips ruff: ``to_python`` appears iff some script node has inputs;
+    # ``to_state`` iff some script node declares an output type; ``RuntimeContext``
+    # whenever any script node exists (its wrapper always builds a ctx).
+    script_nodes = [n for n in wf.nodes if n.type == "script"]
+    if script_nodes:
+        coercers = []
+        if any(n.inputs for n in script_nodes):
+            coercers.append("to_python")
+        if any(n.output_type for n in script_nodes):
+            coercers.append("to_state")
+        if coercers:
+            lines.insert(0, f"from flow.coerce import {', '.join(coercers)}")
+        lines.insert(1 if coercers else 0, "from flow.runtime import RuntimeContext")
+
     for alias in flow_tools_aliases:
         lines.append(f"from flow.tools import {alias}")
 
@@ -253,7 +340,12 @@ def generate(wf: WorkflowDef) -> str:
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
     tmpl_text = tmpl_path.read_text(encoding="utf-8")
 
+    # Inline-``code`` script functions are emitted at module top level (renamed to
+    # ``_script_<id>``), ahead of the per-node async wrappers that call them.
+    inline_scripts = _render_inline_scripts(wf)
     node_functions = "\n\n\n".join(_render_node_function(n.id, wf) for n in wf.nodes)
+    if inline_scripts:
+        node_functions = inline_scripts + "\n\n\n" + node_functions
     main_body = _render_main_body(wf)
 
     result = string.Template(tmpl_text).substitute(

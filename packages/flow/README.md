@@ -337,11 +337,13 @@ so the same registry API applies to compiled workflows too.
 
 `examples/auto_enrich.json` demonstrates declared inputs and structured output:
 
-- A **script node** (`pull`) that copies `state["topic"]` into `state["record"]`.
+- A **script node** (`pull`) with inline `code` that copies `state["topic"]`
+  into `state["record"]`.
 - An **agent node** (`enrich`) that declares `"inputs": ["record"]` and `"output_schema"`
   with three fields.  The agent must call `submit_result`; the executor stores the
   validated JSON under `state["enriched"]`.
-- A **script node** (`persist`) that echoes `state["topic"]` into `state["saved"]`.
+- A **script node** (`persist`) with inline `code` that echoes `state["record"]`
+  into `state["saved"]`.
 - Provider `copilot`, default model `claude-sonnet-4.5`.
 
 ```bash
@@ -356,8 +358,10 @@ xdog-flow graph   examples/auto_enrich.json
 
 `examples/tools_script.json` demonstrates:
 
-- A **script node** (`prep`) that calls `flow.tools:passthrough` to copy
-  `state["topic"]` into `state["prepped"]`.
+- A **script node** (`prep`) with an **inline `code`** function
+  (`def prep(ctx): return ctx.state.get("topic", "")`) that copies
+  `state["topic"]` into `state["prepped"]` — the workflow is self-contained, with
+  no dependency on flow's own modules.
 - An **agent node** (`analyze`) that uses the built-in `echo` tool and
   receives the prepared text via `{{prepped}}` interpolation.
 - Provider `copilot`, default model `claude-sonnet-4.5`.

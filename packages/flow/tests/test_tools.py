@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from flow.errors import WorkflowValidationError
-from flow.tools import default_registry, passthrough
+from flow.tools import default_registry
 
 
 def test_default_registry_has_echo() -> None:
@@ -24,14 +24,6 @@ def test_resolve_returns_tuple() -> None:
     result = reg.resolve(["echo"])
     assert len(result) == 1
     assert result[0].name == "echo"
-
-
-async def test_passthrough_with_topic() -> None:
-    assert await passthrough({"topic": "x"}) == "x"
-
-
-async def test_passthrough_missing_topic() -> None:
-    assert await passthrough({}) == ""
 
 
 async def test_echo_execute() -> None:

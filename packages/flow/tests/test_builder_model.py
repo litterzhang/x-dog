@@ -122,8 +122,8 @@ def test_output_schema_and_tools() -> None:
 def test_script_node_type_and_run() -> None:
     m = actions.add_node(empty_model(), "script")
     assert m.wf.nodes[0].type == "script"
-    m = actions.set_field(m, "script", "run", "flow.tools:passthrough")
-    assert m.wf.nodes[0].run == "flow.tools:passthrough"
+    m = actions.set_field(m, "script", "run", "myscripts:prep")
+    assert m.wf.nodes[0].run == "myscripts:prep"
     assert m.error is None
 
 
@@ -133,7 +133,7 @@ def test_build_then_serialize_roundtrips() -> None:
     m = actions.set_default_model(m, "claude-sonnet-4.5")
     m = actions.set_initial_state(m, (("topic", "x"),))
     m = actions.add_node(m, "script")
-    m = actions.set_field(m, "script", "run", "flow.tools:passthrough")
+    m = actions.set_field(m, "script", "run", "myscripts:prep")
     m = actions.set_field(m, "script", "output", "rec")
     m = actions.add_node(m, "agent")
     m = actions.set_field(m, "agent", "prompt", "do {{rec}}")

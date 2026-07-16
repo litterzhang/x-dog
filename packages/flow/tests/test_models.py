@@ -112,13 +112,13 @@ def test_workflow_def_initial_state() -> None:
 
 
 def test_node_def_script_type() -> None:
-    node = NodeDef(id="s1", type="script", run="flow.tools:passthrough", output="out")
+    node = NodeDef(id="s1", type="script", run="myscripts:prep", output="out")
     assert node.type == "script"
-    assert node.run == "flow.tools:passthrough"
+    assert node.run == "myscripts:prep"
     assert node.tools == ()
     updated = dataclasses.replace(node, run="flow.tools:other")
     assert updated.run == "flow.tools:other"
-    assert node.run == "flow.tools:passthrough"
+    assert node.run == "myscripts:prep"
 
 
 def test_node_def_agent_with_tools() -> None:

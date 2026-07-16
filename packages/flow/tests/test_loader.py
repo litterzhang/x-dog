@@ -157,7 +157,9 @@ def test_load_tools_script_ok() -> None:
     prep = node_map["prep"]
     analyze = node_map["analyze"]
     assert prep.type == "script"
-    assert prep.run == "flow.tools:passthrough"
+    assert prep.code is not None and prep.code.startswith("def prep(ctx)")
+    assert prep.output == "prepped"
+    assert prep.output_type == "string"
     assert analyze.tools == ("echo",)
     assert analyze.type == "agent"
 
@@ -180,7 +182,7 @@ def test_agent_node_with_run_raises() -> None:
         "name": "bad-agent",
         "provider": "copilot",
         "entry": "a",
-        "nodes": [{"id": "a", "type": "agent", "run": "flow.tools:passthrough"}],
+        "nodes": [{"id": "a", "type": "agent", "run": "myscripts:prep"}],
         "edges": [],
     }
     wf = parse_workflow(data)

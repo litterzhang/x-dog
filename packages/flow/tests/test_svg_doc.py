@@ -36,7 +36,7 @@ def _rich() -> WorkflowDef:
         default_model="claude-sonnet-4.5",
         initial_state=(("topic", "x"),),
         nodes=(
-            NodeDef(id="a", type="script", run="flow.tools:passthrough", output="rec"),
+            NodeDef(id="a", type="script", run="myscripts:prep", output="rec"),
             NodeDef(
                 id="b",
                 type="agent",

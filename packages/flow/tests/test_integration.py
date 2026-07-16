@@ -205,7 +205,7 @@ async def test_generate_parity() -> None:
 async def test_tools_script_dryrun() -> None:
     """Load examples/tools_script.json; execute with dry-run factory + default registry.
 
-    The script node (prep) runs flow.tools:passthrough for real, copying
+    The script node (prep) runs its inline ctx-first function for real, copying
     state['topic'] -> state['prepped'].  The agent node (analyze) uses the
     stub stream_fn and must produce some output stored in state['analysis'].
     """
@@ -238,7 +238,7 @@ async def test_tools_script_dryrun() -> None:
 
     result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
 
-    # Script node must have run flow.tools:passthrough and stored topic value
+    # Script node must have run its inline function and stored the topic value
     assert result.final_state.get("prepped") == "workflow engines"
 
     # Agent node must have stored something under 'analysis'
@@ -269,8 +269,11 @@ async def test_generate_tools_script_parity() -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    # --- structural: script node uses await _script_, agent node uses _REGISTRY.resolve ---
-    assert "await _script_prep" in src, "generated script node must call await _script_prep"
+    # --- structural: inline script node emits a self-contained ctx-first
+    # function + wrapper; agent node uses _REGISTRY.resolve ---
+    assert "def _script_prep(ctx" in src, "inline script must be emitted as a top-level _script_prep"
+    assert "_script_prep(_ctx)" in src, "generated wrapper must call _script_prep with a RuntimeContext"
+    assert "RuntimeContext(" in src, "script wrapper must build a RuntimeContext"
     assert "_REGISTRY.resolve(" in src, "generated agent node must call _REGISTRY.resolve("
 
 
@@ -320,7 +323,7 @@ async def test_auto_enrich_dryrun() -> None:
 
     Assertions:
     - validate passes (no exception from load_workflow)
-    - final_state['record'] equals the initial topic (passthrough copies state['topic'])
+    - final_state['record'] equals the initial topic (the inline pull script copies state['topic'])
     - final_state['enriched'] is present and json.loads() yields category/token/summary keys
     - final_state['saved'] is present
     """
@@ -335,7 +338,7 @@ async def test_auto_enrich_dryrun() -> None:
 
     result = await execute(wf, stream_fn_factory=factory, tool_registry=default_registry())
 
-    # pull node: passthrough copies state['topic'] into state['record']
+    # pull node: the inline script copies state['topic'] into state['record']
     assert result.final_state.get("record") == topic, (
         f"expected record={topic!r}, got {result.final_state.get('record')!r}"
     )
@@ -347,5 +350,6 @@ async def test_auto_enrich_dryrun() -> None:
     assert "token" in enriched, f"enriched missing 'token': {enriched}"
     assert "summary" in enriched, f"enriched missing 'summary': {enriched}"
 
-    # persist node: passthrough runs (state['topic'] still present)
+    # persist node: the inline script echoes state['record'] into state['saved']
     assert "saved" in result.final_state, "missing saved key"
+    assert result.final_state["saved"] == topic

@@ -221,7 +221,7 @@ def test_generate_script() -> None:
             NodeDef(
                 id="step1",
                 type="script",
-                run="flow.tools:passthrough",
+                run="myscripts:prep",
                 output="result",
             ),
         ),
@@ -229,8 +229,8 @@ def test_generate_script() -> None:
         default_model="claude-3-haiku",
     )
     src = generate(wf)
-    assert "passthrough as _script_" in src
-    assert "await _script_" in src
+    assert "prep as _script_" in src
+    assert "await _script_" in src  # run-ref functions are awaited
     compile(src, "<generated>", "exec")
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
         f.write(src)
