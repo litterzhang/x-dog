@@ -79,8 +79,10 @@ def test_generate_linear_ruff_clean() -> None:
 def test_generate_linear_state_seed() -> None:
     wf = _make_linear_wf()
     src = generate(wf)
-    assert '"topic"' in src
-    assert '"testing"' in src
+    # initial_state is emitted via repr() (proper escaping), so keys/values are
+    # single-quoted Python literals.
+    assert "'topic'" in src
+    assert "'testing'" in src
 
 
 def test_generate_linear_provider_name() -> None:
@@ -392,3 +394,86 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
     # increments stop as soon as c == 3, not after all 10 iterations
     assert gen_state["c"] == "3"
     assert gen_state["c"] == run_result.final_state["c"]
+
+
+async def test_generate_colliding_node_ids_stay_distinct() -> None:
+    """Node ids that normalise to the same identifier must not shadow each other.
+
+    ``a-b`` and ``a.b`` both map to ``a_b`` under identifier rules; without a
+    uniqueness pass they'd emit two ``node_a_b`` / ``_script_a_b`` definitions and
+    one node would silently win.  The generated code must keep them distinct and
+    match the interpreter.
+    """
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="collide",
+        provider="copilot",
+        entry="a-b",
+        default_model="m",
+        initial_state=(("x", "1"),),
+        nodes=(
+            NodeDef(
+                id="a-b",
+                type="script",
+                code="def f(ctx, x):\n    return x + '-B'",
+                output="vb",
+                output_type="string",
+                inputs=("x",),
+                input_schema=(("x", "string"),),
+            ),
+            NodeDef(
+                id="a.b",
+                type="script",
+                code="def g(ctx, vb):\n    return vb + '.B'",
+                output="vc",
+                output_type="string",
+                inputs=("vb",),
+                input_schema=(("vb", "string"),),
+            ),
+        ),
+        edges=(EdgeDef(src="a-b", dst="a.b"),),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["vc"] == "1-B.B"
+    assert gen_state == dict(run_result.final_state)
+
+
+async def test_generate_escapes_initial_state_values() -> None:
+    """initial_state values with backslashes/quotes/newlines must survive verbatim.
+
+    A bare f-string dict literal would corrupt "a\\b" (Python reads \\b as a
+    backspace).  repr() escaping keeps the generated STATE faithful, matching the
+    interpreter which just holds the raw string.
+    """
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="escape",
+        provider="copilot",
+        entry="mk",
+        default_model="m",
+        initial_state=(("p", "a\\b"),),  # a literal backslash between a and b
+        nodes=(
+            NodeDef(
+                id="mk",
+                type="script",
+                code="def mk(ctx, p):\n    return p + '!' ",
+                output="out",
+                output_type="string",
+                inputs=("p",),
+                input_schema=(("p", "string"),),
+            ),
+        ),
+        edges=(),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["p"] == "a\\b"
+    assert gen_state["out"] == "a\\b!"
+    assert gen_state == dict(run_result.final_state)

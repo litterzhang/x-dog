@@ -16,13 +16,39 @@ def _safe_id(node_id: str) -> str:
     return re.sub(r"[^0-9a-zA-Z_]", "_", node_id)
 
 
+def _safe_ids(wf: WorkflowDef) -> dict[str, str]:
+    """Map every node id to a UNIQUE Python identifier.
+
+    ``_safe_id`` alone collides when distinct ids normalise to the same symbol
+    (e.g. ``a-b`` and ``a.b`` both become ``a_b``), which would emit two
+    ``node_a_b`` / ``_script_a_b`` definitions and silently shadow one node.
+    Collisions get a ``_2``/``_3`` suffix.  Deterministic in ``wf.nodes`` order,
+    so every call site derives the same mapping.
+    """
+    used: set[str] = set()
+    mapping: dict[str, str] = {}
+    for node in wf.nodes:
+        base = _safe_id(node.id)
+        cand = base
+        i = 2
+        while cand in used:
+            cand = f"{base}_{i}"
+            i += 1
+        used.add(cand)
+        mapping[node.id] = cand
+    return mapping
+
+
 def _ESC(text: str) -> str:
     """Escape *text* for embedding inside a double-quoted string literal."""
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _render_initial_state(wf: WorkflowDef) -> str:
-    pairs = ", ".join(f'"{k}": "{v}"' for k, v in wf.initial_state)
+    # repr() escapes backslashes, quotes, and newlines so the emitted dict is a
+    # valid, faithful Python literal (a bare f-string would corrupt values like
+    # "a\b" — Python would read \b as a backspace).
+    pairs = ", ".join(f"{k!r}: {v!r}" for k, v in wf.initial_state)
     return "{" + pairs + "}"
 
 
@@ -124,7 +150,7 @@ def _script_is_async(node: NodeDef) -> bool:
     return any(isinstance(s, ast.AsyncFunctionDef) for s in tree.body)
 
 
-def _render_script_node(node: NodeDef, fn_name: str, output_key: str) -> str:
+def _render_script_node(node: NodeDef, fn_name: str, output_key: str, safe: str) -> str:
     """Render a script node's async wrapper: build ctx, pass typed inputs, store.
 
     Mirrors the executor's ``ctx``-first dispatch: the resolved function is
@@ -132,9 +158,8 @@ def _render_script_node(node: NodeDef, fn_name: str, output_key: str) -> str:
     a state string via ``to_state`` (falling back to ``str`` when the output is
     untyped).  Both inline ``code`` and ``run`` refs resolve to a top-level
     ``_script_<id>`` callable (see :func:`_render_inline_scripts` /
-    :func:`_render_script_imports`).
+    :func:`_render_script_imports`).  *safe* is the node's unique symbol.
     """
-    safe = _safe_id(node.id)
     type_of = dict(node.input_schema)
     lines = [
         f"async def {fn_name}(provider: object) -> None:",
@@ -169,24 +194,25 @@ def _rename_inline_fn(code: str, alias: str) -> str:
     return ast.unparse(tree)
 
 
-def _render_inline_scripts(wf: WorkflowDef) -> str:
+def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit each inline-``code`` script node's function as a top-level ``_script_<id>``."""
     blocks: list[str] = []
     for node in wf.nodes:
         if node.type == "script" and node.code is not None:
-            alias = f"_script_{_safe_id(node.id)}"
+            alias = f"_script_{safe_ids[node.id]}"
             blocks.append(_rename_inline_fn(node.code, alias))
     return "\n\n\n".join(blocks)
 
 
-def _render_node_function(node_id: str, wf: WorkflowDef) -> str:
+def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     node_map = {n.id: n for n in wf.nodes}
     node = node_map[node_id]
-    fn_name = f"node_{_safe_id(node_id)}"
+    safe = safe_ids[node_id]
+    fn_name = f"node_{safe}"
     output_key = node.output or node_id
 
     if node.type == "script":
-        return _render_script_node(node, fn_name, output_key)
+        return _render_script_node(node, fn_name, output_key, safe)
 
     model = node.model or wf.default_model
     sys_prompt = _render_prompt(node.system_prompt)
@@ -249,7 +275,7 @@ def _node_guard(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[st
     return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
 
 
-def _render_main_body(wf: WorkflowDef) -> str:
+def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Generate the body of async def main() for the given workflow.
 
     Handles:
@@ -309,9 +335,9 @@ def _render_main_body(wf: WorkflowDef) -> str:
         conditional = [n for n in ready if _node_guard(n, fwd_preds, fwd_from) is not None]
 
         if len(unconditional) == 1 and not conditional:
-            lines.append(f"{ind()}await node_{_safe_id(unconditional[0])}(provider)")
+            lines.append(f"{ind()}await node_{safe_ids[unconditional[0]]}(provider)")
         elif unconditional:
-            calls = [f"node_{_safe_id(n)}(provider)" for n in unconditional]
+            calls = [f"node_{safe_ids[n]}(provider)" for n in unconditional]
             if len(calls) == 1:
                 lines.append(f"{ind()}await {calls[0]}")
             else:
@@ -319,7 +345,7 @@ def _render_main_body(wf: WorkflowDef) -> str:
         for n in conditional:
             guard = _node_guard(n, fwd_preds, fwd_from)
             lines.append(f"{ind()}if {guard}:")
-            lines.append(f"{ind()}    await node_{_safe_id(n)}(provider)")
+            lines.append(f"{ind()}    await node_{safe_ids[n]}(provider)")
 
         for n in ready:
             completed.add(n)
@@ -345,7 +371,7 @@ def _render_main_body(wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
-def _render_script_imports(wf: WorkflowDef) -> str:
+def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit top-level imports for flow.tools registry and any script node run functions.
 
     ``from flow.tools import default_registry`` is always emitted.  Script-node
@@ -357,7 +383,7 @@ def _render_script_imports(wf: WorkflowDef) -> str:
     for node in wf.nodes:
         if node.type == "script" and node.run:
             module, func = node.run.rsplit(":", 1)
-            safe = _safe_id(node.id)
+            safe = safe_ids[node.id]
             alias = f"{func} as _script_{safe}"
             extra.setdefault(module, []).append(alias)
 
@@ -399,13 +425,17 @@ def generate(wf: WorkflowDef) -> str:
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
     tmpl_text = tmpl_path.read_text(encoding="utf-8")
 
+    # One unique symbol per node id, shared by every emitter so definitions and
+    # call sites stay in sync even when raw ids collide under identifier rules.
+    safe_ids = _safe_ids(wf)
+
     # Inline-``code`` script functions are emitted at module top level (renamed to
     # ``_script_<id>``), ahead of the per-node async wrappers that call them.
-    inline_scripts = _render_inline_scripts(wf)
-    node_functions = "\n\n\n".join(_render_node_function(n.id, wf) for n in wf.nodes)
+    inline_scripts = _render_inline_scripts(wf, safe_ids)
+    node_functions = "\n\n\n".join(_render_node_function(n.id, wf, safe_ids) for n in wf.nodes)
     if inline_scripts:
         node_functions = inline_scripts + "\n\n\n" + node_functions
-    main_body = _render_main_body(wf)
+    main_body = _render_main_body(wf, safe_ids)
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
@@ -413,6 +443,6 @@ def generate(wf: WorkflowDef) -> str:
         node_functions=node_functions,
         provider=wf.provider,
         main_body=main_body,
-        script_imports=_render_script_imports(wf),
+        script_imports=_render_script_imports(wf, safe_ids),
     )
     return result
