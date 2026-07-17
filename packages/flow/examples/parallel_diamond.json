@@ -1,0 +1,50 @@
+{
+  "name": "parallel-diamond",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.5"
+  },
+  "entry": "seed",
+  "state": {
+    "n": "10"
+  },
+  "nodes": [
+    {
+      "id": "seed",
+      "type": "script",
+      "inputs": [{"name": "n", "type": "integer"}],
+      "code": "def seed(ctx, n):\n    return n",
+      "output": {"name": "base", "type": "integer"}
+    },
+    {
+      "id": "double",
+      "type": "script",
+      "inputs": [{"name": "base", "type": "integer"}],
+      "code": "def double(ctx, base):\n    return base * 2",
+      "output": {"name": "doubled", "type": "integer"}
+    },
+    {
+      "id": "square",
+      "type": "script",
+      "inputs": [{"name": "base", "type": "integer"}],
+      "code": "def square(ctx, base):\n    return base * base",
+      "output": {"name": "squared", "type": "integer"}
+    },
+    {
+      "id": "combine",
+      "type": "script",
+      "inputs": [
+        {"name": "doubled", "type": "integer"},
+        {"name": "squared", "type": "integer"}
+      ],
+      "code": "def combine(ctx, doubled, squared):\n    return doubled + squared",
+      "output": {"name": "total", "type": "integer"}
+    }
+  ],
+  "edges": [
+    {"from": "seed", "to": "double"},
+    {"from": "seed", "to": "square"},
+    {"from": "double", "to": "combine"},
+    {"from": "square", "to": "combine"}
+  ]
+}

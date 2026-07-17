@@ -72,6 +72,35 @@ def _condition_to_expr(cond: Condition) -> str:
     return "True"
 
 
+def _condition_to_negated_expr(cond: Condition) -> str:
+    """Translate a Condition tree to the *negation* of its boolean expression.
+
+    Emitted directly (``!=``, ``not in``, De Morgan) rather than wrapping the
+    positive form in ``not (...)`` so the generated loop-break stays ruff-clean
+    (ruff rewrites ``not (a in b)`` to ``a not in b``).  Used for loop early-exit:
+    ``if <guard fails>: break``.
+    """
+    if cond.op == "equals":
+        lhs = _state_expr_from_str(cond.value or "")
+        rhs = _state_expr_from_str(cond.text or "")
+        return f"{lhs} != {rhs}"
+    if cond.op == "contains":
+        text_e = _state_expr_from_str(cond.text or "")
+        val_e = _state_expr_from_str(cond.value or "")
+        return f"{text_e} not in {val_e}"
+    if cond.op == "not":
+        # not(not X) == X
+        return _condition_to_expr(cond.children[0])
+    if cond.op == "and":
+        # De Morgan: not(A and B) == (not A) or (not B)
+        parts = [f"({_condition_to_negated_expr(c)})" for c in cond.children]
+        return " or ".join(parts)
+    if cond.op == "or":
+        parts = [f"({_condition_to_negated_expr(c)})" for c in cond.children]
+        return " and ".join(parts)
+    return "False"
+
+
 def _wrap_string_expr(expr: str, indent: int = 4) -> str:
     """Return expr; append ``# noqa: E501`` if the assignment line would exceed 120 chars."""
     prefix = " " * indent
@@ -202,6 +231,24 @@ def _build_fwd_graph(
     return fwd_from, fwd_preds, loop_edges
 
 
+def _node_guard(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[str, list[EdgeDef]]) -> str | None:
+    """Return a Python guard expression if *node_id* is reached ONLY via conditional edges.
+
+    A node is unconditionally reachable when at least one forward in-edge has no
+    ``when`` (it always fires once the predecessor completes) — such a node needs
+    no guard.  When every forward in-edge is conditional, the node runs iff any of
+    those conditions holds, so we OR them together.  Returns ``None`` for an
+    unconditional node (including the entry node, which has no in-edges).
+    """
+    in_edges = [e for p in fwd_preds.get(node_id, []) for e in fwd_from.get(p, []) if e.dst == node_id]
+    if not in_edges:
+        return None
+    if any(e.when is None for e in in_edges):
+        return None
+    exprs = [f"({_condition_to_expr(e.when)})" for e in in_edges if e.when is not None]
+    return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
+
+
 def _render_main_body(wf: WorkflowDef) -> str:
     """Generate the body of async def main() for the given workflow.
 
@@ -216,12 +263,20 @@ def _render_main_body(wf: WorkflowDef) -> str:
     # loop_entry_map: entry_node -> (exit_node, loop_max)
     # The loop body is all nodes between entry_node and exit_node (inclusive) in
     # the forward graph.  We emit a ``for`` block that opens at entry_node and
-    # closes after exit_node.
+    # closes after exit_node.  loop_exit_break maps the exit_node to the back
+    # edge's condition (if any), so the ``for`` can early-break as soon as the
+    # loop guard fails — mirroring the executor, which re-fires a loop only while
+    # its condition holds.  (Entry and exit land in different BFS waves, so this
+    # must be keyed state, not a per-wave local.)
     loop_entry_map: dict[str, tuple[str, int | None]] = {}
     loop_exit_set: set[str] = set()
+    loop_exit_break: dict[str, str | None] = {}
     for le in loop_edges:
         loop_entry_map[le.dst] = (le.src, le.loop_max)
         loop_exit_set.add(le.src)
+        # Store the break expression (guard-fails) directly, so the emitted
+        # ``if <expr>: break`` is ruff-clean without a wrapping ``not (...)``.
+        loop_exit_break[le.src] = _condition_to_negated_expr(le.when) if le.when is not None else None
 
     completed: set[str] = set()
     pending: list[str] = [wf.entry]
@@ -239,7 +294,7 @@ def _render_main_body(wf: WorkflowDef) -> str:
         for n in ready:
             pending.remove(n)
 
-        # Open a loop block if any ready node is a loop entry
+        # Open a loop block if any ready node is a loop entry.
         for n in ready:
             if n in loop_entry_map:
                 _, lmax = loop_entry_map[n]
@@ -247,32 +302,36 @@ def _render_main_body(wf: WorkflowDef) -> str:
                 loop_depth += 1
                 break
 
-        # Emit the wave
-        if len(ready) == 1:
-            n = ready[0]
-            # Detect if this node is only reachable via a conditional edge
-            cond_edges = [
-                e for p in fwd_preds.get(n, []) for e in fwd_from.get(p, []) if e.dst == n and e.when is not None
-            ]
-            unconditional_preds = [
-                e for p in fwd_preds.get(n, []) for e in fwd_from.get(p, []) if e.dst == n and e.when is None
-            ]
-            if cond_edges and not unconditional_preds:
-                cond_expr = _condition_to_expr(cond_edges[0].when)  # type: ignore[arg-type]
-                lines.append(f"{ind()}if {cond_expr}:")
-                lines.append(f"{ind()}    await node_{_safe_id(n)}(provider)")
+        # Emit the wave.  Nodes reached unconditionally can run concurrently via
+        # gather; nodes reached ONLY through conditional edges must each be
+        # guarded by their own ``if`` so a branch that shouldn't fire doesn't.
+        unconditional = [n for n in ready if _node_guard(n, fwd_preds, fwd_from) is None]
+        conditional = [n for n in ready if _node_guard(n, fwd_preds, fwd_from) is not None]
+
+        if len(unconditional) == 1 and not conditional:
+            lines.append(f"{ind()}await node_{_safe_id(unconditional[0])}(provider)")
+        elif unconditional:
+            calls = [f"node_{_safe_id(n)}(provider)" for n in unconditional]
+            if len(calls) == 1:
+                lines.append(f"{ind()}await {calls[0]}")
             else:
-                lines.append(f"{ind()}await node_{_safe_id(n)}(provider)")
-        else:
-            calls = [f"node_{_safe_id(n)}(provider)" for n in ready]
-            lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
+                lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
+        for n in conditional:
+            guard = _node_guard(n, fwd_preds, fwd_from)
+            lines.append(f"{ind()}if {guard}:")
+            lines.append(f"{ind()}    await node_{_safe_id(n)}(provider)")
 
         for n in ready:
             completed.add(n)
 
-        # Close loop block when the loop exit node is processed
+        # Close loop block when the loop exit node is processed, emitting the
+        # early-break so a conditional loop stops as soon as its guard fails.
         for n in ready:
             if n in loop_exit_set:
+                break_cond = loop_exit_break.get(n)
+                if break_cond is not None:
+                    lines.append(f"{ind()}if {break_cond}:")
+                    lines.append(f"{ind()}    break")
                 loop_depth -= 1
                 break
 
