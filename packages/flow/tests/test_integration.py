@@ -245,6 +245,44 @@ async def test_tools_script_dryrun() -> None:
     assert "analysis" in result.final_state
 
 
+async def test_agent_calculator_dryrun() -> None:
+    """Load examples/agent_calculator.json; execute with a dry-run stub.
+
+    The script node (make_problem) runs its inline ctx-first function for real,
+    turning typed ints a=347, b=895 into the string "347 + 895".  The agent node
+    (solve) declares the ``bash`` tool and — under the stub stream_fn — stores
+    some text under ``answer``.  (A real ``--provider`` run has the agent shell
+    out via bash to compute 1242; the stub only exercises the wiring.)
+    """
+    wf_path = _EXAMPLES_DIR / "agent_calculator.json"
+    wf = load_workflow(wf_path)
+
+    def _dryrun_factory(m: str) -> Any:
+        def _stream_fn(model_id: Any, context: Any, options: Any = None) -> AiEventStream[AssistantMessage]:
+            msg = AssistantMessage(content=(TextContent(text=f"DRYRUN:{m}"),))
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    from flow.tools import default_registry
+
+    result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
+
+    # script node built the arithmetic problem from typed integer inputs
+    assert result.final_state.get("problem") == "347 + 895"
+    # agent node ran and stored an answer (real content requires a live provider)
+    assert "answer" in result.final_state
+
+
 async def test_generate_tools_script_parity() -> None:
     """Generate tools_script.json; ruff-check; compile; assert structural properties."""
     wf_path = _EXAMPLES_DIR / "tools_script.json"
