@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,9 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument(
         "--timeout", type=float, default=120.0, help="Per-node wall-clock timeout in seconds (default 120)"
     )
+    run_p.add_argument(
+        "-v", "--verbose", action="store_true", help="Show DEBUG logs (node execution, loop firing)"
+    )
 
     # -- generate ------------------------------------------------------------
     gen_p = sub.add_parser("generate", help="Generate Python code from a workflow")
@@ -194,6 +198,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "validate":
         _cmd_validate(args.config)
     elif args.command == "run":
+        if args.verbose:
+            logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+            # Surface flow's own DEBUG logs (node execution, loop firing) without
+            # the noise of third-party libraries (asyncio, openai, httpx, …).
+            logging.getLogger("flow").setLevel(logging.DEBUG)
         asyncio.run(_cmd_run(args.config, provider=args.provider, dry_run=args.dry_run, timeout=args.timeout))
     elif args.command == "generate":
         _cmd_generate(args.config, output=args.output)

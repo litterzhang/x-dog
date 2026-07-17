@@ -160,6 +160,7 @@ async def execute(
             state_snapshot = dict(state)
 
         if node.type == "script":
+            logger.debug("Running script node %r", node_id)
             if node.code is not None:
                 fn = _resolve_script_fn(node, base_dir)
             elif script_resolver is not None:

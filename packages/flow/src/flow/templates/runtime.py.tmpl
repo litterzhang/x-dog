@@ -1,6 +1,7 @@
 """$workflow_name — generated workflow module."""
 
 import asyncio
+import json
 
 import ai
 from agent import Agent
@@ -37,6 +38,7 @@ $node_functions
 async def main() -> None:
     provider = ai.provider("$provider")
 $main_body
+    print(json.dumps(STATE, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
