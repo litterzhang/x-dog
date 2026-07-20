@@ -275,7 +275,128 @@ def _node_guard(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[st
     return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
 
 
+def _node_run_gate(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[str, list[EdgeDef]]) -> str:
+    """Return the boolean expression under which *node_id* actually runs.
+
+    Mirrors the executor exactly: a node runs iff **every** forward predecessor
+    ran (``_ran`` membership) *and* at least one incoming edge's condition holds
+    (an unconditional edge counts as always-true).  So a fan-in node waits for
+    all branches — and if any predecessor was skipped, or every guard is false,
+    the node (and thus its own successors) is skipped too.  Entry-like nodes with
+    no forward in-edges return ``"True"``.
+    """
+    preds = fwd_preds.get(node_id, [])
+    in_edges = [e for p in preds for e in fwd_from.get(p, []) if e.dst == node_id]
+    if not in_edges:
+        return "True"
+    clauses: list[str] = [f"'{_ESC(p)}' in _ran" for p in dict.fromkeys(preds)]
+    # discovery: any incoming edge's guard holds (unconditional edge -> True)
+    if any(e.when is None for e in in_edges):
+        pass  # an always-on edge makes the discovery clause vacuously true
+    else:
+        guards = [f"({_condition_to_expr(e.when)})" for e in in_edges if e.when is not None]
+        clauses.append(f"({' or '.join(guards)})" if len(guards) > 1 else guards[0])
+    return " and ".join(clauses)
+
+
+def _has_forward_conditional(wf: WorkflowDef) -> bool:
+    """True if the workflow has a conditional edge that is NOT a loop back-edge."""
+    return any(e.when is not None and e.loop_max is None for e in wf.edges)
+
+
 def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """Generate the body of async def main() for the given workflow.
+
+    Two strategies:
+
+    - **Sequential/parallel + loops** (the default): BFS waves, ``asyncio.gather``
+      for parallel fan-out, ``for _loop_i in range(n)`` with a conditional break
+      for bounded loops.
+
+    - **Forward conditional branches** (whenever a non-loop ``when`` edge exists):
+      emit a ``_ran`` set and gate every node on
+      ``all(pred in _ran) and <discovery>`` — reproducing the executor's rule that
+      a fan-in node waits for *all* predecessors, so a skipped branch propagates
+      downstream instead of a node running unconditionally.
+    """
+    if _has_forward_conditional(wf):
+        return _render_main_body_conditional(wf, safe_ids)
+    return _render_main_body_waves(wf, safe_ids)
+
+
+def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """Emit ``_ran``-gated sequential code for workflows with forward conditionals.
+
+    Nodes are emitted in a topological order over forward edges.  Each node runs
+    only when its run-gate holds, and records itself in ``_ran`` so downstream
+    fan-in gates see it.  Bounded loops still wrap their body in ``for`` with a
+    conditional break.
+    """
+    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
+
+    loop_entry_map: dict[str, tuple[str, int | None]] = {}
+    loop_exit_set: set[str] = set()
+    loop_exit_break: dict[str, str | None] = {}
+    for le in loop_edges:
+        loop_entry_map[le.dst] = (le.src, le.loop_max)
+        loop_exit_set.add(le.src)
+        loop_exit_break[le.src] = _condition_to_negated_expr(le.when) if le.when is not None else None
+
+    # Topological order over forward edges (Kahn), stable in declaration order.
+    indeg: dict[str, int] = {n.id: 0 for n in wf.nodes}
+    for e in wf.edges:
+        if e.loop_max is None:
+            indeg[e.dst] = indeg.get(e.dst, 0) + 1
+    order: list[str] = []
+    queue = [n.id for n in wf.nodes if indeg[n.id] == 0]
+    seen: set[str] = set(queue)
+    while queue:
+        cur = queue.pop(0)
+        order.append(cur)
+        for e in fwd_from.get(cur, []):
+            indeg[e.dst] -= 1
+            if indeg[e.dst] == 0 and e.dst not in seen:
+                seen.add(e.dst)
+                queue.append(e.dst)
+    # append any nodes not reached (shouldn't happen for a valid DAG)
+    for n in wf.nodes:
+        if n.id not in order:
+            order.append(n.id)
+
+    lines: list[str] = []
+    loop_depth = 0
+
+    def ind() -> str:
+        return "    " * (1 + loop_depth)
+
+    lines.append(f"{ind()}_ran: set[str] = set()")
+
+    for node_id in order:
+        if node_id in loop_entry_map:
+            _, lmax = loop_entry_map[node_id]
+            lines.append(f"{ind()}for _loop_i in range({lmax}):")
+            loop_depth += 1
+
+        gate = _node_run_gate(node_id, fwd_preds, fwd_from)
+        if gate == "True":
+            lines.append(f"{ind()}await node_{safe_ids[node_id]}(provider)")
+            lines.append(f"{ind()}_ran.add('{_ESC(node_id)}')")
+        else:
+            lines.append(f"{ind()}if {gate}:")
+            lines.append(f"{ind()}    await node_{safe_ids[node_id]}(provider)")
+            lines.append(f"{ind()}    _ran.add('{_ESC(node_id)}')")
+
+        if node_id in loop_exit_set:
+            break_cond = loop_exit_break.get(node_id)
+            if break_cond is not None:
+                lines.append(f"{ind()}if {break_cond}:")
+                lines.append(f"{ind()}    break")
+            loop_depth -= 1
+
+    return "\n".join(lines)
+
+
+def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Generate the body of async def main() for the given workflow.
 
     Handles:

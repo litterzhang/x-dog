@@ -477,3 +477,103 @@ async def test_generate_escapes_initial_state_values() -> None:
     assert gen_state["p"] == "a\\b"
     assert gen_state["out"] == "a\\b!"
     assert gen_state == dict(run_result.final_state)
+
+
+async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> None:
+    """A fan-in node waits for ALL predecessors; a skipped branch skips it too.
+
+    route picks 'odd', so the 'even' branch never runs. merge depends on both
+    odd and even, so — like the interpreter — merge must be skipped (final absent).
+    """
+    from flow.executor import execute
+
+    def sc(nid, code, out, inp=(), sch=()):
+        return NodeDef(id=nid, type="script", code=code, output=out, output_type="string",
+                       inputs=inp, input_schema=sch)
+
+    wf = WorkflowDef(
+        name="cond-fan-in", provider="copilot", entry="route", default_model="m",
+        initial_state=(("n", "7"),),
+        nodes=(
+            sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind",
+               inp=("n",), sch=(("n", "integer"),)),
+            sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
+            sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
+            sc("merge", "def merge(ctx, branch):\n    return 'got ' + branch", "final",
+               inp=("branch",), sch=(("branch", "string"),)),
+        ),
+        edges=(
+            EdgeDef(src="route", dst="odd", when=Condition(op="equals", value="{{kind}}", text="odd")),
+            EdgeDef(src="route", dst="even", when=Condition(op="equals", value="{{kind}}", text="even")),
+            EdgeDef(src="odd", dst="merge"),
+            EdgeDef(src="even", dst="merge"),
+        ),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert "final" not in gen_state  # merge skipped: even branch never ran
+    assert gen_state["branch"] == "O7"
+    assert gen_state == dict(run_result.final_state)
+
+
+async def test_generate_conditional_skip_propagates_downstream() -> None:
+    """When a guarded node is skipped, its unconditional successor is skipped too.
+
+    route emits 'weird', so 'a' (guarded on kind == 'never') never runs; 'b'
+    depends on 'a', so it must be skipped as well — matching the interpreter.
+    """
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="cond-skip", provider="copilot", entry="route", default_model="m",
+        initial_state=(("n", "7"),),
+        nodes=(
+            NodeDef(id="route", type="script", code="def route(ctx, n):\n    return 'weird'",
+                    output="kind", output_type="string", inputs=("n",), input_schema=(("n", "integer"),)),
+            NodeDef(id="a", type="script", code="def a(ctx):\n    return 'A'", output="ra", output_type="string"),
+            NodeDef(id="b", type="script", code="def b(ctx, ra):\n    return ra + 'B'", output="rb",
+                    output_type="string", inputs=("ra",), input_schema=(("ra", "string"),)),
+        ),
+        edges=(
+            EdgeDef(src="route", dst="a", when=Condition(op="equals", value="{{kind}}", text="never")),
+            EdgeDef(src="a", dst="b"),
+        ),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert "ra" not in gen_state and "rb" not in gen_state  # a skipped -> b skipped
+    assert gen_state == dict(run_result.final_state)
+
+
+async def test_generate_conditional_branch_positive_path_runs_downstream() -> None:
+    """The taken branch and its fan-in successor DO run (n=4 -> even -> merge)."""
+    from flow.executor import execute
+
+    def sc(nid, code, out, inp=(), sch=()):
+        return NodeDef(id=nid, type="script", code=code, output=out, output_type="string",
+                       inputs=inp, input_schema=sch)
+
+    wf = WorkflowDef(
+        name="cond-pos", provider="copilot", entry="route", default_model="m",
+        initial_state=(("n", "4"),),
+        nodes=(
+            sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind",
+               inp=("n",), sch=(("n", "integer"),)),
+            sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
+            sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
+        ),
+        edges=(
+            EdgeDef(src="route", dst="odd", when=Condition(op="equals", value="{{kind}}", text="odd")),
+            EdgeDef(src="route", dst="even", when=Condition(op="equals", value="{{kind}}", text="even")),
+        ),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["branch"] == "E4"
+    assert gen_state == dict(run_result.final_state)
