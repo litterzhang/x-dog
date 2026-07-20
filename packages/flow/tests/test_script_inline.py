@@ -6,13 +6,21 @@ import pathlib
 
 from flow.executor import execute
 from flow.loader import load_workflow, parse_workflow
-from flow.models import NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, NodeDef, WorkflowDef
 
 
 def _run(wf: WorkflowDef, base_dir: pathlib.Path | None = None) -> dict[str, str]:
     import asyncio
 
-    return asyncio.run(execute(wf, base_dir=base_dir)).final_state
+    result = asyncio.run(execute(wf, base_dir=base_dir))
+    # Flatten the nested node outputs (skipping the reserved $in source) into a
+    # single name->value view, the way the old flat final_state read.
+    flat: dict[str, str] = {}
+    for node_id, ports in result.outputs.items():
+        if node_id == IN_NODE_ID:
+            continue
+        flat.update(ports)
+    return flat
 
 
 def test_inline_typed_add_coerces() -> None:
@@ -29,7 +37,7 @@ def test_inline_typed_add_coerces() -> None:
             "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
             "output": {"name": "sum", "type": "integer"},
         }],
-        "edges": [],
+        "edges": [{"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}}],
     })
     fs = _run(wf)
     assert fs["sum"] == "7"
@@ -48,7 +56,7 @@ def test_inline_async_script() -> None:
             "inputs": [{"name": "x", "type": "string"}],
             "output": {"name": "y", "type": "string"},
         }],
-        "edges": [],
+        "edges": [{"from": "$in", "to": "s", "map": {"x": "x"}}],
     })
     assert _run(wf)["y"] == "HI"
 
@@ -63,12 +71,13 @@ def test_ctx_exposes_state_and_ids() -> None:
             "id": "s",
             "type": "script",
             "code": (
-                "def s(ctx):\n"
-                "    return f'{ctx.workflow_name}/{ctx.node_id}/{ctx.state[\"seed\"]}'"
+                "def s(ctx, seed):\n"
+                "    return f'{ctx.workflow_name}/{ctx.node_id}/{ctx.inputs[\"seed\"]}'"
             ),
+            "inputs": [{"name": "seed", "type": "string"}],
             "output": {"name": "out", "type": "string"},
         }],
-        "edges": [],
+        "edges": [{"from": "$in", "to": "s", "map": {"seed": "seed"}}],
     })
     assert _run(wf)["out"] == "ctxwf/s/z"
 
@@ -102,7 +111,8 @@ def test_ref_imports_from_workflow_dir(tmp_path: pathlib.Path) -> None:
         '{"name":"r","provider":"copilot","entry":"g","state":{"who":"world"},'
         '"nodes":[{"id":"g","type":"script","run":"myscript:greet",'
         '"inputs":[{"name":"who","type":"string"}],'
-        '"output":{"name":"msg","type":"string"}}],"edges":[]}',
+        '"output":{"name":"msg","type":"string"}}],'
+        '"edges":[{"from":"$in","to":"g","map":{"who":"who"}}]}',
         encoding="utf-8",
     )
     wf = load_workflow(wf_path)
@@ -113,5 +123,7 @@ def test_ref_imports_from_workflow_dir(tmp_path: pathlib.Path) -> None:
 def test_nodedef_defaults_backcompat() -> None:
     n = NodeDef(id="x", type="script")
     assert n.code is None
-    assert n.input_schema == ()
-    assert n.output_type is None
+    assert n.input_ports == ()
+    assert n.input_names == ()
+    assert n.output_ports == ()
+    assert n.output_names == ()

@@ -12,8 +12,9 @@
     {
       "id": "prep",
       "type": "script",
-      "code": "def prep(ctx):\n    return ctx.state.get('topic', '')",
-      "output": {"name": "prepped", "type": "string"}
+      "inputs": [{"name": "topic", "type": "string"}],
+      "code": "def prep(ctx, topic):\n    return topic",
+      "outputs": [{"name": "prepped", "type": "string"}]
     },
     {
       "id": "analyze",
@@ -22,10 +23,11 @@
       "inputs": ["prepped"],
       "system_prompt": "You analyse.",
       "prompt": "Analyse: {{prepped}}",
-      "output": "analysis"
+      "outputs": ["analysis"]
     }
   ],
   "edges": [
-    {"from": "prep", "to": "analyze"}
+    {"from": "$in", "to": "prep", "map": {"topic": "topic"}},
+    {"from": "prep", "to": "analyze", "map": {"prepped": "prepped"}}
   ]
 }

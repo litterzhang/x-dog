@@ -22,7 +22,7 @@ from flow.builder.svg_doc import (
 )
 from flow.errors import WorkflowValidationError
 from flow.loader import load_workflow, parse_workflow
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 _EXAMPLES = sorted((pathlib.Path(__file__).parent.parent / "examples").glob("*.json"))
 _SVG_NS = "http://www.w3.org/2000/svg"
@@ -36,20 +36,20 @@ def _rich() -> WorkflowDef:
         default_model="claude-sonnet-4.5",
         initial_state=(("topic", "x"),),
         nodes=(
-            NodeDef(id="a", type="script", run="myscripts:prep", output="rec"),
+            NodeDef(id="a", type="script", run="myscripts:prep", output_ports=(Port("rec"),)),
             NodeDef(
                 id="b",
                 type="agent",
-                inputs=("rec",),
+                input_ports=(Port("rec"),),
                 tools=("echo",),
                 system_prompt="sys\nmultiline",
                 prompt="do {{rec}}",
-                output="out",
+                output_ports=(Port("out"),),
                 output_schema=(("k1", "string"), ("k2", "integer")),
             ),
         ),
         edges=(
-            EdgeDef(src="a", dst="b"),
+            EdgeDef(src="a", dst="b", mapping=(("rec", "rec"),)),
             EdgeDef(
                 src="b",
                 dst="a",

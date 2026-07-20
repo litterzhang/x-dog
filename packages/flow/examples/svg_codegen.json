@@ -18,7 +18,7 @@
       "tools": ["filesystem"],
       "system_prompt": "You are a Python designer in the x-dog monorepo. Read files with the filesystem tool before designing. Produce a precise, minimal plan.",
       "prompt": "Design the SVG feature.\n\nFIRST read these to learn the exact contract and reusable helpers:\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/tests/test_svg.py  (renderer contract)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/tests/test_svg_doc.py  (embed/extract + round-trip law)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/graph.py  (existing to_ascii/to_mermaid/_condition_label — you ADD to_svg here, keep the rest)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/builder/serialize.py  (workflow_to_dict)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/loader.py  (parse_workflow)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/models.py\n\nOutput the plan.",
-      "output": "plan",
+      "outputs": ["plan"],
       "output_schema": {
         "to_svg_summary": "string",
         "svg_doc_summary": "string",
@@ -32,19 +32,28 @@
       "tools": ["filesystem"],
       "system_prompt": "You are a senior Python engineer. Production code: `from __future__ import annotations`, full type annotations (mypy --strict), ruff-clean (line-length 120), no unused imports, stdlib only (xml.etree.ElementTree — NO new dependency). Use the filesystem tool.",
       "prompt": "Implement per this plan:\n\n{{plan}}\n\nCRITICAL two-file change:\n1. graph.py: READ /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/graph.py first, then WRITE IT BACK with your `to_svg(wf: WorkflowDef) -> str` ADDED — you MUST preserve every existing function (to_ascii, to_mermaid, _condition_label, _edge_ascii, _mermaid_edge). Do not delete anything.\n2. CREATE /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/builder/svg_doc.py with workflow_to_svg_document, read_workflow_from_svg, dump_workflow_svg as specified.\n\nThe two contract test files (test_svg.py, test_svg_doc.py) must pass, and mypy --strict over packages/flow/src must stay clean. Embed JSON as XML-escaped element TEXT (not an attribute) so multiline prompts survive. After writing BOTH files, report the paths.",
-      "output": "impl_report"
+      "outputs": ["impl_report"]
     },
     {
       "id": "autofix",
       "type": "script",
       "run": "flow.codegen_tools:autofix_module",
-      "output": "autofix_report"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["autofix_report"]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "flow.codegen_tools:verify_generated_module",
-      "output": "verdict"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "mypy_target", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["verdict"]
     },
     {
       "id": "review",
@@ -52,7 +61,7 @@
       "inputs": ["verdict"],
       "system_prompt": "You are a build reviewer. If the verdict starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must quote the exact ruff/mypy/pytest errors to fix.",
       "prompt": "Verification verdict:\n\n{{verdict}}\n\nDecide the status.",
-      "output": "review_result",
+      "outputs": ["review_result"],
       "output_schema": {
         "status": "string",
         "feedback": "string"
@@ -60,10 +69,12 @@
     }
   ],
   "edges": [
-    {"from": "design", "to": "implement"},
+    {"from": "design", "to": "implement", "map": {"plan": "plan"}},
     {"from": "implement", "to": "autofix"},
+    {"from": "$in", "to": "autofix", "map": {"module_file": "module_file", "test_file": "test_file"}},
     {"from": "autofix", "to": "verify"},
-    {"from": "verify", "to": "review"},
+    {"from": "$in", "to": "verify", "map": {"module_file": "module_file", "mypy_target": "mypy_target", "test_file": "test_file"}},
+    {"from": "verify", "to": "review", "map": {"verdict": "verdict"}},
     {
       "from": "review",
       "to": "implement",

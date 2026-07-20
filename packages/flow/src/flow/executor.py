@@ -24,7 +24,7 @@ from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowExecutionError
 from flow.interpolate import interpolate
-from flow.models import EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, EdgeDef, NodeDef, WorkflowDef
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -75,10 +75,13 @@ def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
 
 @dataclass(frozen=True)
 class ExecResult:
-    """Result of executing a workflow."""
+    """Result of executing a workflow.
 
-    final_state: dict[str, str]
-    node_outputs: dict[str, str]
+    ``outputs`` is nested: ``outputs[node_id][port_name] -> value``.  The reserved
+    source node :data:`flow.models.IN_NODE_ID` holds the workflow's initial values.
+    """
+
+    outputs: dict[str, dict[str, str]]
 
 
 async def execute(
@@ -131,10 +134,10 @@ async def execute(
 
         stream_fn_factory = _factory
 
-    # Shared mutable state — only modified while holding _state_lock or before
-    # any concurrency starts / after gather() returns.
-    state: dict[str, str] = dict(wf.initial_state)
-    node_outputs: dict[str, str] = {}
+    # Shared mutable output store: outputs[node_id][port] = value.  Seeded with
+    # the reserved $in source carrying the workflow's initial values.  Only
+    # modified while holding _state_lock or before/after concurrency.
+    outputs: dict[str, dict[str, str]] = {IN_NODE_ID: dict(wf.initial_state)}
     _state_lock = asyncio.Lock()
 
     node_map = {n.id: n for n in wf.nodes}
@@ -147,17 +150,38 @@ async def execute(
         edges_from[edge.src].append(edge)
         in_edges[edge.dst].append(edge)
 
+    def _source_ports(node_id: str) -> dict[str, str]:
+        """Output ports available for reading from *node_id* (empty if not yet run)."""
+        return outputs.get(node_id, {})
+
+    def _build_inputs(node_id: str) -> dict[str, str]:
+        """Assemble a node's input namespace from its incoming edge mappings.
+
+        Walks in edge-declaration order; a later edge writing the same input port
+        wins (only conditional/loop edges may legitimately share a port).  Loop
+        back-edges only supply data while their condition holds.
+        """
+        ins: dict[str, str] = {}
+        for edge in in_edges.get(node_id, []):
+            if edge.loop_max is not None and edge.when is not None and not evaluate(edge.when, _source_ports(edge.src)):
+                continue
+            src_ports = _source_ports(edge.src)
+            for sport, dport in edge.mapping:
+                if sport in src_ports:
+                    ins[dport] = src_ports[sport]
+        return ins
+
     # Track which nodes have finished
     completed: set[str] = set()
     # Per-edge loop fire counter (loop_max edges only)
     loop_counters: dict[EdgeDef, int] = {}
 
     async def _run_node(node_id: str) -> None:
-        """Execute a single node and update shared state."""
+        """Execute a single node and store its output ports."""
         node = node_map[node_id]
 
         async with _state_lock:
-            state_snapshot = dict(state)
+            ins = _build_inputs(node_id)
 
         if node.type == "script":
             logger.debug("Running script node %r", node_id)
@@ -169,38 +193,19 @@ async def execute(
                 fn = _resolve_script_fn(node, base_dir)
 
             async def _run_script(fn: ScriptFn = fn) -> None:
-                ctx = RuntimeContext(
-                    state=dict(state_snapshot),
-                    workflow_name=wf.name,
-                    node_id=node_id,
-                )
-                sig_params = list(inspect.signature(fn).parameters.values())
-                first = sig_params[0].name if sig_params else ""
-                if first == "ctx":
-                    # New convention: fn(ctx, **typed-inputs-by-name).
-                    type_of = dict(node.input_schema)
-                    kwargs = {
-                        name: to_python(state_snapshot.get(name, ""), type_of.get(name, "string"))
-                        for name in node.inputs
-                    }
-                    raw = fn(ctx, **kwargs)
-                else:
-                    # Legacy convention: fn(state_dict).
-                    raw = fn(dict(state_snapshot))
+                ctx = RuntimeContext(inputs=dict(ins), workflow_name=wf.name, node_id=node_id)
+                kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
+                raw = fn(ctx, **kwargs)
                 value = await raw if inspect.isawaitable(raw) else raw
-                if node.output is not None:
-                    stored = to_state(value, node.output_type) if node.output_type else str(value)
-                    async with _state_lock:
-                        state[node.output] = stored
-                        node_outputs[node.output] = stored
+                await _store_script_output(node, node_id, value)
 
             await asyncio.wait_for(_run_script(), timeout=timeout)
             completed.add(node_id)
             return
 
-        # agent node
-        sys_prompt = interpolate(node.system_prompt, state_snapshot)
-        user_prompt = interpolate(node.prompt, state_snapshot)
+        # agent node — prompt interpolation is PORT-LOCAL (reads this node's inputs)
+        sys_prompt = interpolate(node.system_prompt, ins)
+        user_prompt = interpolate(node.prompt, ins)
 
         model = node.model or wf.default_model
         # stream_fn_factory is guaranteed non-None here
@@ -261,32 +266,58 @@ async def execute(
         else:
             output_text = "".join(accumulated)
 
-        if node.output is not None:
+        # Agent nodes write their single output port (if declared).
+        if node.output_ports:
             async with _state_lock:
-                state[node.output] = output_text
-                node_outputs[node.output] = output_text
+                outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_text
 
         completed.add(node_id)
 
+    async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
+        """Coerce a script's return value into the node's output port(s)."""
+        ports = node.output_ports
+        stored: dict[str, str]
+        if len(ports) <= 1:
+            if not ports:
+                return
+            p = ports[0]
+            stored = {p.name: to_state(value, p.type)}
+        else:
+            # Multi-output script: the function must return a dict keyed by port name.
+            if not isinstance(value, dict):
+                raise WorkflowExecutionError(
+                    f"Script node {node_id!r}: declares {len(ports)} output ports so must return a dict"
+                )
+            stored = {p.name: to_state(value[p.name], p.type) for p in ports}
+        async with _state_lock:
+            outputs.setdefault(node_id, {}).update(stored)
+
     def _is_ready(node_id: str) -> bool:
-        """Return True if all non-loop predecessors of node_id have completed."""
+        """Return True if all non-loop predecessors of node_id have completed.
+
+        The reserved ``$in`` source is always considered complete (it is pre-seeded
+        with the workflow's initial values and never executes).
+        """
         for edge in in_edges.get(node_id, []):
             if edge.loop_max is not None:
                 continue  # skip loop back-edges
+            if edge.src == IN_NODE_ID:
+                continue  # source node is always available
             if edge.src not in completed:
                 return False
         return True
 
     def _successors(node_id: str) -> list[str]:
-        """Return successor node IDs reachable from node_id given current state.
+        """Return successor node IDs reachable from node_id given current outputs.
 
-        Loop back-edges are handled separately by _activate_loops.
+        An edge ``when`` is evaluated PORT-LOCALLY against the source node's own
+        output ports.  Loop back-edges are handled separately by _activate_loops.
         """
         result: list[str] = []
         for edge in edges_from.get(node_id, []):
             if edge.loop_max is not None:
                 continue  # loop edges handled separately
-            if edge.when is None or evaluate(edge.when, state):
+            if edge.when is None or evaluate(edge.when, _source_ports(edge.src)):
                 result.append(edge.dst)
         return result
 
@@ -313,7 +344,7 @@ async def execute(
                 count = loop_counters.get(edge, 0)
                 if count >= edge.loop_max:
                     continue
-                if edge.when is not None and not evaluate(edge.when, state):
+                if edge.when is not None and not evaluate(edge.when, _source_ports(edge.src)):
                     continue
                 # Fire the loop: increment counter, un-complete dst + its successors
                 loop_counters[edge] = count + 1
@@ -357,4 +388,4 @@ async def execute(
                 if succ not in completed and succ not in in_flight:
                     pending.add(succ)
 
-    return ExecResult(final_state=state, node_outputs=node_outputs)
+    return ExecResult(outputs=outputs)

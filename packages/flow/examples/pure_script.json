@@ -13,24 +13,29 @@
     {
       "id": "add",
       "type": "script",
-      "code": "def add(ctx, a, b):\n    return a + b",
       "inputs": [
         {"name": "a", "type": "integer"},
         {"name": "b", "type": "integer"}
       ],
-      "output": {"name": "sum", "type": "integer"}
+      "code": "def add(ctx, a, b):\n    return a + b",
+      "outputs": [
+        {"name": "sum", "type": "integer"}
+      ]
     },
     {
       "id": "label",
       "type": "script",
       "inputs": [
-        {"name": "sum", "type": "integer"}
+        {"name": "value", "type": "integer"}
       ],
-      "code": "def label(ctx, sum):\n    return f'total is {sum}'",
-      "output": {"name": "message", "type": "string"}
+      "code": "def label(ctx, value):\n    return f'total is {value}'",
+      "outputs": [
+        {"name": "message", "type": "string"}
+      ]
     }
   ],
   "edges": [
-    {"from": "add", "to": "label"}
+    {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}},
+    {"from": "add", "to": "label", "map": {"sum": "value"}}
   ]
 }

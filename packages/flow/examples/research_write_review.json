@@ -12,31 +12,32 @@
     {
       "id": "research",
       "type": "agent",
+      "inputs": ["topic"],
       "system_prompt": "You are a research assistant. Gather key facts and insights about the given topic.",
       "prompt": "Research the following topic and summarise the key findings in 3-5 bullet points:\n\n{{topic}}",
-      "output": "research_notes"
+      "outputs": ["research_notes"]
     },
     {
       "id": "write",
       "type": "agent",
+      "inputs": ["research_notes"],
       "system_prompt": "You are a professional writer. Produce clear, engaging prose.",
       "prompt": "Using the research notes below, write a concise 2-paragraph article.\n\nResearch notes:\n{{research_notes}}",
-      "output": "article"
+      "outputs": ["article"]
     },
     {
       "id": "review",
       "type": "agent",
+      "inputs": ["article"],
       "system_prompt": "You are a strict editor. If the article needs improvement, reply with REVISE followed by your feedback. Otherwise reply with APPROVED.",
       "prompt": "Review this article and either approve it or request revisions:\n\n{{article}}",
-      "output": "review_result"
+      "outputs": ["review_result"]
     }
   ],
   "edges": [
-    {"from": "research", "to": "write"},
-    {
-      "from": "write",
-      "to": "review"
-    },
+    {"from": "$in", "to": "research", "map": {"topic": "topic"}},
+    {"from": "research", "to": "write", "map": {"research_notes": "research_notes"}},
+    {"from": "write", "to": "review", "map": {"article": "article"}},
     {
       "from": "review",
       "to": "write",

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from flow.errors import WorkflowValidationError
 from flow.loader import load_workflow, parse_workflow, validate_workflow
-from flow.models import WorkflowDef
+from flow.models import Port, WorkflowDef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -157,9 +157,9 @@ def test_load_tools_script_ok() -> None:
     prep = node_map["prep"]
     analyze = node_map["analyze"]
     assert prep.type == "script"
-    assert prep.code is not None and prep.code.startswith("def prep(ctx)")
-    assert prep.output == "prepped"
-    assert prep.output_type == "string"
+    assert prep.code is not None and prep.code.startswith("def prep(ctx")
+    assert prep.output_names == ("prepped",)
+    assert prep.output_ports[0].type == "string"
     assert analyze.tools == ("echo",)
     assert analyze.type == "agent"
 
@@ -206,20 +206,22 @@ def test_script_node_bad_run_format_raises() -> None:
 def test_load_linear_inputs_parsed() -> None:
     wf = load_workflow(FIXTURES / "linear.json")
     node_map = {n.id: n for n in wf.nodes}
-    assert node_map["a"].inputs == ()
-    assert node_map["b"].inputs == ("step_a_out",)
-    assert node_map["c"].inputs == ("step_b_out",)
+    assert node_map["a"].input_names == ()
+    assert node_map["b"].input_names == ("step_a_out",)
+    assert node_map["c"].input_names == ("step_b_out",)
 
 
 def test_load_tools_script_inputs_parsed() -> None:
     wf = load_workflow(FIXTURES / "tools_script.json")
     node_map = {n.id: n for n in wf.nodes}
-    assert node_map["prep"].inputs == ()
-    assert node_map["analyze"].inputs == ("prepped",)
+    assert node_map["prep"].input_names == ("topic",)
+    assert node_map["analyze"].input_names == ("prepped",)
 
 
 def test_bad_unreachable_input_raises() -> None:
-    with pytest.raises(WorkflowValidationError, match="missing_key"):
+    # The fixture wires an edge into a port the destination never declares, so
+    # the port mapping validation rejects it (the input stays unreachable).
+    with pytest.raises(WorkflowValidationError, match="destination has no input port"):
         load_workflow(FIXTURES / "bad_unreachable_input.json")
 
 
@@ -230,7 +232,7 @@ def test_input_in_initial_state_validates_ok() -> None:
         "entry": "a",
         "state": {"seed": "hello"},
         "nodes": [{"id": "a", "inputs": ["seed"]}],
-        "edges": [],
+        "edges": [{"from": "$in", "to": "a", "map": {"seed": "seed"}}],
     }
     wf = parse_workflow(data)
     validate_workflow(wf)  # should not raise
@@ -245,7 +247,7 @@ def test_unreachable_input_inline_raises() -> None:
         "edges": [],
     }
     wf = parse_workflow(data)
-    with pytest.raises(WorkflowValidationError, match="ghost"):
+    with pytest.raises(WorkflowValidationError, match="is not fed by any edge mapping"):
         validate_workflow(wf)
 
 
@@ -302,14 +304,16 @@ def test_inline_script_parses_typed_io() -> None:
             "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
             "output": {"name": "sum", "type": "integer"},
         }],
-        "edges": [],
+        "edges": [
+            {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}},
+        ],
     })
     validate_workflow(wf)  # must not raise
     n = wf.nodes[0]
-    assert n.inputs == ("a", "b")
-    assert n.input_schema == (("a", "integer"), ("b", "integer"))
-    assert n.output == "sum"
-    assert n.output_type == "integer"
+    assert n.input_names == ("a", "b")
+    assert n.input_ports == (Port("a", "integer"), Port("b", "integer"))
+    assert n.output_names == ("sum",)
+    assert n.output_ports == (Port("sum", "integer"),)
     assert n.code is not None
 
 

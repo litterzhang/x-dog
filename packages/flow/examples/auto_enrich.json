@@ -12,8 +12,9 @@
     {
       "id": "pull",
       "type": "script",
-      "code": "def pull(ctx):\n    return ctx.state.get('topic', '')",
-      "output": {"name": "record", "type": "string"}
+      "inputs": [{"name": "topic", "type": "string"}],
+      "code": "def pull(ctx, topic):\n    return topic",
+      "outputs": [{"name": "record", "type": "string"}]
     },
     {
       "id": "enrich",
@@ -21,7 +22,7 @@
       "inputs": ["record"],
       "system_prompt": "You are a data-enrichment agent. Fill missing fields precisely; do not invent facts.",
       "prompt": "Enrich this record, filling every field:\n\n{{record}}",
-      "output": "enriched",
+      "outputs": ["enriched"],
       "output_schema": {
         "category": "string",
         "token": "string",
@@ -31,13 +32,14 @@
     {
       "id": "persist",
       "type": "script",
-      "inputs": ["record"],
+      "inputs": [{"name": "record", "type": "string"}],
       "code": "def persist(ctx, record):\n    return record",
-      "output": {"name": "saved", "type": "string"}
+      "outputs": [{"name": "saved", "type": "string"}]
     }
   ],
   "edges": [
-    {"from": "pull", "to": "enrich"},
-    {"from": "enrich", "to": "persist"}
+    {"from": "$in", "to": "pull", "map": {"topic": "topic"}},
+    {"from": "pull", "to": "enrich", "map": {"record": "record"}},
+    {"from": "pull", "to": "persist", "map": {"record": "record"}}
   ]
 }

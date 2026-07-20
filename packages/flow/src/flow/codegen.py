@@ -1,4 +1,12 @@
-"""flow.codegen — generate a self-contained Python module from a WorkflowDef."""
+"""flow.codegen — generate a self-contained Python module from a WorkflowDef.
+
+Data flows through node-private ports: the generated module keeps a nested
+``_OUT[node_id][port]`` store instead of a flat ``STATE``.  Each ``node_X``
+assembles its input namespace ``ins`` from its incoming edge mappings
+(``_OUT[src][src_port] -> ins[dst_port]``), runs, and writes its output ports
+into ``_OUT[node_id]``.  Prompt ``{{x}}`` and script inputs are PORT-LOCAL (read
+``ins``); an edge ``when`` reads the *source* node's output ports.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +15,12 @@ import importlib.resources
 import re
 import string
 from collections import defaultdict
+from collections.abc import Callable
 
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef
+
+# A PortExpr resolves a referenced port name to a Python expression string.
+PortExpr = Callable[[str], str]
 
 
 def _safe_id(node_id: str) -> str:
@@ -20,10 +32,8 @@ def _safe_ids(wf: WorkflowDef) -> dict[str, str]:
     """Map every node id to a UNIQUE Python identifier.
 
     ``_safe_id`` alone collides when distinct ids normalise to the same symbol
-    (e.g. ``a-b`` and ``a.b`` both become ``a_b``), which would emit two
-    ``node_a_b`` / ``_script_a_b`` definitions and silently shadow one node.
-    Collisions get a ``_2``/``_3`` suffix.  Deterministic in ``wf.nodes`` order,
-    so every call site derives the same mapping.
+    (e.g. ``a-b`` and ``a.b`` both become ``a_b``).  Collisions get a ``_2``/``_3``
+    suffix.  Deterministic in ``wf.nodes`` order.
     """
     used: set[str] = set()
     mapping: dict[str, str] = {}
@@ -45,147 +55,158 @@ def _ESC(text: str) -> str:
 
 
 def _render_initial_state(wf: WorkflowDef) -> str:
-    # repr() escapes backslashes, quotes, and newlines so the emitted dict is a
-    # valid, faithful Python literal (a bare f-string would corrupt values like
-    # "a\b" — Python would read \b as a backspace).
+    # repr() escapes backslashes/quotes/newlines so the emitted literal is faithful.
     pairs = ", ".join(f"{k!r}: {v!r}" for k, v in wf.initial_state)
     return "{" + pairs + "}"
 
 
-def _render_prompt(prompt: str) -> str:
-    """Emit prompt with {{key}} replaced by STATE['key'] lookups as an f-string."""
+def _render_prompt(prompt: str, port_expr: PortExpr) -> str:
+    """Emit *prompt* with each ``{{port}}`` replaced by *port_expr(port)* in an f-string."""
     pattern = re.compile(r"\{\{\s*(\w+)\s*\}\}")
-    keys = pattern.findall(prompt)
-    if not keys:
+    if not pattern.search(prompt):
         return repr(prompt)
-    fstr_body = pattern.sub(lambda m: "{STATE['" + m.group(1) + "']}", prompt)
+    fstr_body = pattern.sub(lambda m: "{" + port_expr(m.group(1)) + "}", prompt)
     escaped = fstr_body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
     return 'f"""' + escaped + '"""'
 
 
-def _state_expr_from_str(s: str) -> str:
-    """Convert a possibly-interpolated string to a Python expression using STATE.get()."""
+def _str_expr(s: str, port_expr: PortExpr) -> str:
+    """Convert a possibly-interpolated condition operand to a Python expression."""
     single = re.compile(r"^\{\{\s*(\w+)\s*\}\}$")
     m = single.match(s.strip())
     if m:
-        return f"STATE.get('{m.group(1)}', '')"
+        return port_expr(m.group(1))
     inter = re.compile(r"\{\{\s*(\w+)\s*\}\}")
     if inter.search(s):
-        body = inter.sub(lambda x: "{STATE.get('" + x.group(1) + "', '')}", s)
+        body = inter.sub(lambda x: "{" + port_expr(x.group(1)) + "}", s)
         escaped = body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
         return 'f"""' + escaped + '"""'
     return repr(s)
 
 
-def _condition_to_expr(cond: Condition) -> str:
-    """Translate a Condition tree to a Python boolean expression over STATE lookups."""
+def _condition_to_expr(cond: Condition, port_expr: PortExpr) -> str:
+    """Translate a Condition tree to a Python boolean expression (ports via *port_expr*)."""
     if cond.op == "equals":
-        lhs = _state_expr_from_str(cond.value or "")
-        rhs = _state_expr_from_str(cond.text or "")
-        return f"{lhs} == {rhs}"
+        return f"{_str_expr(cond.value or '', port_expr)} == {_str_expr(cond.text or '', port_expr)}"
     if cond.op == "contains":
-        text_e = _state_expr_from_str(cond.text or "")
-        val_e = _state_expr_from_str(cond.value or "")
-        return f"{text_e} in {val_e}"
+        return f"{_str_expr(cond.text or '', port_expr)} in {_str_expr(cond.value or '', port_expr)}"
     if cond.op == "not":
-        return f"not ({_condition_to_expr(cond.children[0])})"
+        return f"not ({_condition_to_expr(cond.children[0], port_expr)})"
     if cond.op == "and":
-        parts = [f"({_condition_to_expr(c)})" for c in cond.children]
-        return " and ".join(parts)
+        return " and ".join(f"({_condition_to_expr(c, port_expr)})" for c in cond.children)
     if cond.op == "or":
-        parts = [f"({_condition_to_expr(c)})" for c in cond.children]
-        return " or ".join(parts)
+        return " or ".join(f"({_condition_to_expr(c, port_expr)})" for c in cond.children)
     return "True"
 
 
-def _condition_to_negated_expr(cond: Condition) -> str:
-    """Translate a Condition tree to the *negation* of its boolean expression.
-
-    Emitted directly (``!=``, ``not in``, De Morgan) rather than wrapping the
-    positive form in ``not (...)`` so the generated loop-break stays ruff-clean
-    (ruff rewrites ``not (a in b)`` to ``a not in b``).  Used for loop early-exit:
-    ``if <guard fails>: break``.
-    """
+def _condition_to_negated_expr(cond: Condition, port_expr: PortExpr) -> str:
+    """Negation of :func:`_condition_to_expr`, emitted directly (ruff-clean break)."""
     if cond.op == "equals":
-        lhs = _state_expr_from_str(cond.value or "")
-        rhs = _state_expr_from_str(cond.text or "")
-        return f"{lhs} != {rhs}"
+        return f"{_str_expr(cond.value or '', port_expr)} != {_str_expr(cond.text or '', port_expr)}"
     if cond.op == "contains":
-        text_e = _state_expr_from_str(cond.text or "")
-        val_e = _state_expr_from_str(cond.value or "")
-        return f"{text_e} not in {val_e}"
+        return f"{_str_expr(cond.text or '', port_expr)} not in {_str_expr(cond.value or '', port_expr)}"
     if cond.op == "not":
-        # not(not X) == X
-        return _condition_to_expr(cond.children[0])
+        return _condition_to_expr(cond.children[0], port_expr)
     if cond.op == "and":
-        # De Morgan: not(A and B) == (not A) or (not B)
-        parts = [f"({_condition_to_negated_expr(c)})" for c in cond.children]
-        return " or ".join(parts)
+        return " or ".join(f"({_condition_to_negated_expr(c, port_expr)})" for c in cond.children)
     if cond.op == "or":
-        parts = [f"({_condition_to_negated_expr(c)})" for c in cond.children]
-        return " and ".join(parts)
+        return " and ".join(f"({_condition_to_negated_expr(c, port_expr)})" for c in cond.children)
     return "False"
+
+
+def _src_port_expr(safe_ids: dict[str, str], src: str) -> PortExpr:
+    """Port resolver for an edge condition: reads the SOURCE node's output ports.
+
+    Uses ``_OUT.get(node, {})`` so a guard that references a node which has not
+    run yet (e.g. a self-loop's first-iteration check) yields '' instead of a
+    ``KeyError``.
+    """
+    key = IN_NODE_ID if src == IN_NODE_ID else src
+    return lambda port: f"_OUT.get({key!r}, {{}}).get({port!r}, '')"
 
 
 def _wrap_string_expr(expr: str, indent: int = 4) -> str:
     """Return expr; append ``# noqa: E501`` if the assignment line would exceed 120 chars."""
     prefix = " " * indent
-    # Account for "    _sys = " (indent + 7 chars)
     if len(prefix) + 7 + len(expr) <= 120:
         return expr
     return expr + "  # noqa: E501"
 
 
 def _script_is_async(node: NodeDef) -> bool:
-    """Whether a script node's function is ``async``.
-
-    Inline ``code`` is inspected via AST (the loader guarantees one top-level
-    function).  A ``run`` ref is assumed async — the shipped ``run``-backed
-    script helpers are all ``async def`` — matching the executor's ``await`` of
-    any awaitable return.
-    """
+    """Whether a script node's function is ``async`` (AST for inline; assume yes for run-ref)."""
     if node.code is None:
         return True
     tree = ast.parse(node.code)
     return any(isinstance(s, ast.AsyncFunctionDef) for s in tree.body)
 
 
-def _render_script_node(node: NodeDef, fn_name: str, output_key: str, safe: str) -> str:
-    """Render a script node's async wrapper: build ctx, pass typed inputs, store.
+def _incoming(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
+    """Forward (non-loop) incoming edges of *node_id* in declaration order."""
+    return [e for e in wf.edges if e.dst == node_id and e.loop_max is None]
 
-    Mirrors the executor's ``ctx``-first dispatch: the resolved function is
-    called as ``fn(ctx, **typed_inputs)`` and its return value is coerced back to
-    a state string via ``to_state`` (falling back to ``str`` when the output is
-    untyped).  Both inline ``code`` and ``run`` refs resolve to a top-level
-    ``_script_<id>`` callable (see :func:`_render_inline_scripts` /
-    :func:`_render_script_imports`).  *safe* is the node's unique symbol.
+
+def _incoming_loops(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
+    """Loop back-edges feeding *node_id* (they supply data only while looping)."""
+    return [e for e in wf.edges if e.dst == node_id and e.loop_max is not None]
+
+
+def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
+    """Emit the ``ins`` dict assembling this node's input ports from incoming edges.
+
+    Forward edges always feed; a loop back-edge feeds only when its ``when`` guard
+    holds (evaluated against the source node's current output ports) — mirroring
+    the executor's ``_build_inputs``.  A later edge writing the same input port
+    wins, so a self-loop's fed-back value overrides the initial forward value.
     """
-    type_of = dict(node.input_schema)
-    lines = [
-        f"async def {fn_name}(provider: object) -> None:",
-        f'    _ctx = RuntimeContext(state=dict(STATE), workflow_name="{_ESC(node.id)}", node_id="{_ESC(node.id)}")',
-    ]
+    if not node.input_ports:
+        return []
+    lines = ["    ins: dict[str, str] = {}"]
+    for edge in _incoming(node.id, wf):
+        src = IN_NODE_ID if edge.src == IN_NODE_ID else edge.src
+        for sport, dport in edge.mapping:
+            lines.append(f"    if {sport!r} in _OUT.get({src!r}, {{}}):")
+            lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{sport!r}]")
+    for edge in _incoming_loops(node.id, wf):
+        if not edge.mapping:
+            continue
+        src = edge.src
+        guard = (
+            _condition_to_expr(edge.when, _src_port_expr({}, src)) if edge.when is not None else "True"
+        )
+        for sport, dport in edge.mapping:
+            lines.append(f"    if ({guard}) and {sport!r} in _OUT.get({src!r}, {{}}):")
+            lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{sport!r}]")
+    return lines
+
+
+def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
+    """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
+    lines = [f"async def {fn_name}(provider: object) -> None:"]
+    lines += _render_ins(node, wf)
+    ins_arg = "ins" if node.input_ports else "{}"
+    lines.append(
+        f'    _ctx = RuntimeContext(inputs=dict({ins_arg}), workflow_name="{_ESC(wf.name)}", node_id="{_ESC(node.id)}")'
+    )
     call_args = ["_ctx"]
-    for name in node.inputs:
-        jtype = type_of.get(name, "string")
-        lines.append(f'    _in_{name} = to_python(STATE.get("{name}", ""), "{jtype}")')
-        call_args.append(f"{name}=_in_{name}")
+    for p in node.input_ports:
+        lines.append(f'    _in_{p.name} = to_python(ins.get({p.name!r}, ""), "{p.type}")')
+        call_args.append(f"{p.name}=_in_{p.name}")
     await_kw = "await " if _script_is_async(node) else ""
     lines.append(f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})")
-    if node.output_type:
-        lines.append(f'    STATE["{output_key}"] = to_state(_val, "{node.output_type}")')
+    lines.append(f"    _OUT[{node.id!r}] = {{}}")
+    if len(node.output_ports) <= 1:
+        if node.output_ports:
+            p = node.output_ports[0]
+            lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val, "{p.type}")')
     else:
-        lines.append(f'    STATE["{output_key}"] = str(_val)')
+        for p in node.output_ports:
+            lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
     return "\n".join(lines)
 
 
 def _rename_inline_fn(code: str, alias: str) -> str:
-    """Return *code* with its single top-level function renamed to *alias*.
-
-    The loader has already validated that inline ``code`` defines exactly one
-    top-level function, so we rewrite that definition's name to a stable,
-    collision-free ``_script_<id>`` symbol emitted at module top level.
-    """
+    """Return *code* with its single top-level function renamed to *alias*."""
     tree = ast.parse(code)
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -209,29 +230,29 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     node = node_map[node_id]
     safe = safe_ids[node_id]
     fn_name = f"node_{safe}"
-    output_key = node.output or node_id
 
     if node.type == "script":
-        return _render_script_node(node, fn_name, output_key, safe)
+        return _render_script_node(node, fn_name, safe, wf)
 
+    # agent node — prompts are PORT-LOCAL: {{x}} reads ins['x'].
     model = node.model or wf.default_model
-    sys_prompt = _render_prompt(node.system_prompt)
-    user_prompt = _render_prompt(node.prompt)
+    ins_expr: PortExpr = lambda port: f"ins.get({port!r}, '')"  # noqa: E731
+    sys_prompt = _render_prompt(node.system_prompt, ins_expr)
+    user_prompt = _render_prompt(node.prompt, ins_expr)
 
-    sys_lines = _wrap_string_expr(sys_prompt, indent=4)
-    usr_lines = _wrap_string_expr(user_prompt, indent=4)
-    lines = [
-        f"async def {fn_name}(provider: object) -> None:",
-        f"    _sys = {sys_lines}",
-        f"    _usr = {usr_lines}",
-    ]
+    lines = [f"async def {fn_name}(provider: object) -> None:"]
+    lines += _render_ins(node, wf)
+    lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
+    lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
     if node.tools:
         tool_names = ", ".join(f'"{t}"' for t in node.tools)
         lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
         lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)')
     else:
         lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr)')
-    lines.append(f'    STATE["{output_key}"] = result')
+    lines.append(f"    _OUT[{node.id!r}] = {{}}")
+    if node.output_ports:
+        lines.append(f"    _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
     return "\n".join(lines)
 
 
@@ -240,10 +261,8 @@ def _build_fwd_graph(
 ) -> tuple[dict[str, list[EdgeDef]], dict[str, list[str]], list[EdgeDef]]:
     """Split edges into forward (non-loop) and loop back-edges.
 
-    Returns:
-        fwd_from: node_id -> list[EdgeDef] for forward edges
-        fwd_preds: node_id -> list[predecessor node_ids] for forward edges
-        loop_edges: all EdgeDef where loop_max is not None
+    ``$in`` is excluded from predecessor tracking (it is always available), so a
+    node fed only by ``$in`` behaves like an entry node.
     """
     fwd_from: dict[str, list[EdgeDef]] = defaultdict(list)
     fwd_preds: dict[str, list[str]] = defaultdict(list)
@@ -251,52 +270,48 @@ def _build_fwd_graph(
     for e in wf.edges:
         if e.loop_max is None:
             fwd_from[e.src].append(e)
-            fwd_preds[e.dst].append(e.src)
+            if e.src != IN_NODE_ID:
+                fwd_preds[e.dst].append(e.src)
         else:
             loop_edges.append(e)
     return fwd_from, fwd_preds, loop_edges
 
 
-def _node_guard(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[str, list[EdgeDef]]) -> str | None:
-    """Return a Python guard expression if *node_id* is reached ONLY via conditional edges.
+def _cond_in_edges(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
+    """Forward incoming edges used to compute run guards.
 
-    A node is unconditionally reachable when at least one forward in-edge has no
-    ``when`` (it always fires once the predecessor completes) — such a node needs
-    no guard.  When every forward in-edge is conditional, the node runs iff any of
-    those conditions holds, so we OR them together.  Returns ``None`` for an
-    unconditional node (including the entry node, which has no in-edges).
+    Excludes ``$in`` edges: the source node is always available and only supplies
+    data, so it never makes a node "unconditionally reached" (that is decided by
+    real predecessor nodes / their conditions), mirroring the executor's
+    scheduling where ``$in`` is not a predecessor.
     """
-    in_edges = [e for p in fwd_preds.get(node_id, []) for e in fwd_from.get(p, []) if e.dst == node_id]
-    if not in_edges:
+    return [e for e in wf.edges if e.dst == node_id and e.loop_max is None and e.src != IN_NODE_ID]
+
+
+def _node_guard(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str | None:
+    """Guard expression if *node_id* is reached ONLY via conditional edges, else None."""
+    edges = _cond_in_edges(node_id, wf)
+    if not edges:
         return None
-    if any(e.when is None for e in in_edges):
+    if any(e.when is None for e in edges):
         return None
-    exprs = [f"({_condition_to_expr(e.when)})" for e in in_edges if e.when is not None]
+    exprs = [f"({_condition_to_expr(e.when, _src_port_expr(safe_ids, e.src))})" for e in edges if e.when is not None]
     return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
 
 
-def _node_run_gate(node_id: str, fwd_preds: dict[str, list[str]], fwd_from: dict[str, list[EdgeDef]]) -> str:
-    """Return the boolean expression under which *node_id* actually runs.
-
-    Mirrors the executor exactly: a node runs iff **every** forward predecessor
-    ran (``_ran`` membership) *and* at least one incoming edge's condition holds
-    (an unconditional edge counts as always-true).  So a fan-in node waits for
-    all branches — and if any predecessor was skipped, or every guard is false,
-    the node (and thus its own successors) is skipped too.  Entry-like nodes with
-    no forward in-edges return ``"True"``.
-    """
+def _node_run_gate(node_id: str, wf: WorkflowDef, fwd_preds: dict[str, list[str]], safe_ids: dict[str, str]) -> str:
+    """Boolean expression under which *node_id* runs (mirrors the executor)."""
     preds = fwd_preds.get(node_id, [])
-    in_edges = [e for p in preds for e in fwd_from.get(p, []) if e.dst == node_id]
-    if not in_edges:
+    edges = _cond_in_edges(node_id, wf)
+    if not edges:
         return "True"
     clauses: list[str] = [f"'{_ESC(p)}' in _ran" for p in dict.fromkeys(preds)]
-    # discovery: any incoming edge's guard holds (unconditional edge -> True)
-    if any(e.when is None for e in in_edges):
-        pass  # an always-on edge makes the discovery clause vacuously true
-    else:
-        guards = [f"({_condition_to_expr(e.when)})" for e in in_edges if e.when is not None]
+    if not any(e.when is None for e in edges):
+        guards = [
+            f"({_condition_to_expr(e.when, _src_port_expr(safe_ids, e.src))})" for e in edges if e.when is not None
+        ]
         clauses.append(f"({' or '.join(guards)})" if len(guards) > 1 else guards[0])
-    return " and ".join(clauses)
+    return " and ".join(clauses) if clauses else "True"
 
 
 def _has_forward_conditional(wf: WorkflowDef) -> bool:
@@ -305,47 +320,37 @@ def _has_forward_conditional(wf: WorkflowDef) -> bool:
 
 
 def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Generate the body of async def main() for the given workflow.
-
-    Two strategies:
-
-    - **Sequential/parallel + loops** (the default): BFS waves, ``asyncio.gather``
-      for parallel fan-out, ``for _loop_i in range(n)`` with a conditional break
-      for bounded loops.
-
-    - **Forward conditional branches** (whenever a non-loop ``when`` edge exists):
-      emit a ``_ran`` set and gate every node on
-      ``all(pred in _ran) and <discovery>`` — reproducing the executor's rule that
-      a fan-in node waits for *all* predecessors, so a skipped branch propagates
-      downstream instead of a node running unconditionally.
-    """
+    """Body of ``async def main()`` — conditional-aware when forward guards exist."""
     if _has_forward_conditional(wf):
         return _render_main_body_conditional(wf, safe_ids)
     return _render_main_body_waves(wf, safe_ids)
 
 
-def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit ``_ran``-gated sequential code for workflows with forward conditionals.
-
-    Nodes are emitted in a topological order over forward edges.  Each node runs
-    only when its run-gate holds, and records itself in ``_ran`` so downstream
-    fan-in gates see it.  Bounded loops still wrap their body in ``for`` with a
-    conditional break.
-    """
-    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
-
-    loop_entry_map: dict[str, tuple[str, int | None]] = {}
-    loop_exit_set: set[str] = set()
-    loop_exit_break: dict[str, str | None] = {}
+def _loop_maps(
+    loop_edges: list[EdgeDef], safe_ids: dict[str, str]
+) -> tuple[dict[str, tuple[str, int | None]], set[str], dict[str, str | None]]:
+    """Shared loop bookkeeping: entry->exit/max, exit set, exit->break expression."""
+    entry_map: dict[str, tuple[str, int | None]] = {}
+    exit_set: set[str] = set()
+    exit_break: dict[str, str | None] = {}
     for le in loop_edges:
-        loop_entry_map[le.dst] = (le.src, le.loop_max)
-        loop_exit_set.add(le.src)
-        loop_exit_break[le.src] = _condition_to_negated_expr(le.when) if le.when is not None else None
+        entry_map[le.dst] = (le.src, le.loop_max)
+        exit_set.add(le.src)
+        exit_break[le.src] = (
+            _condition_to_negated_expr(le.when, _src_port_expr(safe_ids, le.src)) if le.when is not None else None
+        )
+    return entry_map, exit_set, exit_break
+
+
+def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """Emit ``_ran``-gated sequential code for workflows with forward conditionals."""
+    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
+    loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
 
     # Topological order over forward edges (Kahn), stable in declaration order.
     indeg: dict[str, int] = {n.id: 0 for n in wf.nodes}
     for e in wf.edges:
-        if e.loop_max is None:
+        if e.loop_max is None and e.src != IN_NODE_ID:
             indeg[e.dst] = indeg.get(e.dst, 0) + 1
     order: list[str] = []
     queue = [n.id for n in wf.nodes if indeg[n.id] == 0]
@@ -354,11 +359,12 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
         cur = queue.pop(0)
         order.append(cur)
         for e in fwd_from.get(cur, []):
+            if e.src == IN_NODE_ID:
+                continue
             indeg[e.dst] -= 1
             if indeg[e.dst] == 0 and e.dst not in seen:
                 seen.add(e.dst)
                 queue.append(e.dst)
-    # append any nodes not reached (shouldn't happen for a valid DAG)
     for n in wf.nodes:
         if n.id not in order:
             order.append(n.id)
@@ -377,7 +383,7 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
             lines.append(f"{ind()}for _loop_i in range({lmax}):")
             loop_depth += 1
 
-        gate = _node_run_gate(node_id, fwd_preds, fwd_from)
+        gate = _node_run_gate(node_id, wf, fwd_preds, safe_ids)
         if gate == "True":
             lines.append(f"{ind()}await node_{safe_ids[node_id]}(provider)")
             lines.append(f"{ind()}_ran.add('{_ESC(node_id)}')")
@@ -397,33 +403,9 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
 
 
 def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Generate the body of async def main() for the given workflow.
-
-    Handles:
-    - Sequential execution (single node per BFS wave)
-    - Parallel fan-out/fan-in via asyncio.gather (multiple nodes per BFS wave)
-    - Conditional edges via ``if <expr>:`` blocks
-    - Bounded loops via ``for _loop_i in range(loop_max):``
-    """
+    """BFS-wave body: gather for parallel fan-out, for-range for bounded loops."""
     fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
-
-    # loop_entry_map: entry_node -> (exit_node, loop_max)
-    # The loop body is all nodes between entry_node and exit_node (inclusive) in
-    # the forward graph.  We emit a ``for`` block that opens at entry_node and
-    # closes after exit_node.  loop_exit_break maps the exit_node to the back
-    # edge's condition (if any), so the ``for`` can early-break as soon as the
-    # loop guard fails — mirroring the executor, which re-fires a loop only while
-    # its condition holds.  (Entry and exit land in different BFS waves, so this
-    # must be keyed state, not a per-wave local.)
-    loop_entry_map: dict[str, tuple[str, int | None]] = {}
-    loop_exit_set: set[str] = set()
-    loop_exit_break: dict[str, str | None] = {}
-    for le in loop_edges:
-        loop_entry_map[le.dst] = (le.src, le.loop_max)
-        loop_exit_set.add(le.src)
-        # Store the break expression (guard-fails) directly, so the emitted
-        # ``if <expr>: break`` is ruff-clean without a wrapping ``not (...)``.
-        loop_exit_break[le.src] = _condition_to_negated_expr(le.when) if le.when is not None else None
+    loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
 
     completed: set[str] = set()
     pending: list[str] = [wf.entry]
@@ -434,14 +416,12 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
         return "    " * (1 + loop_depth)
 
     while pending:
-        # All nodes whose forward predecessors are complete
         ready = [n for n in pending if all(p in completed for p in fwd_preds.get(n, []))]
         if not ready:
             break
         for n in ready:
             pending.remove(n)
 
-        # Open a loop block if any ready node is a loop entry.
         for n in ready:
             if n in loop_entry_map:
                 _, lmax = loop_entry_map[n]
@@ -449,30 +429,15 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
                 loop_depth += 1
                 break
 
-        # Emit the wave.  Nodes reached unconditionally can run concurrently via
-        # gather; nodes reached ONLY through conditional edges must each be
-        # guarded by their own ``if`` so a branch that shouldn't fire doesn't.
-        unconditional = [n for n in ready if _node_guard(n, fwd_preds, fwd_from) is None]
-        conditional = [n for n in ready if _node_guard(n, fwd_preds, fwd_from) is not None]
-
-        if len(unconditional) == 1 and not conditional:
-            lines.append(f"{ind()}await node_{safe_ids[unconditional[0]]}(provider)")
-        elif unconditional:
-            calls = [f"node_{safe_ids[n]}(provider)" for n in unconditional]
-            if len(calls) == 1:
-                lines.append(f"{ind()}await {calls[0]}")
-            else:
-                lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
-        for n in conditional:
-            guard = _node_guard(n, fwd_preds, fwd_from)
-            lines.append(f"{ind()}if {guard}:")
-            lines.append(f"{ind()}    await node_{safe_ids[n]}(provider)")
+        if len(ready) == 1:
+            lines.append(f"{ind()}await node_{safe_ids[ready[0]]}(provider)")
+        else:
+            calls = [f"node_{safe_ids[n]}(provider)" for n in ready]
+            lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
 
         for n in ready:
             completed.add(n)
 
-        # Close loop block when the loop exit node is processed, emitting the
-        # early-break so a conditional loop stops as soon as its guard fails.
         for n in ready:
             if n in loop_exit_set:
                 break_cond = loop_exit_break.get(n)
@@ -482,7 +447,6 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
                 loop_depth -= 1
                 break
 
-        # Discover forward successors
         for n in ready:
             for e in fwd_from.get(n, []):
                 succ = e.dst
@@ -493,38 +457,23 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
 
 
 def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit top-level imports for flow.tools registry and any script node run functions.
-
-    ``from flow.tools import default_registry`` is always emitted.  Script-node
-    imports are appended; if they also come from ``flow.tools`` they are merged
-    onto the same line to satisfy ruff isort.
-    """
-    # Collect script-node imports keyed by module
-    extra: dict[str, list[str]] = {}  # module -> ["func as alias", ...]
+    """Emit imports for the tools registry, coercers/RuntimeContext, and run-ref scripts."""
+    extra: dict[str, list[str]] = {}
     for node in wf.nodes:
         if node.type == "script" and node.run:
             module, func = node.run.rsplit(":", 1)
             safe = safe_ids[node.id]
-            alias = f"{func} as _script_{safe}"
-            extra.setdefault(module, []).append(alias)
+            extra.setdefault(module, []).append(f"{func} as _script_{safe}")
 
-    # Build the flow.tools import lines (always needed for default_registry).
-    # Keep aliased imports on a separate line from non-aliased ones so that
-    # ruff isort (combine-as-imports=false by default) does not reformat them.
     flow_tools_aliases = extra.pop("flow.tools", [])
     lines: list[str] = ["from flow.tools import default_registry"]
 
-    # Script nodes use the executor's ctx-first typed dispatch.  Emit only the
-    # coercers actually referenced by the generated code, so an unused import
-    # never trips ruff: ``to_python`` appears iff some script node has inputs;
-    # ``to_state`` iff some script node declares an output type; ``RuntimeContext``
-    # whenever any script node exists (its wrapper always builds a ctx).
     script_nodes = [n for n in wf.nodes if n.type == "script"]
     if script_nodes:
         coercers = []
-        if any(n.inputs for n in script_nodes):
+        if any(n.input_ports for n in script_nodes):
             coercers.append("to_python")
-        if any(n.output_type for n in script_nodes):
+        if any(n.output_ports for n in script_nodes):
             coercers.append("to_state")
         if coercers:
             lines.insert(0, f"from flow.coerce import {', '.join(coercers)}")
@@ -532,8 +481,6 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
 
     for alias in flow_tools_aliases:
         lines.append(f"from flow.tools import {alias}")
-
-    # Remaining non-flow.tools script imports
     for module, aliases in sorted(extra.items()):
         for alias in aliases:
             lines.append(f"from {module} import {alias}")
@@ -546,12 +493,8 @@ def generate(wf: WorkflowDef) -> str:
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
     tmpl_text = tmpl_path.read_text(encoding="utf-8")
 
-    # One unique symbol per node id, shared by every emitter so definitions and
-    # call sites stay in sync even when raw ids collide under identifier rules.
     safe_ids = _safe_ids(wf)
 
-    # Inline-``code`` script functions are emitted at module top level (renamed to
-    # ``_script_<id>``), ahead of the per-node async wrappers that call them.
     inline_scripts = _render_inline_scripts(wf, safe_ids)
     node_functions = "\n\n\n".join(_render_node_function(n.id, wf, safe_ids) for n in wf.nodes)
     if inline_scripts:
@@ -561,6 +504,7 @@ def generate(wf: WorkflowDef) -> str:
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
         initial_state=_render_initial_state(wf),
+        in_node_id=repr(IN_NODE_ID),
         node_functions=node_functions,
         provider=wf.provider,
         main_body=main_body,

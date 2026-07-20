@@ -16,24 +16,25 @@
       "id": "intake",
       "type": "script",
       "run": "flow.codegen_tools:next_task",
-      "output": "task"
+      "inputs": [{"name": "tasks", "type": "string"}],
+      "outputs": ["task"]
     },
     {
       "id": "setup",
       "type": "agent",
-      "inputs": ["task"],
+      "inputs": ["task", "worktree_dir"],
       "tools": ["bash"],
       "system_prompt": "You set up an isolated build environment. Use the bash tool. Create the directory in worktree_dir if it does not exist. If it is inside a git repository you may 'git worktree add', otherwise just create the directory. Keep it minimal.",
       "prompt": "Prepare an isolated working directory at {{worktree_dir}} for this task:\n\n{{task}}",
-      "output": "setup_report"
+      "outputs": ["setup_report"]
     },
     {
       "id": "design",
       "type": "agent",
-      "inputs": ["task", "setup_report"],
+      "inputs": ["task", "setup_report", "spec"],
       "system_prompt": "You are a software designer. Produce a concrete, minimal plan for the requested code.",
       "prompt": "Design the implementation for this task:\n\n{{task}}\n\nOriginal spec:\n{{spec}}",
-      "output": "plan",
+      "outputs": ["plan"],
       "output_schema": {
         "module_path": "string",
         "test_path": "string",
@@ -43,17 +44,18 @@
     {
       "id": "implement",
       "type": "agent",
-      "inputs": ["plan"],
+      "inputs": ["plan", "target_path"],
       "tools": ["filesystem"],
       "system_prompt": "You are a coding agent. Use the filesystem tool's 'write' action to create the files described by the plan. Write clean, ruff-compliant, type-annotated Python. Write BOTH the module and its pytest test file under the target directory.",
       "prompt": "Implement this plan by writing the files under {{target_path}}:\n\n{{plan}}\n\nThe module and test files must live inside {{target_path}}. After writing, briefly report the paths you created.",
-      "output": "impl_report"
+      "outputs": ["impl_report"]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "flow.codegen_tools:run_checks",
-      "output": "verdict"
+      "inputs": [{"name": "target_path", "type": "string"}],
+      "outputs": ["verdict"]
     },
     {
       "id": "review",
@@ -61,7 +63,7 @@
       "inputs": ["verdict", "impl_report"],
       "system_prompt": "You are a build reviewer. Read the verification verdict. If it starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must summarize what to fix.",
       "prompt": "Verification verdict:\n\n{{verdict}}\n\nImplementation report:\n{{impl_report}}\n\nDecide the status.",
-      "output": "review_result",
+      "outputs": ["review_result"],
       "output_schema": {
         "status": "string",
         "feedback": "string"
@@ -69,11 +71,18 @@
     }
   ],
   "edges": [
-    {"from": "intake", "to": "setup"},
-    {"from": "setup", "to": "design"},
-    {"from": "design", "to": "implement"},
+    {"from": "$in", "to": "intake", "map": {"tasks": "tasks"}},
+    {"from": "intake", "to": "setup", "map": {"task": "task"}},
+    {"from": "$in", "to": "setup", "map": {"worktree_dir": "worktree_dir"}},
+    {"from": "setup", "to": "design", "map": {"setup_report": "setup_report"}},
+    {"from": "intake", "to": "design", "map": {"task": "task"}},
+    {"from": "$in", "to": "design", "map": {"spec": "spec"}},
+    {"from": "design", "to": "implement", "map": {"plan": "plan"}},
+    {"from": "$in", "to": "implement", "map": {"target_path": "target_path"}},
     {"from": "implement", "to": "verify"},
-    {"from": "verify", "to": "review"},
+    {"from": "$in", "to": "verify", "map": {"target_path": "target_path"}},
+    {"from": "verify", "to": "review", "map": {"verdict": "verdict"}},
+    {"from": "implement", "to": "review", "map": {"impl_report": "impl_report"}},
     {
       "from": "review",
       "to": "implement",

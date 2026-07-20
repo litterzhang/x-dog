@@ -18,7 +18,7 @@
       "tools": ["filesystem"],
       "system_prompt": "You are a Python designer in the x-dog monorepo. Read files with the filesystem tool before designing. Produce a precise, minimal plan.",
       "prompt": "Design the pydot-based to_svg rewrite.\n\nFIRST read these:\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/tests/test_svg.py  (the contract: invariants + a Graphviz-fingerprint test + fallback tests)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/tests/test_svg_doc.py  (round-trip law over ALL examples — must stay green; to_svg output gets a <metadata> JSON marker injected then re-parsed by xml.etree, so the SVG must be well-formed XML)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/graph.py  (current file: to_svg delegates to _to_svg_fallback; you keep everything except to_svg's body)\n- /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/models.py  (NodeDef.type/tools/output_schema, EdgeDef.when/loop_max)\n\nNote pydot 4.x API: pydot.Dot(graph_type='digraph', rankdir='TB'); pydot.Node(name, shape=..., style=..., label=..., fillcolor=..., color=..., penwidth=...); pydot.Edge(src, dst, label=..., color=..., style=...); graph.create_svg() returns bytes. Output the plan.",
-      "output": "plan",
+      "outputs": ["plan"],
       "output_schema": {
         "to_svg_summary": "string",
         "node_styling": "string",
@@ -32,19 +32,28 @@
       "tools": ["filesystem"],
       "system_prompt": "You are a senior Python engineer. Production code: `from __future__ import annotations`, full type annotations (mypy --strict), ruff-clean (line-length 120), no unused imports. Use the filesystem tool: READ the target file first, then WRITE IT BACK with only to_svg's body changed.",
       "prompt": "Implement per this plan:\n\n{{plan}}\n\nREAD /home/zhang/x-dog-flow-autobuild/worktree/packages/flow/src/flow/graph.py, then WRITE IT BACK with the to_svg body replaced by the pydot+Graphviz renderer (try/except fallback to _to_svg_fallback). You MUST preserve every other function and constant verbatim: _condition_label, _edge_ascii, to_ascii, _mermaid_edge, to_mermaid, _edge_label, _to_svg_fallback, and _MARGIN/_BOX_W/_BOX_H/_GAP/_LANE. Add `import pydot` (and `import shutil`/`subprocess` only if needed). Make test_svg.py::test_to_svg_uses_graphviz_when_available pass (real Graphviz output when dot is available) while keeping ALL of test_svg.py and test_svg_doc.py green (the SVG must remain well-formed XML so the <metadata> round-trip still works). After writing, report what you changed.",
-      "output": "impl_report"
+      "outputs": ["impl_report"]
     },
     {
       "id": "autofix",
       "type": "script",
       "run": "flow.codegen_tools:autofix_module",
-      "output": "autofix_report"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["autofix_report"]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "flow.codegen_tools:verify_generated_module",
-      "output": "verdict"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "mypy_target", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["verdict"]
     },
     {
       "id": "review",
@@ -52,7 +61,7 @@
       "inputs": ["verdict"],
       "system_prompt": "You are a build reviewer. If the verdict starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must quote the exact ruff/mypy/pytest errors to fix.",
       "prompt": "Verification verdict:\n\n{{verdict}}\n\nDecide the status.",
-      "output": "review_result",
+      "outputs": ["review_result"],
       "output_schema": {
         "status": "string",
         "feedback": "string"
@@ -60,10 +69,12 @@
     }
   ],
   "edges": [
-    {"from": "design", "to": "implement"},
+    {"from": "design", "to": "implement", "map": {"plan": "plan"}},
     {"from": "implement", "to": "autofix"},
+    {"from": "$in", "to": "autofix", "map": {"module_file": "module_file", "test_file": "test_file"}},
     {"from": "autofix", "to": "verify"},
-    {"from": "verify", "to": "review"},
+    {"from": "$in", "to": "verify", "map": {"module_file": "module_file", "mypy_target": "mypy_target", "test_file": "test_file"}},
+    {"from": "verify", "to": "review", "map": {"verdict": "verdict"}},
     {
       "from": "review",
       "to": "implement",

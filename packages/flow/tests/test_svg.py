@@ -18,7 +18,7 @@ import shutil
 import xml.etree.ElementTree as ET
 
 from flow.graph import _to_svg_fallback, to_svg
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 _SVG_NS = "http://www.w3.org/2000/svg"
 _HAS_DOT = shutil.which("dot") is not None
@@ -31,9 +31,9 @@ def _wf() -> WorkflowDef:
         entry="a",
         default_model="m",
         nodes=(
-            NodeDef(id="a", type="agent", prompt="p", output="x"),
-            NodeDef(id="b", type="script", run="myscripts:prep", output="y"),
-            NodeDef(id="c", type="agent", prompt="q", output="z"),
+            NodeDef(id="a", type="agent", prompt="p", output_ports=(Port("x"),)),
+            NodeDef(id="b", type="script", run="myscripts:prep", output_ports=(Port("y"),)),
+            NodeDef(id="c", type="agent", prompt="q", output_ports=(Port("z"),)),
         ),
         edges=(
             EdgeDef(src="a", dst="b"),

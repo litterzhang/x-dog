@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 
 def test_node_def_defaults() -> None:
@@ -14,7 +14,8 @@ def test_node_def_defaults() -> None:
     assert node.model is None
     assert node.system_prompt == ""
     assert node.prompt == ""
-    assert node.output is None
+    assert node.output_ports == ()
+    assert node.output_names == ()
 
 
 def test_node_def_replace_immutability() -> None:
@@ -112,7 +113,7 @@ def test_workflow_def_initial_state() -> None:
 
 
 def test_node_def_script_type() -> None:
-    node = NodeDef(id="s1", type="script", run="myscripts:prep", output="out")
+    node = NodeDef(id="s1", type="script", run="myscripts:prep", output_ports=(Port("out"),))
     assert node.type == "script"
     assert node.run == "myscripts:prep"
     assert node.tools == ()
@@ -139,19 +140,22 @@ def test_node_def_new_fields_default() -> None:
 
 def test_node_def_inputs_default() -> None:
     node = NodeDef(id="n1")
-    assert node.inputs == ()
+    assert node.input_ports == ()
+    assert node.input_names == ()
 
 
 def test_node_def_inputs_construction() -> None:
-    node = NodeDef(id="n1", inputs=("a", "b"))
-    assert node.inputs == ("a", "b")
+    node = NodeDef(id="n1", input_ports=(Port("a"), Port("b")))
+    assert node.input_ports == (Port("a"), Port("b"))
+    assert node.input_names == ("a", "b")
 
 
 def test_node_def_inputs_replace() -> None:
-    node = NodeDef(id="n1", inputs=("a", "b"))
-    updated = dataclasses.replace(node, inputs=("c",))
-    assert updated.inputs == ("c",)
-    assert node.inputs == ("a", "b")
+    node = NodeDef(id="n1", input_ports=(Port("a"), Port("b")))
+    updated = dataclasses.replace(node, input_ports=(Port("c"),))
+    assert updated.input_ports == (Port("c"),)
+    assert updated.input_names == ("c",)
+    assert node.input_ports == (Port("a"), Port("b"))
     assert updated is not node
 
 

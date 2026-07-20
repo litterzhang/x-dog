@@ -6,10 +6,10 @@
     "model": "claude-haiku-4-5"
   },
   "nodes": [
-    {"id": "first", "prompt": "Step one", "output": "first_out"},
+    {"id": "first", "prompt": "Step one", "outputs": ["first_out"]},
     {"id": "second", "prompt": "Step two", "inputs": ["missing_key"]}
   ],
   "edges": [
-    {"from": "first", "to": "second"}
+    {"from": "first", "to": "second", "map": {"first_out": "first_out"}}
   ]
 }

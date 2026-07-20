@@ -17,37 +17,46 @@
       "type": "script",
       "inputs": ["spec"],
       "code": "def spec(ctx, spec):\n    return spec",
-      "output": {"name": "brief", "type": "string"}
+      "outputs": [{"name": "brief", "type": "string"}]
     },
     {
       "id": "write_tests",
       "type": "agent",
-      "inputs": ["brief"],
+      "inputs": ["brief", "spec", "test_file"],
       "tools": ["filesystem"],
       "system_prompt": "You are a test author practicing black-box TDD. You write a pytest test file from a SPECIFICATION ALONE. You must NOT see or assume any implementation source; test only the public behavior described in the spec. Write thorough tests: normal cases, boundaries, error cases, and the round-trip property. Use the filesystem 'write' action.",
       "prompt": "Write the pytest file at {{test_file}} that pins the public behavior of this spec (do not write the implementation):\n\n{{spec}}\n\nImport the functions from flow.examples_gen.roman. Cover 1, 4, 9, 40, 90, 400, 900, 3999, out-of-range errors, invalid-string errors, and the from_roman(to_roman(n))==n round-trip over a range. Type-annotate tests (mypy --strict). WRITE the file, then report its path.",
-      "output": "tests_report"
+      "outputs": ["tests_report"]
     },
     {
       "id": "implement",
       "type": "agent",
-      "inputs": ["brief"],
+      "inputs": ["brief", "spec", "module_file"],
       "tools": ["filesystem"],
       "system_prompt": "You are an implementation engineer. You write a module from a SPECIFICATION ALONE. You must NOT see or assume any test file; implement exactly the public behavior the spec describes. Write clean, ruff-clean, fully type-annotated Python (mypy --strict). Use the filesystem 'write' action.",
       "prompt": "Implement the module at {{module_file}} per this spec (do not write any test):\n\n{{spec}}\n\nProvide to_roman(n: int) -> str and from_roman(s: str) -> int with the described validation and round-trip guarantee. Add an __init__.py in the same directory if needed for imports. WRITE the file, then report its path.",
-      "output": "impl_report"
+      "outputs": ["impl_report"]
     },
     {
       "id": "autofix",
       "type": "script",
       "run": "flow.codegen_tools:autofix_module",
-      "output": "autofix_report"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["autofix_report"]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "flow.codegen_tools:verify_generated_module",
-      "output": "verdict"
+      "inputs": [
+        {"name": "module_file", "type": "string"},
+        {"name": "mypy_target", "type": "string"},
+        {"name": "test_file", "type": "string"}
+      ],
+      "outputs": ["verdict"]
     },
     {
       "id": "review",
@@ -55,7 +64,7 @@
       "inputs": ["verdict"],
       "system_prompt": "You are a build reviewer. If the verdict starts with PASS, status is 'approved'. If it starts with FAIL, status is 'revise' and feedback must quote the exact ruff/mypy/pytest errors. Note: a pytest failure could mean EITHER the implementation is wrong OR the independently-written test is wrong — say which in the feedback.",
       "prompt": "Verification verdict:\n\n{{verdict}}\n\nDecide the status.",
-      "output": "review_result",
+      "outputs": ["review_result"],
       "output_schema": {
         "status": "string",
         "feedback": "string"
@@ -63,12 +72,17 @@
     }
   ],
   "edges": [
-    {"from": "spec", "to": "write_tests"},
-    {"from": "spec", "to": "implement"},
+    {"from": "$in", "to": "spec", "map": {"spec": "spec"}},
+    {"from": "spec", "to": "write_tests", "map": {"brief": "brief"}},
+    {"from": "$in", "to": "write_tests", "map": {"spec": "spec", "test_file": "test_file"}},
+    {"from": "spec", "to": "implement", "map": {"brief": "brief"}},
+    {"from": "$in", "to": "implement", "map": {"spec": "spec", "module_file": "module_file"}},
     {"from": "write_tests", "to": "autofix"},
     {"from": "implement", "to": "autofix"},
+    {"from": "$in", "to": "autofix", "map": {"module_file": "module_file", "test_file": "test_file"}},
     {"from": "autofix", "to": "verify"},
-    {"from": "verify", "to": "review"},
+    {"from": "$in", "to": "verify", "map": {"module_file": "module_file", "mypy_target": "mypy_target", "test_file": "test_file"}},
+    {"from": "verify", "to": "review", "map": {"verdict": "verdict"}},
     {
       "from": "review",
       "to": "implement",

@@ -18,7 +18,7 @@
         {"name": "b", "type": "integer"}
       ],
       "code": "def make_problem(ctx, a, b):\n    return f'{a} + {b}'",
-      "output": {"name": "problem", "type": "string"}
+      "outputs": [{"name": "problem", "type": "string"}]
     },
     {
       "id": "solve",
@@ -27,10 +27,11 @@
       "tools": ["bash"],
       "system_prompt": "You are a precise calculator. You do NOT do arithmetic in your head. You compute every expression by running a bash command.",
       "prompt": "Compute this arithmetic expression by running a bash command (e.g. use `echo $((...))` or `python3 -c`): {{problem}}\n\nThen reply with ONLY the final integer result, nothing else.",
-      "output": "answer"
+      "outputs": ["answer"]
     }
   ],
   "edges": [
-    {"from": "make_problem", "to": "solve"}
+    {"from": "$in", "to": "make_problem", "map": {"a": "a", "b": "b"}},
+    {"from": "make_problem", "to": "solve", "map": {"problem": "problem"}}
   ]
 }

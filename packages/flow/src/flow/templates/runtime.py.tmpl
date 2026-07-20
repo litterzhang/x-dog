@@ -10,7 +10,9 @@ from agent.events import TurnEndEvent
 from agent.helpers import stream_fn_from_provider
 from ai.types import AssistantMessage, TextContent
 $script_imports
-STATE: dict[str, str] = $initial_state
+# Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
+# carries the workflow's initial values.
+_OUT: dict[str, dict[str, str]] = {$in_node_id: $initial_state}
 
 _REGISTRY = default_registry()
 
@@ -38,7 +40,7 @@ $node_functions
 async def main() -> None:
     provider = ai.provider("$provider")
 $main_body
-    print(json.dumps(STATE, indent=2, ensure_ascii=False))
+    print(json.dumps(_OUT, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

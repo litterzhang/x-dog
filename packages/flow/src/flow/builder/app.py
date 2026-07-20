@@ -208,10 +208,6 @@ class BuilderApp(Component):
                 out.append(row("code", first))
             else:
                 out.append(row("run", node.run or "(unset)"))
-            if node.input_schema:
-                out.append(row("inputs", ", ".join(f"{k}:{v}" for k, v in node.input_schema)))
-            if node.output_type:
-                out.append(row("out.type", node.output_type))
         else:
             out.append(row("model", node.model or "(default)"))
             if node.system_prompt:
@@ -223,9 +219,10 @@ class BuilderApp(Component):
             if node.output_schema:
                 fields = ", ".join(f"{k}:{v}" for k, v in node.output_schema)
                 out.append(row("schema", fields))
-        if node.inputs and not node.input_schema:
-            out.append(row("inputs", ", ".join(node.inputs)))
-        out.append(row("output", node.output or "(none)"))
+        if node.input_ports:
+            out.append(row("inputs", ", ".join(f"{p.name}:{p.type}" for p in node.input_ports)))
+        if node.output_ports:
+            out.append(row("outputs", ", ".join(f"{p.name}:{p.type}" for p in node.output_ports)))
         return out
 
     def _edge_detail_lines(self) -> list[str]:
@@ -235,8 +232,6 @@ class BuilderApp(Component):
             return [style.dim("(no edges — press 'e' on a node to connect)")]
         idx = min(self._edge_idx, len(edges) - 1)
         e = edges[idx]
-        nodes = {n.id: n for n in self._model.wf.nodes}
-        src, dst = nodes.get(e.src), nodes.get(e.dst)
 
         def row(label: str, value: str) -> str:
             return style.dim(f"{label:<10}") + value
@@ -247,11 +242,12 @@ class BuilderApp(Component):
             row("when", e.when.op if e.when is not None else style.dim("(none)")),
             row("loop", str(e.loop_max) if e.loop_max is not None else style.dim("(none)")),
             style.dim("── parameter flow ──"),
-            row("produces", (src.output if src else None) or style.dim("(none)")),
-            row("consumes", ", ".join(dst.inputs) if dst and dst.inputs else style.dim("(none)")),
         ]
-        if src and src.output and dst and src.output in dst.inputs:
-            out.append(style.fg(f"✓ {src.output} flows {e.src} → {e.dst}", style.OK))
+        if e.mapping:
+            for sport, dport in e.mapping:
+                out.append(style.fg(f"{sport} → {dport}", style.OK))
+        else:
+            out.append(row("map", style.dim("(control edge, no data)")))
         return out
 
     # -- input dispatch --------------------------------------------------------

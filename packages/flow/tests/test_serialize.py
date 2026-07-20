@@ -13,7 +13,7 @@ import pathlib
 import pytest
 from flow.builder.serialize import dump_workflow, workflow_to_dict
 from flow.loader import load_workflow, parse_workflow
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 _EXAMPLES = sorted((pathlib.Path(__file__).parent.parent / "examples").glob("*.json"))
 
@@ -32,21 +32,21 @@ def _rich_workflow() -> WorkflowDef:
         default_model="claude-sonnet-4.5",
         initial_state=(("topic", "x"),),
         nodes=(
-            NodeDef(id="a", type="script", run="myscripts:prep", output="rec"),
+            NodeDef(id="a", type="script", run="myscripts:prep", output_ports=(Port("rec"),)),
             NodeDef(
                 id="b",
                 type="agent",
-                inputs=("rec",),
+                input_ports=(Port("rec"),),
                 tools=("echo",),
                 system_prompt="sys",
                 prompt="do {{rec}}",
-                output="out",
+                output_ports=(Port("out"),),
                 output_schema=(("k1", "string"), ("k2", "integer")),
             ),
-            NodeDef(id="c", type="agent", prompt="review {{out}}", output="verdict"),
+            NodeDef(id="c", type="agent", prompt="review {{out}}", output_ports=(Port("verdict"),)),
         ),
         edges=(
-            EdgeDef(src="a", dst="b"),
+            EdgeDef(src="a", dst="b", mapping=(("rec", "rec"),)),
             EdgeDef(src="b", dst="c"),
             EdgeDef(
                 src="c",
@@ -69,8 +69,8 @@ def test_roundtrip_nested_condition() -> None:
         provider="copilot",
         entry="a",
         nodes=(
-            NodeDef(id="a", prompt="p", output="x"),
-            NodeDef(id="b", prompt="q", output="y"),
+            NodeDef(id="a", prompt="p", output_ports=(Port("x"),)),
+            NodeDef(id="b", prompt="q", output_ports=(Port("y"),)),
         ),
         edges=(
             EdgeDef(

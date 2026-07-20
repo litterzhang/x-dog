@@ -25,6 +25,8 @@ def _condition_label(cond: Condition) -> str:
 def _edge_ascii(edge: EdgeDef) -> str:
     parts = [f"{edge.src} -> {edge.dst}"]
     annotations: list[str] = []
+    if edge.mapping:
+        annotations.append("map: " + ", ".join(f"{s}->{d}" for s, d in edge.mapping))
     if edge.when is not None:
         annotations.append(f"when: {_condition_label(edge.when)}")
     if edge.loop_max is not None:

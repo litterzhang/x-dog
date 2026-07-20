@@ -7,6 +7,12 @@ or compile them to a self-contained Python module.
 
 ## JSON Schema
 
+Data flows between nodes through **named ports** wired by **explicit edge
+mappings** — `nodeA.output.x -> nodeB.input.a` — not a shared global state. Each
+node declares `inputs` and `outputs` port lists; an edge's `map` says which
+source output port feeds which destination input port. The workflow's `state`
+block seeds the output ports of a reserved source node `$in`.
+
 ```jsonc
 {
   "name": "my_workflow",          // workflow identifier
@@ -14,25 +20,27 @@ or compile them to a self-contained Python module.
   "defaults": {
     "model": "claude-sonnet-4.5"  // fallback model for nodes without model
   },
-  "entry": "node_id",             // id of the first node to execute
-  "state": {                      // initial key/value state (strings)
+  "entry": "research",            // id of the first node to execute
+  "state": {                      // seed values, exposed as output ports of "$in"
     "topic": "..."
   },
   "nodes": [
     {
       "id": "research",           // unique node identifier
-      "type": "agent",            // only "agent" is supported
+      "type": "agent",            // "agent" (LLM) or "script" (Python fn)
       "model": "...",             // optional; overrides defaults.model
       "system_prompt": "...",     // system prompt for the agent
-      "prompt": "...",            // user prompt; {{key}} interpolated from STATE
-      "output": "research_notes"  // STATE key where the response is stored
+      "inputs": ["topic"],        // input ports (bare name, or {name,type})
+      "prompt": "Research {{topic}}",  // {{x}} reads THIS node's input port x
+      "outputs": ["research_notes"]    // output ports (bare name, or {name,type})
     }
   ],
   "edges": [
-    // simple forward edge
-    {"from": "research", "to": "write"},
+    // data edge: source output port -> destination input port
+    {"from": "$in", "to": "research", "map": {"topic": "topic"}},
+    {"from": "research", "to": "write", "map": {"research_notes": "research_notes"}},
 
-    // conditional back-edge (loop)
+    // conditional back-edge (loop). "when" reads the SOURCE node's output ports.
     {
       "from": "review",
       "to": "write",
@@ -42,6 +50,15 @@ or compile them to a self-contained Python module.
   ]
 }
 ```
+
+**Ports.** A port is a bare name (`"topic"`) or `{"name": "sum", "type": "integer"}`.
+The JSON type (`string`/`integer`/`number`/`boolean`/`array`/`object`) coerces the
+string wire value to/from the Python value a script sees.
+
+**Validation** rejects: an input port fed by no edge mapping; a `map` referencing
+a port that doesn't exist on the source/destination; and — critically — **two
+unconditional edges feeding the same input port** (the ambiguous-producer clash
+that a shared global state used to allow silently).
 
 ### Condition operators
 
@@ -53,7 +70,7 @@ or compile them to a self-contained Python module.
 | `and` | `{"and": [<c1>, <c2>]}` | all conditions must hold |
 | `or` | `{"or": [<c1>, <c2>]}` | any condition must hold |
 
-Both `text` and `value` support `{{key}}` interpolation from STATE.
+On an edge, `{{key}}` in a condition reads the **source node's output port** `key`.
 
 ---
 
@@ -70,7 +87,7 @@ xdog-flow validate examples/research_write_review.json
 
 ### run
 
-Execute a workflow and print the final STATE as JSON.
+Execute a workflow and print the nested outputs (`{node_id: {port: value}}`) as JSON.
 
 ```bash
 # Live execution using the provider declared in the JSON
@@ -188,25 +205,26 @@ targets.
 
 ---
 
-## Declared inputs
+## Declared input ports
 
-Agent and script nodes can declare which state keys they consume via the `"inputs"` list.
-These are checked **statically at validate time**: every declared input must be produced by
-`state` (initial values) or a strictly earlier node.  Declaring inputs is optional but
-recommended — it documents intent and catches wiring mistakes before execution.
+Agent and script nodes declare their input ports via `"inputs"`. Each input port
+**must be fed by an incoming edge's `map`** — checked statically at validate time.
+Prompt `{{x}}` and script arguments read the node's own input port `x` (they are
+port-local, not a global lookup).
 
 ```jsonc
 {
   "id": "enrich",
   "type": "agent",
-  "inputs": ["record"],            // must exist in state before this node runs
+  "inputs": ["record"],            // input port, fed by an edge map
   "prompt": "Enrich:\n\n{{record}}",
-  "output": "enriched"
+  "outputs": ["enriched"]
 }
+// wired by, e.g.:  {"from": "pull", "to": "enrich", "map": {"record": "record"}}
 ```
 
-If a key listed in `"inputs"` is not reachable from upstream, `xdog-flow validate` raises
-a `WorkflowValidationError` immediately.
+If an input port is fed by no edge mapping, `xdog-flow validate` raises a
+`WorkflowValidationError` immediately.
 
 ---
 
@@ -214,13 +232,13 @@ a `WorkflowValidationError` immediately.
 
 When a node declares `"output_schema"`, the agent **must** call the built-in `submit_result`
 tool before finishing.  The executor validates the call and stores the result as a JSON string
-under the node's `"output"` key.
+in the node's (single) output port.
 
 ```jsonc
 {
   "id": "enrich",
   "type": "agent",
-  "output": "enriched",
+  "outputs": ["enriched"],
   "output_schema": {               // field name -> JSON type
     "category": "string",
     "token": "string",
@@ -234,7 +252,7 @@ Reading the result downstream:
 ```python
 import json
 
-enriched = json.loads(final_state["enriched"])
+enriched = json.loads(result.outputs["enrich"]["enriched"])
 print(enriched["category"])   # "IoT / Wireless Infrastructure"
 ```
 
@@ -246,10 +264,11 @@ If the agent finishes without calling `submit_result`, the executor raises
 ## Script nodes
 
 A **script node** runs a plain Python function (`def` or `async def`) instead of
-an LLM agent. Its signature is **`f(ctx, <inputs by name>) -> output`**: the first
-parameter is always `ctx` (a `RuntimeContext`), and each declared input arrives as
-a keyword argument, coerced to its declared type. The return value is coerced back
-and stored under the output name. Inputs/outputs are **typed** with JSON types
+an LLM agent. Its signature is **`f(ctx, <input ports by name>) -> output`**: the
+first parameter is always `ctx` (a `RuntimeContext`), and each declared input port
+arrives as a keyword argument, coerced to its declared type. The return value is
+coerced back and stored in the node's output port (a node with multiple output
+ports returns a dict keyed by port name). Ports are **typed** with JSON types
 (`string`/`integer`/`number`/`boolean`/`array`/`object`).
 
 Two code sources — a workflow is self-contained either way:
@@ -262,10 +281,11 @@ Two code sources — a workflow is self-contained either way:
   "type": "script",
   "code": "def add(ctx, a, b):\n    return a + b",
   "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
-  "output": {"name": "sum", "type": "integer"}
+  "outputs": [{"name": "sum", "type": "integer"}]
 }
+// wired by:  {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}}
 ```
-Here `state["a"]="3"`, `state["b"]="4"` are coerced to ints, so `sum` is `"7"`
+The input ports `a`/`b` arrive as ints (from `"3"`/`"4"`), so `sum` is `"7"`
 (not `"34"`). See `examples/pure_script.json`.
 
 **Ref `run`** (imports a `.py` sitting next to the workflow file — JSON + sibling
@@ -274,15 +294,15 @@ the import, not the global path):
 
 ```jsonc
 { "id": "prep", "type": "script", "run": "myscript:prep",
-  "inputs": [{"name": "topic", "type": "string"}], "output": {"name": "brief", "type": "string"} }
+  "inputs": [{"name": "topic", "type": "string"}], "outputs": [{"name": "brief", "type": "string"}] }
 ```
 
-`ctx` exposes `ctx.state` (full state snapshot), `ctx.workflow_name`, `ctx.node_id`
-for scripts that need the wider picture (e.g. config-only scripts read `ctx.state`).
+`ctx` exposes `ctx.inputs` (this node's input ports as a mapping),
+`ctx.workflow_name`, and `ctx.node_id`.
 
 **Validation** at load time: a script node sets exactly one of `code`/`run`;
 inline `code` must compile and its function must be `ctx`-first with parameter
-names matching the declared inputs.
+names matching the declared input ports.
 
 > **Security:** inline `code` is `exec`'d — it runs arbitrary Python. Only load
 > workflows from a trusted author. (This is a local authoring tool, not a service.)

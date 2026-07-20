@@ -1,4 +1,12 @@
-"""flow.loader — load and validate WorkflowDef from JSON."""
+"""flow.loader — load and validate WorkflowDef from JSON.
+
+Data flows through explicit ports and edge mappings (see :mod:`flow.models`).
+A node declares ``inputs`` / ``outputs`` port lists; an edge declares ``map`` —
+``{source_output_port: destination_input_port}``.  The workflow's ``state`` block
+seeds the output ports of the reserved source node :data:`flow.models.IN_NODE_ID`
+(``$in``), which is referenced by edges like any other source but never appears
+in ``wf.nodes``.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from flow.errors import WorkflowValidationError
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 logger = logging.getLogger(__name__)
 
@@ -33,40 +41,34 @@ def _parse_condition(data: Any) -> Condition:
     raise WorkflowValidationError(f"Unknown condition keys: {list(data.keys())}")
 
 
-def _parse_inputs(raw: Any) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
-    """Parse a node's ``inputs``, accepting bare names or ``{name,type}`` objects.
-
-    Returns ``(names, schema)`` where *names* is the reachability list and *schema*
-    is the ``(name, jsontype)`` pairs (empty when inputs are bare names).
-    """
+def _parse_ports(raw: Any) -> tuple[Port, ...]:
+    """Parse a ``inputs``/``outputs`` list of bare names or ``{name,type}`` objects."""
     if not raw:
-        return (), ()
-    names: list[str] = []
-    schema: list[tuple[str, str]] = []
+        return ()
+    ports: list[Port] = []
     for item in raw:
         if isinstance(item, dict):
-            name = str(item["name"])
-            names.append(name)
-            schema.append((name, str(item.get("type", "string"))))
+            ports.append(Port(name=str(item["name"]), type=str(item.get("type", "string"))))
         else:
-            names.append(str(item))
-    return tuple(names), tuple(schema)
+            ports.append(Port(name=str(item)))
+    return tuple(ports)
 
 
-def _parse_output(raw: Any) -> tuple[str | None, str | None]:
-    """Parse a node's ``output``: a bare name or ``{name,type}`` → (name, type)."""
+def _parse_output_ports(data: dict[str, Any]) -> tuple[Port, ...]:
+    """Output ports from ``outputs`` (list) or the ``output`` singular sugar."""
+    if "outputs" in data:
+        return _parse_ports(data["outputs"])
+    raw = data.get("output")
     if raw is None:
-        return None, None
+        return ()
     if isinstance(raw, dict):
-        return str(raw["name"]), str(raw.get("type", "string"))
-    return str(raw), None
+        return (Port(name=str(raw["name"]), type=str(raw.get("type", "string"))),)
+    return (Port(name=str(raw)),)
 
 
 def _parse_node(data: dict[str, Any]) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
-    inputs, input_schema = _parse_inputs(data.get("inputs", []))
-    output_name, output_type = _parse_output(data.get("output"))
     raw_output_schema = data.get("output_schema", {})
     output_schema: tuple[tuple[str, str], ...]
     if isinstance(raw_output_schema, dict) and raw_output_schema:
@@ -79,16 +81,13 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         model=data.get("model"),
         system_prompt=data.get("system_prompt", ""),
         prompt=data.get("prompt", ""),
-        output=output_name,
         tools=tools,
         run=data.get("run"),
-        inputs=inputs,
+        input_ports=_parse_ports(data.get("inputs", [])),
+        output_ports=_parse_output_ports(data),
         output_schema=output_schema,
         code=data.get("code"),
-        input_schema=input_schema,
-        output_type=output_type,
     )
-
 
 
 def _parse_edge(data: dict[str, Any]) -> EdgeDef:
@@ -98,9 +97,16 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     loop_max: int | None = None
     if "loop" in data and isinstance(data["loop"], dict):
         loop_max = int(data["loop"]["max"])
+    raw_map = data.get("map", {})
+    mapping: tuple[tuple[str, str], ...]
+    if isinstance(raw_map, dict) and raw_map:
+        mapping = tuple((str(s), str(d)) for s, d in raw_map.items())
+    else:
+        mapping = ()
     return EdgeDef(
         src=str(data["from"]),
         dst=str(data["to"]),
+        mapping=mapping,
         when=when,
         loop_max=loop_max,
     )
@@ -136,7 +142,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
 
 def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
     """Validate a script node: exactly one code source; inline code compiles and
-    has a ``ctx``-first signature whose remaining params match the declared inputs."""
+    has a ``ctx``-first signature whose remaining params match the declared input ports."""
     has_code = node.code is not None
     has_run = bool(node.run)
     if has_code and has_run:
@@ -152,7 +158,7 @@ def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
             )
         return
 
-    # Inline code: must compile, and its function must be (ctx, *inputs).
+    # Inline code: must compile, and its function must be (ctx, *input_ports).
     assert node.code is not None
     try:
         tree = ast.parse(node.code, filename=f"<{node.id}>", mode="exec")
@@ -167,7 +173,7 @@ def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
     arg_names = [a.arg for a in fn.args.args]
     if not arg_names or arg_names[0] != "ctx":
         raise WorkflowValidationError(f"Script node {node.id!r}: function's first parameter must be 'ctx'")
-    declared = set(node.inputs)
+    declared = set(node.input_names)
     got = set(arg_names[1:])
     if got != declared:
         raise WorkflowValidationError(
@@ -175,24 +181,37 @@ def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
         )
 
 
+def _output_port_names(wf: WorkflowDef, node_id: str, in_ports: set[str]) -> set[str]:
+    """Output port names available on *node_id* (the ``$in`` source exposes state keys)."""
+    if node_id == IN_NODE_ID:
+        return in_ports
+    for n in wf.nodes:
+        if n.id == node_id:
+            return set(n.output_names)
+    return set()
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
     node_ids = [n.id for n in wf.nodes]
 
-    # node ids non-empty and unique
     for nid in node_ids:
         if not nid:
             raise WorkflowValidationError("Node id must be non-empty")
+        if nid == IN_NODE_ID:
+            raise WorkflowValidationError(f"Node id {IN_NODE_ID!r} is reserved for the workflow input source")
     if len(node_ids) != len(set(node_ids)):
         raise WorkflowValidationError(f"Duplicate node ids: {node_ids}")
 
+    # $in is index -1 (earliest); real nodes are 0..n-1 in declaration order.
     node_index: dict[str, int] = {nid: i for i, nid in enumerate(node_ids)}
+    node_index[IN_NODE_ID] = -1
+    node_by_id = {n.id: n for n in wf.nodes}
+    in_ports = {k for k, _ in wf.initial_state}
 
-    # entry exists
-    if wf.entry not in node_index:
+    if wf.entry not in node_by_id:
         raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes")
 
-    # per-node type constraints
     _run_re = re.compile(r"^[\w.]+:[\w]+$")
     for node in wf.nodes:
         for tool in node.tools:
@@ -206,27 +225,55 @@ def validate_workflow(wf: WorkflowDef) -> None:
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
 
-    # edges reference existing nodes; back-edges need loop_max
+    # Edges: endpoints exist, ports exist, mappings are well-formed, loops bounded.
+    # fed[(dst_node, dst_port)] counts feeding data edges — every input port needs
+    # one; unconditional_fed counts only always-on (non-when, non-loop) feeders, so
+    # two producers can't silently target the same port (the old shared-key clash).
+    fed: dict[tuple[str, str], int] = {}
+    unconditional_fed: dict[tuple[str, str], int] = {}
     for edge in wf.edges:
-        if edge.src not in node_index:
+        if edge.src != IN_NODE_ID and edge.src not in node_by_id:
             raise WorkflowValidationError(f"Edge src {edge.src!r} not found in nodes")
-        if edge.dst not in node_index:
+        if edge.dst not in node_by_id:
             raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
-        # back-edge: dst appears earlier than src (would form a cycle)
+        if edge.dst == IN_NODE_ID:
+            raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
+
+        src_outputs = _output_port_names(wf, edge.src, in_ports)
+        dst_inputs = set(node_by_id[edge.dst].input_names)
+        for sport, dport in edge.mapping:
+            if sport not in src_outputs:
+                raise WorkflowValidationError(
+                    f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {sport!r}"
+                )
+            if dport not in dst_inputs:
+                raise WorkflowValidationError(
+                    f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
+                )
+            fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
+            if edge.when is None and edge.loop_max is None:
+                unconditional_fed[(edge.dst, dport)] = unconditional_fed.get((edge.dst, dport), 0) + 1
+
+        # back-edge (dst not strictly after src) must be a bounded loop
         if node_index[edge.dst] <= node_index[edge.src]:
             if not (edge.loop_max is not None and edge.loop_max >= 1):
                 raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
 
-    # reachability: every declared input must be produced by initial_state or a strictly earlier node
-    produced: set[str] = {k for k, _ in wf.initial_state}
+    # Two unconditional producers into one input port is the old shared-key clash.
+    for (dst, port), count in unconditional_fed.items():
+        if count > 1:
+            raise WorkflowValidationError(
+                f"Node {dst!r}: input port {port!r} is fed by {count} unconditional edges "
+                f"(ambiguous producer; use conditional edges if mutually exclusive)"
+            )
+
+    # Every declared input port must be fed by at least one edge mapping.
     for node in wf.nodes:
-        for key in node.inputs:
-            if key not in produced:
+        for port in node.input_names:
+            if fed.get((node.id, port), 0) == 0:
                 raise WorkflowValidationError(
-                    f"Node {node.id!r}: input {key!r} is not produced by any upstream node or initial_state"
+                    f"Node {node.id!r}: input port {port!r} is not fed by any edge mapping"
                 )
-        if node.output is not None:
-            produced.add(node.output)
 
 
 def load_workflow(path: str | Path) -> WorkflowDef:

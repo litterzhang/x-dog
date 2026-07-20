@@ -1,4 +1,9 @@
-"""Tests for flow.codegen — linear workflow code generation."""
+"""Tests for flow.codegen — port-model workflow code generation.
+
+Generated modules keep node-private outputs in a nested ``_OUT[node][port]`` dict
+(same shape as ``ExecResult.outputs``).  The regression tests assert the generated
+module and the interpreter agree by comparing those nested outputs.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from flow.codegen import generate
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 
 def _make_linear_wf() -> WorkflowDef:
@@ -24,44 +29,26 @@ def _make_linear_wf() -> WorkflowDef:
                 model="claude-3-haiku",
                 system_prompt="You are a helper.",
                 prompt="Say hello",
-                output="greeting",
+                output_ports=(Port("greeting"),),
             ),
             NodeDef(
                 id="step2",
                 model="claude-3-haiku",
                 system_prompt="Summarize.",
                 prompt="Summarize: {{greeting}}",
-                output="summary",
+                input_ports=(Port("greeting"),),
+                output_ports=(Port("summary"),),
             ),
         ),
-        edges=(EdgeDef(src="step1", dst="step2"),),
+        edges=(EdgeDef(src="step1", dst="step2", mapping=(("greeting", "greeting"),)),),
         default_model="claude-3-haiku",
         initial_state=(("topic", "testing"),),
     )
 
 
-def test_generate_linear_contains_node_functions() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
-    assert "async def node_step1(provider" in src
-    assert "async def node_step2(provider" in src
-
-
-def test_generate_linear_contains_main_guard() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
-    assert '__name__ == "__main__"' in src or "__name__ == '__main__'" in src
-
-
-def test_generate_linear_compiles() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
+def _ruff_clean(src: str) -> tuple[bool, str]:
+    """Compile *src* and run ruff; return (ok, message)."""
     compile(src, "<generated>", "exec")
-
-
-def test_generate_linear_ruff_clean() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
         f.write(src)
         tmp = Path(f.name)
@@ -71,14 +58,33 @@ def test_generate_linear_ruff_clean() -> None:
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
+        return result.returncode == 0, result.stdout + result.stderr
     finally:
         tmp.unlink(missing_ok=True)
 
 
+def test_generate_linear_contains_node_functions() -> None:
+    src = generate(_make_linear_wf())
+    assert "async def node_step1(provider" in src
+    assert "async def node_step2(provider" in src
+
+
+def test_generate_linear_contains_main_guard() -> None:
+    src = generate(_make_linear_wf())
+    assert '__name__ == "__main__"' in src or "__name__ == '__main__'" in src
+
+
+def test_generate_linear_compiles() -> None:
+    compile(generate(_make_linear_wf()), "<generated>", "exec")
+
+
+def test_generate_linear_ruff_clean() -> None:
+    ok, msg = _ruff_clean(generate(_make_linear_wf()))
+    assert ok, f"ruff failed:\n{msg}"
+
+
 def test_generate_linear_state_seed() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
+    src = generate(_make_linear_wf())
     # initial_state is emitted via repr() (proper escaping), so keys/values are
     # single-quoted Python literals.
     assert "'topic'" in src
@@ -86,9 +92,7 @@ def test_generate_linear_state_seed() -> None:
 
 
 def test_generate_linear_provider_name() -> None:
-    wf = _make_linear_wf()
-    src = generate(wf)
-    assert 'ai.provider("anthropic")' in src
+    assert 'ai.provider("anthropic")' in generate(_make_linear_wf())
 
 
 def _make_parallel_wf() -> WorkflowDef:
@@ -98,44 +102,49 @@ def _make_parallel_wf() -> WorkflowDef:
         provider="anthropic",
         entry="start",
         nodes=(
-            NodeDef(id="start", model="claude-3-haiku", system_prompt="S", prompt="P", output="s_out"),
-            NodeDef(id="left", model="claude-3-haiku", system_prompt="L", prompt="L", output="l_out"),
-            NodeDef(id="right", model="claude-3-haiku", system_prompt="R", prompt="R", output="r_out"),
-            NodeDef(id="end", model="claude-3-haiku", system_prompt="E", prompt="E", output="e_out"),
+            NodeDef(id="start", model="claude-3-haiku", system_prompt="S", prompt="P", output_ports=(Port("s_out"),)),
+            NodeDef(
+                id="left",
+                model="claude-3-haiku",
+                system_prompt="L",
+                prompt="L {{s_out}}",
+                input_ports=(Port("s_out"),),
+                output_ports=(Port("l_out"),),
+            ),
+            NodeDef(
+                id="right",
+                model="claude-3-haiku",
+                system_prompt="R",
+                prompt="R {{s_out}}",
+                input_ports=(Port("s_out"),),
+                output_ports=(Port("r_out"),),
+            ),
+            NodeDef(
+                id="end",
+                model="claude-3-haiku",
+                system_prompt="E",
+                prompt="E {{l_out}} {{r_out}}",
+                input_ports=(Port("l_out"), Port("r_out")),
+                output_ports=(Port("e_out"),),
+            ),
         ),
         edges=(
-            EdgeDef(src="start", dst="left"),
-            EdgeDef(src="start", dst="right"),
-            EdgeDef(src="left", dst="end"),
-            EdgeDef(src="right", dst="end"),
+            EdgeDef(src="start", dst="left", mapping=(("s_out", "s_out"),)),
+            EdgeDef(src="start", dst="right", mapping=(("s_out", "s_out"),)),
+            EdgeDef(src="left", dst="end", mapping=(("l_out", "l_out"),)),
+            EdgeDef(src="right", dst="end", mapping=(("r_out", "r_out"),)),
         ),
         default_model="claude-3-haiku",
     )
 
 
 def test_generate_parallel() -> None:
-    wf = _make_parallel_wf()
-    src = generate(wf)
-    # asyncio.gather must appear for the parallel wave
+    src = generate(_make_parallel_wf())
     assert "asyncio.gather(" in src
-    # both parallel nodes must be present in the gather call
     assert "node_left" in src
     assert "node_right" in src
-    # must compile cleanly
-    compile(src, "<generated>", "exec")
-    # must pass ruff
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-        f.write(src)
-        tmp = Path(f.name)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
-    finally:
-        tmp.unlink(missing_ok=True)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"ruff failed:\n{msg}"
 
 
 def _make_loop_wf() -> WorkflowDef:
@@ -145,39 +154,44 @@ def _make_loop_wf() -> WorkflowDef:
         provider="anthropic",
         entry="draft",
         nodes=(
-            NodeDef(id="draft", model="claude-3-haiku", system_prompt="D", prompt="Write draft", output="draft_out"),
-            NodeDef(id="review", model="claude-3-haiku", system_prompt="R", prompt="Review", output="verdict"),
-            NodeDef(id="publish", model="claude-3-haiku", system_prompt="P", prompt="Publish", output="pub_out"),
+            NodeDef(
+                id="draft",
+                model="claude-3-haiku",
+                system_prompt="D",
+                prompt="Write draft",
+                output_ports=(Port("draft_out"),),
+            ),
+            NodeDef(
+                id="review",
+                model="claude-3-haiku",
+                system_prompt="R",
+                prompt="Review {{draft_out}}",
+                input_ports=(Port("draft_out"),),
+                output_ports=(Port("verdict"),),
+            ),
+            NodeDef(
+                id="publish",
+                model="claude-3-haiku",
+                system_prompt="P",
+                prompt="Publish {{verdict}}",
+                input_ports=(Port("verdict"),),
+                output_ports=(Port("pub_out"),),
+            ),
         ),
         edges=(
-            EdgeDef(src="draft", dst="review"),
+            EdgeDef(src="draft", dst="review", mapping=(("draft_out", "draft_out"),)),
             EdgeDef(src="review", dst="draft", loop_max=3),
-            EdgeDef(src="review", dst="publish"),
+            EdgeDef(src="review", dst="publish", mapping=(("verdict", "verdict"),)),
         ),
         default_model="claude-3-haiku",
     )
 
 
 def test_generate_loop() -> None:
-    wf = _make_loop_wf()
-    src = generate(wf)
-    # A bounded loop must appear as range(loop_max)
+    src = generate(_make_loop_wf())
     assert "range(3)" in src
-    # must compile cleanly
-    compile(src, "<generated>", "exec")
-    # must pass ruff
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-        f.write(src)
-        tmp = Path(f.name)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
-    finally:
-        tmp.unlink(missing_ok=True)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"ruff failed:\n{msg}"
 
 
 def test_generate_with_tools() -> None:
@@ -191,7 +205,7 @@ def test_generate_with_tools() -> None:
                 model="claude-3-haiku",
                 system_prompt="You are a helper.",
                 prompt="Use echo.",
-                output="result",
+                output_ports=(Port("result"),),
                 tools=("echo",),
             ),
         ),
@@ -201,19 +215,8 @@ def test_generate_with_tools() -> None:
     src = generate(wf)
     assert "_REGISTRY.resolve(" in src
     assert '"echo"' in src
-    compile(src, "<generated>", "exec")
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-        f.write(src)
-        tmp = Path(f.name)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
-    finally:
-        tmp.unlink(missing_ok=True)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"ruff failed:\n{msg}"
 
 
 def test_generate_script() -> None:
@@ -226,7 +229,7 @@ def test_generate_script() -> None:
                 id="step1",
                 type="script",
                 run="myscripts:prep",
-                output="result",
+                output_ports=(Port("result"),),
             ),
         ),
         edges=(),
@@ -235,42 +238,27 @@ def test_generate_script() -> None:
     src = generate(wf)
     assert "prep as _script_" in src
     assert "await _script_" in src  # run-ref functions are awaited
-    compile(src, "<generated>", "exec")
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-        f.write(src)
-        tmp = Path(f.name)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
-    finally:
-        tmp.unlink(missing_ok=True)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"ruff failed:\n{msg}"
 
 
 # ---------------------------------------------------------------------------
 # Regression: conditional branches and conditional loops must generate code
 # whose runtime behaviour matches the interpreter (execute()).  These are pure
-# script workflows, so the generated module runs with no LLM.
+# script workflows, so the generated module runs with no LLM.  Comparisons are
+# over the nested ``_OUT`` / ``outputs`` shape.
 # ---------------------------------------------------------------------------
 
 
-async def _run_generated(wf: WorkflowDef) -> dict[str, str]:
-    """Generate wf, ruff-check it, exec the module in-process, return final STATE."""
+async def _run_generated(wf: WorkflowDef) -> dict[str, dict[str, str]]:
+    """Generate wf, ruff-check it, exec the module in-process, return nested _OUT."""
     src = generate(wf)
-    compile(src, "<generated>", "exec")
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
         f.write(src)
         tmp = Path(f.name)
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"generated code not ruff-clean:\n{src}\n{result.stdout}"
         spec = importlib.util.spec_from_file_location(f"gen_{uuid.uuid4().hex}", tmp)
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
@@ -278,7 +266,7 @@ async def _run_generated(wf: WorkflowDef) -> dict[str, str]:
         # The test already runs inside an event loop (pytest-asyncio), so await
         # the generated coroutine directly rather than asyncio.run().
         await mod.main()
-        return dict(mod.STATE)
+        return {k: dict(v) for k, v in mod._OUT.items()}
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -287,8 +275,7 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
     """route -> (odd | even) guarded edges: only the matching branch runs.
 
     Regression for the bug where two conditionally-reached nodes in the same BFS
-    wave were emitted as an unconditional ``asyncio.gather`` (both branches ran,
-    dropping the ``when`` guards).
+    wave were emitted as an unconditional ``asyncio.gather`` (both branches ran).
     """
     from flow.executor import execute
 
@@ -302,32 +289,29 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
             NodeDef(
                 id="route",
                 type="script",
-                inputs=("n",),
-                input_schema=(("n", "integer"),),
+                input_ports=(Port("n", "integer"),),
                 code="def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
-                output="kind",
-                output_type="string",
+                output_ports=(Port("kind", "string"),),
             ),
             NodeDef(
                 id="handle_odd",
                 type="script",
-                inputs=("n",),
-                input_schema=(("n", "integer"),),
+                input_ports=(Port("n", "integer"),),
                 code="def handle_odd(ctx, n):\n    return f'ODD:{n * 3}'",
-                output="result",
-                output_type="string",
+                output_ports=(Port("result", "string"),),
             ),
             NodeDef(
                 id="handle_even",
                 type="script",
-                inputs=("n",),
-                input_schema=(("n", "integer"),),
+                input_ports=(Port("n", "integer"),),
                 code="def handle_even(ctx, n):\n    return f'EVEN:{n // 2}'",
-                output="result",
-                output_type="string",
+                output_ports=(Port("result", "string"),),
             ),
         ),
         edges=(
+            EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="handle_odd", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="handle_even", mapping=(("n", "n"),)),
             EdgeDef(src="route", dst="handle_odd", when=Condition(op="equals", value="{{kind}}", text="odd")),
             EdgeDef(src="route", dst="handle_even", when=Condition(op="equals", value="{{kind}}", text="even")),
         ),
@@ -337,18 +321,13 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
     run_result = await execute(wf)
 
     # n=7 is odd -> only handle_odd fires
-    assert gen_state["result"] == "ODD:21"
-    # generated code agrees with the interpreter
-    assert gen_state["result"] == run_result.final_state["result"]
+    assert gen_state["handle_odd"]["result"] == "ODD:21"
+    assert "handle_even" not in gen_state
+    assert gen_state == dict(run_result.outputs)
 
 
 async def test_generate_conditional_loop_matches_runtime() -> None:
-    """A conditional back-edge loop must early-exit when its guard fails.
-
-    Regression for the bug where a loop was emitted as ``for _ in range(max)``
-    with no break, so it always ran the maximum iterations instead of stopping
-    when the back-edge condition stopped holding.
-    """
+    """A conditional back-edge loop must early-exit when its guard fails."""
     from flow.executor import execute
 
     wf = WorkflowDef(
@@ -361,27 +340,25 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
             NodeDef(
                 id="init",
                 type="script",
-                inputs=("counter",),
-                input_schema=(("counter", "integer"),),
+                input_ports=(Port("counter", "integer"),),
                 code="def init(ctx, counter):\n    return counter",
-                output="c",
-                output_type="integer",
+                output_ports=(Port("c", "integer"),),
             ),
             NodeDef(
                 id="inc",
                 type="script",
-                inputs=("c",),
-                input_schema=(("c", "integer"),),
+                input_ports=(Port("c", "integer"),),
                 code="def inc(ctx, c):\n    return c + 1",
-                output="c",
-                output_type="integer",
+                output_ports=(Port("c", "integer"),),
             ),
         ),
         edges=(
-            EdgeDef(src="init", dst="inc"),
+            EdgeDef(src=IN_NODE_ID, dst="init", mapping=(("counter", "counter"),)),
+            EdgeDef(src="init", dst="inc", mapping=(("c", "c"),)),
             EdgeDef(
                 src="inc",
                 dst="inc",
+                mapping=(("c", "c"),),  # feed inc's own output back to its input each iteration
                 when=Condition(op="not", children=(Condition(op="equals", value="{{c}}", text="3"),)),
                 loop_max=10,
             ),
@@ -392,18 +369,12 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
     run_result = await execute(wf)
 
     # increments stop as soon as c == 3, not after all 10 iterations
-    assert gen_state["c"] == "3"
-    assert gen_state["c"] == run_result.final_state["c"]
+    assert gen_state["inc"]["c"] == "3"
+    assert gen_state == dict(run_result.outputs)
 
 
 async def test_generate_colliding_node_ids_stay_distinct() -> None:
-    """Node ids that normalise to the same identifier must not shadow each other.
-
-    ``a-b`` and ``a.b`` both map to ``a_b`` under identifier rules; without a
-    uniqueness pass they'd emit two ``node_a_b`` / ``_script_a_b`` definitions and
-    one node would silently win.  The generated code must keep them distinct and
-    match the interpreter.
-    """
+    """Node ids that normalise to the same identifier must not shadow each other."""
     from flow.executor import execute
 
     wf = WorkflowDef(
@@ -417,38 +388,32 @@ async def test_generate_colliding_node_ids_stay_distinct() -> None:
                 id="a-b",
                 type="script",
                 code="def f(ctx, x):\n    return x + '-B'",
-                output="vb",
-                output_type="string",
-                inputs=("x",),
-                input_schema=(("x", "string"),),
+                output_ports=(Port("vb", "string"),),
+                input_ports=(Port("x", "string"),),
             ),
             NodeDef(
                 id="a.b",
                 type="script",
                 code="def g(ctx, vb):\n    return vb + '.B'",
-                output="vc",
-                output_type="string",
-                inputs=("vb",),
-                input_schema=(("vb", "string"),),
+                output_ports=(Port("vc", "string"),),
+                input_ports=(Port("vb", "string"),),
             ),
         ),
-        edges=(EdgeDef(src="a-b", dst="a.b"),),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="a-b", mapping=(("x", "x"),)),
+            EdgeDef(src="a-b", dst="a.b", mapping=(("vb", "vb"),)),
+        ),
     )
 
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert gen_state["vc"] == "1-B.B"
-    assert gen_state == dict(run_result.final_state)
+    assert gen_state["a.b"]["vc"] == "1-B.B"
+    assert gen_state == dict(run_result.outputs)
 
 
 async def test_generate_escapes_initial_state_values() -> None:
-    """initial_state values with backslashes/quotes/newlines must survive verbatim.
-
-    A bare f-string dict literal would corrupt "a\\b" (Python reads \\b as a
-    backspace).  repr() escaping keeps the generated STATE faithful, matching the
-    interpreter which just holds the raw string.
-    """
+    """initial_state values with backslashes/quotes/newlines must survive verbatim."""
     from flow.executor import execute
 
     wf = WorkflowDef(
@@ -462,111 +427,120 @@ async def test_generate_escapes_initial_state_values() -> None:
                 id="mk",
                 type="script",
                 code="def mk(ctx, p):\n    return p + '!' ",
-                output="out",
-                output_type="string",
-                inputs=("p",),
-                input_schema=(("p", "string"),),
+                output_ports=(Port("out", "string"),),
+                input_ports=(Port("p", "string"),),
             ),
         ),
-        edges=(),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="mk", mapping=(("p", "p"),)),),
     )
 
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert gen_state["p"] == "a\\b"
-    assert gen_state["out"] == "a\\b!"
-    assert gen_state == dict(run_result.final_state)
+    assert gen_state[IN_NODE_ID]["p"] == "a\\b"
+    assert gen_state["mk"]["out"] == "a\\b!"
+    assert gen_state == dict(run_result.outputs)
+
+
+def _sc(nid: str, code: str, out: str, inp: tuple[Port, ...] = ()) -> NodeDef:
+    return NodeDef(id=nid, type="script", code=code, output_ports=(Port(out, "string"),), input_ports=inp)
 
 
 async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> None:
-    """A fan-in node waits for ALL predecessors; a skipped branch skips it too.
-
-    route picks 'odd', so the 'even' branch never runs. merge depends on both
-    odd and even, so — like the interpreter — merge must be skipped (final absent).
-    """
+    """A fan-in node waits for ALL predecessors; a skipped branch skips it too."""
     from flow.executor import execute
 
-    def sc(nid, code, out, inp=(), sch=()):
-        return NodeDef(id=nid, type="script", code=code, output=out, output_type="string",
-                       inputs=inp, input_schema=sch)
-
     wf = WorkflowDef(
-        name="cond-fan-in", provider="copilot", entry="route", default_model="m",
+        name="cond-fan-in",
+        provider="copilot",
+        entry="route",
+        default_model="m",
         initial_state=(("n", "7"),),
         nodes=(
-            sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind",
-               inp=("n",), sch=(("n", "integer"),)),
-            sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
-            sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
-            sc("merge", "def merge(ctx, branch):\n    return 'got ' + branch", "final",
-               inp=("branch",), sch=(("branch", "string"),)),
+            _sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind", (Port("n", "integer"),)),
+            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", "integer"),)),
+            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", "integer"),)),
+            _sc("merge", "def merge(ctx, branch):\n    return 'got ' + branch", "final", (Port("branch", "string"),)),
         ),
         edges=(
+            EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="odd", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="even", mapping=(("n", "n"),)),
             EdgeDef(src="route", dst="odd", when=Condition(op="equals", value="{{kind}}", text="odd")),
             EdgeDef(src="route", dst="even", when=Condition(op="equals", value="{{kind}}", text="even")),
-            EdgeDef(src="odd", dst="merge"),
-            EdgeDef(src="even", dst="merge"),
+            EdgeDef(src="odd", dst="merge", mapping=(("branch", "branch"),)),
+            EdgeDef(src="even", dst="merge", mapping=(("branch", "branch"),)),
         ),
     )
 
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert "final" not in gen_state  # merge skipped: even branch never ran
-    assert gen_state["branch"] == "O7"
-    assert gen_state == dict(run_result.final_state)
+    assert "merge" not in gen_state  # merge skipped: even branch never ran
+    assert gen_state["odd"]["branch"] == "O7"
+    assert gen_state == dict(run_result.outputs)
 
 
 async def test_generate_conditional_skip_propagates_downstream() -> None:
-    """When a guarded node is skipped, its unconditional successor is skipped too.
-
-    route emits 'weird', so 'a' (guarded on kind == 'never') never runs; 'b'
-    depends on 'a', so it must be skipped as well — matching the interpreter.
-    """
+    """When a guarded node is skipped, its unconditional successor is skipped too."""
     from flow.executor import execute
 
     wf = WorkflowDef(
-        name="cond-skip", provider="copilot", entry="route", default_model="m",
+        name="cond-skip",
+        provider="copilot",
+        entry="route",
+        default_model="m",
         initial_state=(("n", "7"),),
         nodes=(
-            NodeDef(id="route", type="script", code="def route(ctx, n):\n    return 'weird'",
-                    output="kind", output_type="string", inputs=("n",), input_schema=(("n", "integer"),)),
-            NodeDef(id="a", type="script", code="def a(ctx):\n    return 'A'", output="ra", output_type="string"),
-            NodeDef(id="b", type="script", code="def b(ctx, ra):\n    return ra + 'B'", output="rb",
-                    output_type="string", inputs=("ra",), input_schema=(("ra", "string"),)),
+            NodeDef(
+                id="route",
+                type="script",
+                code="def route(ctx, n):\n    return 'weird'",
+                output_ports=(Port("kind", "string"),),
+                input_ports=(Port("n", "integer"),),
+            ),
+            NodeDef(id="a", type="script", code="def a(ctx):\n    return 'A'", output_ports=(Port("ra", "string"),)),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, ra):\n    return ra + 'B'",
+                output_ports=(Port("rb", "string"),),
+                input_ports=(Port("ra", "string"),),
+            ),
         ),
         edges=(
+            EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
             EdgeDef(src="route", dst="a", when=Condition(op="equals", value="{{kind}}", text="never")),
-            EdgeDef(src="a", dst="b"),
+            EdgeDef(src="a", dst="b", mapping=(("ra", "ra"),)),
         ),
     )
 
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert "ra" not in gen_state and "rb" not in gen_state  # a skipped -> b skipped
-    assert gen_state == dict(run_result.final_state)
+    assert "a" not in gen_state and "b" not in gen_state  # a skipped -> b skipped
+    assert gen_state == dict(run_result.outputs)
 
 
 async def test_generate_conditional_branch_positive_path_runs_downstream() -> None:
-    """The taken branch and its fan-in successor DO run (n=4 -> even -> merge)."""
+    """The taken branch runs (n=4 -> even)."""
     from flow.executor import execute
 
-    def sc(nid, code, out, inp=(), sch=()):
-        return NodeDef(id=nid, type="script", code=code, output=out, output_type="string",
-                       inputs=inp, input_schema=sch)
-
     wf = WorkflowDef(
-        name="cond-pos", provider="copilot", entry="route", default_model="m",
+        name="cond-pos",
+        provider="copilot",
+        entry="route",
+        default_model="m",
         initial_state=(("n", "4"),),
         nodes=(
-            sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind",
-               inp=("n",), sch=(("n", "integer"),)),
-            sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
-            sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", inp=("n",), sch=(("n", "integer"),)),
+            _sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind", (Port("n", "integer"),)),
+            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", "integer"),)),
+            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", "integer"),)),
         ),
         edges=(
+            EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="odd", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="even", mapping=(("n", "n"),)),
             EdgeDef(src="route", dst="odd", when=Condition(op="equals", value="{{kind}}", text="odd")),
             EdgeDef(src="route", dst="even", when=Condition(op="equals", value="{{kind}}", text="even")),
         ),
@@ -575,5 +549,5 @@ async def test_generate_conditional_branch_positive_path_runs_downstream() -> No
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert gen_state["branch"] == "E4"
-    assert gen_state == dict(run_result.final_state)
+    assert gen_state["even"]["branch"] == "E4"
+    assert gen_state == dict(run_result.outputs)

@@ -1,10 +1,10 @@
 """flow.runtime — the runtime context passed to script nodes.
 
-A script node's function is called as ``fn(ctx, **inputs)`` where *ctx* is a
-:class:`RuntimeContext` giving read access to the running workflow.  The declared
-``inputs`` arrive as keyword arguments (by name from state); ``ctx`` is there for
-scripts that also need the wider picture (the full state snapshot, which node they
-are, which workflow).  Kept small and frozen; extend as new needs appear.
+A script node's function is called as ``fn(ctx, **inputs)`` where the declared
+input **ports** arrive as keyword arguments (by port name, typed).  *ctx* is a
+:class:`RuntimeContext` giving the script the wider picture: the same port-local
+inputs as a mapping, plus which node/workflow it is running in.  Kept small and
+frozen; extend as new needs appear.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from dataclasses import dataclass
 class RuntimeContext:
     """Read-only view of the workflow for a single script-node invocation."""
 
-    state: Mapping[str, str]
-    """Snapshot of the full workflow state at the moment this node runs."""
+    inputs: Mapping[str, str]
+    """This node's input ports (port name -> string value), before typed coercion."""
 
     workflow_name: str
     """The ``name`` of the workflow being executed."""

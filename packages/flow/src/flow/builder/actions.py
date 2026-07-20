@@ -14,10 +14,10 @@ from dataclasses import replace
 from typing import Literal
 
 from flow.builder.model import BuilderModel
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 # Node scalar fields the editor form can set directly.
-_STR_FIELDS = frozenset({"model", "system_prompt", "prompt", "output", "run"})
+_STR_FIELDS = frozenset({"model", "system_prompt", "prompt", "run"})
 
 
 def _unique_node_id(wf: WorkflowDef, base: str) -> str:
@@ -78,14 +78,14 @@ def rename_node(model: BuilderModel, node_id: str, new_id: str) -> BuilderModel:
 
 
 def set_field(model: BuilderModel, node_id: str, field_name: str, value: str) -> BuilderModel:
-    """Set a scalar node field (model/system_prompt/prompt/output/run).
+    """Set a scalar node field (model/system_prompt/prompt/run).
 
-    Empty string clears the optional fields (model/output/run) to ``None``.
+    Empty string clears the optional fields (model/run) to ``None``.
     """
     if field_name not in _STR_FIELDS:
         raise ValueError(f"unknown node field {field_name!r}")
     stored: str | None = value
-    if field_name in ("model", "output", "run") and value == "":
+    if field_name in ("model", "run") and value == "":
         stored = None
 
     def _apply(n: NodeDef) -> NodeDef:
@@ -95,8 +95,6 @@ def set_field(model: BuilderModel, node_id: str, field_name: str, value: str) ->
             return replace(n, system_prompt=value)
         if field_name == "prompt":
             return replace(n, prompt=value)
-        if field_name == "output":
-            return replace(n, output=stored)
         return replace(n, run=stored)  # field_name == "run"
 
     return model.with_wf(_map_node(model.wf, node_id, _apply))
@@ -108,9 +106,15 @@ def set_tools(model: BuilderModel, node_id: str, tools: tuple[str, ...]) -> Buil
     return model.with_wf(wf)
 
 
-def set_inputs(model: BuilderModel, node_id: str, inputs: tuple[str, ...]) -> BuilderModel:
-    """Replace a node's declared inputs."""
-    wf = _map_node(model.wf, node_id, lambda n: replace(n, inputs=tuple(inputs)))
+def set_input_ports(model: BuilderModel, node_id: str, ports: tuple[Port, ...]) -> BuilderModel:
+    """Replace a node's input ports."""
+    wf = _map_node(model.wf, node_id, lambda n: replace(n, input_ports=tuple(ports)))
+    return model.with_wf(wf)
+
+
+def set_output_ports(model: BuilderModel, node_id: str, ports: tuple[Port, ...]) -> BuilderModel:
+    """Replace a node's output ports."""
+    wf = _map_node(model.wf, node_id, lambda n: replace(n, output_ports=tuple(ports)))
     return model.with_wf(wf)
 
 

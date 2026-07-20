@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 
 def _condition_to_dict(cond: Condition) -> dict[str, Any]:
@@ -28,6 +28,14 @@ def _condition_to_dict(cond: Condition) -> dict[str, Any]:
     return {cond.op: [_condition_to_dict(c) for c in cond.children]}
 
 
+def _ports_to_json(ports: tuple[Port, ...]) -> list[Any]:
+    """Emit a port list: ``{name,type}`` when typed, bare name when ``string``."""
+    out: list[Any] = []
+    for p in ports:
+        out.append(p.name if p.type == "string" else {"name": p.name, "type": p.type})
+    return out
+
+
 def _node_to_dict(node: NodeDef) -> dict[str, Any]:
     """Inverse of ``flow.loader._parse_node`` — emit only non-default fields."""
     data: dict[str, Any] = {"id": node.id, "type": node.type}
@@ -37,25 +45,16 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["system_prompt"] = node.system_prompt
     if node.prompt:
         data["prompt"] = node.prompt
-    if node.output is not None:
-        # Typed output round-trips as {name, type}; bare output stays a string.
-        if node.output_type is not None:
-            data["output"] = {"name": node.output, "type": node.output_type}
-        else:
-            data["output"] = node.output
     if node.tools:
         data["tools"] = list(node.tools)
     if node.run is not None:
         data["run"] = node.run
     if node.code is not None:
         data["code"] = node.code
-    if node.inputs:
-        # Typed inputs round-trip as [{name, type}]; bare names stay strings.
-        if node.input_schema:
-            type_of = dict(node.input_schema)
-            data["inputs"] = [{"name": n, "type": type_of.get(n, "string")} for n in node.inputs]
-        else:
-            data["inputs"] = list(node.inputs)
+    if node.input_ports:
+        data["inputs"] = _ports_to_json(node.input_ports)
+    if node.output_ports:
+        data["outputs"] = _ports_to_json(node.output_ports)
     if node.output_schema:
         data["output_schema"] = {k: v for k, v in node.output_schema}
     return data
@@ -64,6 +63,8 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
 def _edge_to_dict(edge: EdgeDef) -> dict[str, Any]:
     """Inverse of ``flow.loader._parse_edge``."""
     data: dict[str, Any] = {"from": edge.src, "to": edge.dst}
+    if edge.mapping:
+        data["map"] = {s: d for s, d in edge.mapping}
     if edge.when is not None:
         data["when"] = _condition_to_dict(edge.when)
     if edge.loop_max is not None:

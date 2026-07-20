@@ -79,18 +79,13 @@ async def test_run_dryrun() -> None:
 
     result = await execute(wf, stream_fn_factory=stub_factory)
 
-    # All three output keys must be present in final_state
-    assert "research_notes" in result.final_state, "missing research_notes"
-    assert "article" in result.final_state, "missing article"
-    assert "review_result" in result.final_state, "missing review_result"
+    # All three producing nodes must have written their output ports.
+    assert "research_notes" in result.outputs["research"], "missing research_notes"
+    assert "article" in result.outputs["write"], "missing article"
+    assert "review_result" in result.outputs["review"], "missing review_result"
 
     # The review node must have returned APPROVED (loop not taken)
-    assert "APPROVED" in result.final_state["review_result"]
-
-    # node_outputs mirrors final_state for these keys
-    assert result.node_outputs["research_notes"] == result.final_state["research_notes"]
-    assert result.node_outputs["article"] == result.final_state["article"]
-    assert result.node_outputs["review_result"] == result.final_state["review_result"]
+    assert "APPROVED" in result.outputs["review"]["review_result"]
 
 
 async def test_generate_parity() -> None:
@@ -179,23 +174,21 @@ async def test_generate_parity() -> None:
         # Call main() on the generated module.
         await gen_module.main()  # type: ignore[attr-defined]
 
-        # Verify STATE in the generated module.
-        gen_state: dict[str, str] = gen_module.STATE  # type: ignore[attr-defined]
+        # Verify _OUT (nested node->port->value) in the generated module.
+        gen_out: dict[str, dict[str, str]] = gen_module._OUT  # type: ignore[attr-defined]
 
-        assert "research_notes" in gen_state, f"generated STATE missing research_notes: {gen_state}"
-        assert "article" in gen_state, f"generated STATE missing article: {gen_state}"
-        assert "review_result" in gen_state, f"generated STATE missing review_result: {gen_state}"
-        assert stub_text in gen_state["review_result"], (
-            f"expected '{stub_text}' in review_result, got: {gen_state['review_result']}"
+        assert "research_notes" in gen_out["research"], f"generated _OUT missing research_notes: {gen_out}"
+        assert "article" in gen_out["write"], f"generated _OUT missing article: {gen_out}"
+        assert "review_result" in gen_out["review"], f"generated _OUT missing review_result: {gen_out}"
+        assert stub_text in gen_out["review"]["review_result"], (
+            f"expected '{stub_text}' in review_result, got: {gen_out['review']['review_result']}"
         )
 
-        # --- state parity: interpreter result must match generated module result ---
+        # --- parity: interpreter result must match generated module result ---
         stub_factory = _make_stub_factory(responses={model: stub_text}, default=stub_text)
         interp_result = await execute(wf, stream_fn_factory=stub_factory)
 
-        assert gen_state["research_notes"] == interp_result.final_state["research_notes"]
-        assert gen_state["article"] == interp_result.final_state["article"]
-        assert gen_state["review_result"] == interp_result.final_state["review_result"]
+        assert gen_out == dict(interp_result.outputs)
 
     finally:
         _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
@@ -239,10 +232,10 @@ async def test_tools_script_dryrun() -> None:
     result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
 
     # Script node must have run its inline function and stored the topic value
-    assert result.final_state.get("prepped") == "workflow engines"
+    assert result.outputs["prep"].get("prepped") == "workflow engines"
 
-    # Agent node must have stored something under 'analysis'
-    assert "analysis" in result.final_state
+    # Agent node must have stored something under its 'analysis' port
+    assert "analysis" in result.outputs.get("analyze", {})
 
 
 async def test_agent_calculator_dryrun() -> None:
@@ -278,9 +271,9 @@ async def test_agent_calculator_dryrun() -> None:
     result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
 
     # script node built the arithmetic problem from typed integer inputs
-    assert result.final_state.get("problem") == "347 + 895"
+    assert result.outputs["make_problem"].get("problem") == "347 + 895"
     # agent node ran and stored an answer (real content requires a live provider)
-    assert "answer" in result.final_state
+    assert "answer" in result.outputs.get("solve", {})
 
 
 async def test_generate_tools_script_parity() -> None:
@@ -310,7 +303,7 @@ async def test_generate_tools_script_parity() -> None:
     # --- structural: inline script node emits a self-contained ctx-first
     # function + wrapper; agent node uses _REGISTRY.resolve ---
     assert "def _script_prep(ctx" in src, "inline script must be emitted as a top-level _script_prep"
-    assert "_script_prep(_ctx)" in src, "generated wrapper must call _script_prep with a RuntimeContext"
+    assert "_script_prep(_ctx" in src, "generated wrapper must call _script_prep with a RuntimeContext"
     assert "RuntimeContext(" in src, "script wrapper must build a RuntimeContext"
     assert "_REGISTRY.resolve(" in src, "generated agent node must call _REGISTRY.resolve("
 
@@ -376,18 +369,18 @@ async def test_auto_enrich_dryrun() -> None:
 
     result = await execute(wf, stream_fn_factory=factory, tool_registry=default_registry())
 
-    # pull node: the inline script copies state['topic'] into state['record']
-    assert result.final_state.get("record") == topic, (
-        f"expected record={topic!r}, got {result.final_state.get('record')!r}"
+    # pull node: the inline script copies its topic input port into record
+    assert result.outputs["pull"].get("record") == topic, (
+        f"expected record={topic!r}, got {result.outputs['pull'].get('record')!r}"
     )
 
-    # enrich node: structured output stored as JSON
-    assert "enriched" in result.final_state, "missing enriched key"
-    enriched = json.loads(result.final_state["enriched"])
+    # enrich node: structured output stored as JSON in its enriched port
+    assert "enriched" in result.outputs["enrich"], "missing enriched key"
+    enriched = json.loads(result.outputs["enrich"]["enriched"])
     assert "category" in enriched, f"enriched missing 'category': {enriched}"
     assert "token" in enriched, f"enriched missing 'token': {enriched}"
     assert "summary" in enriched, f"enriched missing 'summary': {enriched}"
 
-    # persist node: the inline script echoes state['record'] into state['saved']
-    assert "saved" in result.final_state, "missing saved key"
-    assert result.final_state["saved"] == topic
+    # persist node: the inline script echoes record into saved
+    assert "saved" in result.outputs["persist"], "missing saved key"
+    assert result.outputs["persist"]["saved"] == topic

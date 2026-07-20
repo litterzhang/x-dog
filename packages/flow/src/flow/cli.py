@@ -105,7 +105,7 @@ async def _cmd_run(
         else:
             result = await execute(wf, timeout=timeout, base_dir=base_dir)
 
-    print(json.dumps(result.final_state, indent=2))
+    print(json.dumps(result.outputs, indent=2, ensure_ascii=False))
 
 
 def _cmd_generate(config_path: str, *, output: str | None) -> None:

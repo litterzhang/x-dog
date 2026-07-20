@@ -10,12 +10,12 @@
     "result": ""
   },
   "nodes": [
-    {"id": "a", "prompt": "Step A", "output": "step_a_out"},
-    {"id": "b", "prompt": "Step B", "inputs": ["step_a_out"], "output": "step_b_out"},
+    {"id": "a", "prompt": "Step A", "outputs": ["step_a_out"]},
+    {"id": "b", "prompt": "Step B", "inputs": ["step_a_out"], "outputs": ["step_b_out"]},
     {"id": "c", "prompt": "Step C", "inputs": ["step_b_out"]}
   ],
   "edges": [
-    {"from": "a", "to": "b"},
-    {"from": "b", "to": "c"}
+    {"from": "a", "to": "b", "map": {"step_a_out": "step_a_out"}},
+    {"from": "b", "to": "c", "map": {"step_b_out": "step_b_out"}}
   ]
 }

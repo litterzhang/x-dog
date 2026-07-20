@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from flow.builder import actions
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.builder.serialize import workflow_to_dict
 from flow.loader import parse_workflow
-from flow.models import Condition
+from flow.models import Condition, EdgeDef, Port
+
+
+def _add_mapped_edge(
+    model: BuilderModel,
+    src: str,
+    dst: str,
+    mapping: tuple[tuple[str, str], ...],
+) -> BuilderModel:
+    """Append a data edge carrying an explicit port mapping.
+
+    ``actions.add_edge`` only builds control edges (no mapping), so tests that
+    need a downstream input port to be *fed* wire the mapped edge directly.
+    """
+    edge = EdgeDef(src=src, dst=dst, mapping=mapping)
+    return model.with_wf(replace(model.wf, edges=model.wf.edges + (edge,)))
 
 
 def test_empty_model_is_invalid_until_entry_exists() -> None:
@@ -74,8 +90,8 @@ def test_unreachable_input_surfaces_validation_error() -> None:
     m = actions.add_node(m, "agent")  # entry 'agent'
     m = actions.add_node(m, "agent")  # 'agent2'
     m = actions.add_edge(m, "agent", "agent2")
-    # agent2 declares an input nobody produces -> live validation error
-    m = actions.set_inputs(m, "agent2", ("missing_key",))
+    # agent2 declares an input port nobody feeds -> live validation error
+    m = actions.set_input_ports(m, "agent2", (Port("missing_key"),))
     assert m.error is not None
     assert "missing_key" in m.error
 
@@ -83,10 +99,11 @@ def test_unreachable_input_surfaces_validation_error() -> None:
 def test_reachable_input_is_valid() -> None:
     m = empty_model()
     m = actions.add_node(m, "agent")
-    m = actions.set_field(m, "agent", "output", "rec")
+    m = actions.set_output_ports(m, "agent", (Port("rec"),))
     m = actions.add_node(m, "agent")
-    m = actions.add_edge(m, "agent", "agent2")
-    m = actions.set_inputs(m, "agent2", ("rec",))
+    m = actions.set_input_ports(m, "agent2", (Port("rec"),))
+    # the mapped edge feeds agent2's 'rec' input from agent's 'rec' output
+    m = _add_mapped_edge(m, "agent", "agent2", (("rec", "rec"),))
     assert m.error is None
 
 
@@ -134,12 +151,12 @@ def test_build_then_serialize_roundtrips() -> None:
     m = actions.set_initial_state(m, (("topic", "x"),))
     m = actions.add_node(m, "script")
     m = actions.set_field(m, "script", "run", "myscripts:prep")
-    m = actions.set_field(m, "script", "output", "rec")
+    m = actions.set_output_ports(m, "script", (Port("rec"),))
     m = actions.add_node(m, "agent")
     m = actions.set_field(m, "agent", "prompt", "do {{rec}}")
-    m = actions.set_field(m, "agent", "output", "out")
-    m = actions.set_inputs(m, "agent", ("rec",))
-    m = actions.add_edge(m, "script", "agent")
+    m = actions.set_output_ports(m, "agent", (Port("out"),))
+    m = actions.set_input_ports(m, "agent", (Port("rec"),))
+    m = _add_mapped_edge(m, "script", "agent", (("rec", "rec"),))
     assert m.error is None
     # round-trips through JSON
     reparsed = parse_workflow(workflow_to_dict(m.wf))

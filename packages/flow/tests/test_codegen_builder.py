@@ -27,9 +27,15 @@ from flow.codegen_tools import (
 )
 from flow.executor import execute
 from flow.loader import load_workflow
+from flow.runtime import RuntimeContext
 
 _EXAMPLES_DIR = pathlib.Path(__file__).parent.parent / "examples"
 _WF_PATH = _EXAMPLES_DIR / "codegen_builder.json"
+
+
+def _ctx(**inputs: str) -> RuntimeContext:
+    """A minimal RuntimeContext for calling script functions directly."""
+    return RuntimeContext(inputs=inputs, workflow_name="test", node_id="n")
 
 
 # ---------------------------------------------------------------------------
@@ -54,17 +60,17 @@ def test_validate_and_graph() -> None:
 
 
 async def test_next_task_pops_head() -> None:
-    out = json.loads(await next_task({"tasks": json.dumps(["a", "b", "c"])}))
+    out = json.loads(await next_task(_ctx(), tasks=json.dumps(["a", "b", "c"])))
     assert out == {"current": "a", "remaining": ["b", "c"], "done": False}
 
 
 async def test_next_task_empty_is_done() -> None:
-    out = json.loads(await next_task({"tasks": "[]"}))
+    out = json.loads(await next_task(_ctx(), tasks="[]"))
     assert out == {"current": "", "remaining": [], "done": True}
 
 
 async def test_next_task_plain_string() -> None:
-    out = json.loads(await next_task({"tasks": "single task"}))
+    out = json.loads(await next_task(_ctx(), tasks="single task"))
     assert out["current"] == "single task"
     assert out["done"] is False
 
@@ -80,19 +86,19 @@ async def test_run_checks_pass(tmp_path: pathlib.Path) -> None:
         "from mod import add\n\n\ndef test_add() -> None:\n    assert add(2, 3) == 5\n",
         encoding="utf-8",
     )
-    report = await run_checks({"target_path": str(tmp_path)})
+    report = await run_checks(_ctx(), target_path=str(tmp_path))
     assert report.startswith("PASS"), report
 
 
 async def test_run_checks_fail_ruff(tmp_path: pathlib.Path) -> None:
     # Unused import -> ruff F401 failure.
     (tmp_path / "bad.py").write_text("import os\n", encoding="utf-8")
-    report = await run_checks({"target_path": str(tmp_path)})
+    report = await run_checks(_ctx(), target_path=str(tmp_path))
     assert report.startswith("FAIL"), report
 
 
 async def test_run_checks_no_target() -> None:
-    report = await run_checks({})
+    report = await run_checks(_ctx(), target_path="")
     assert report.startswith("FAIL")
 
 
@@ -102,7 +108,7 @@ async def test_run_checks_no_target() -> None:
 
 
 async def test_verify_generated_module_needs_all_paths() -> None:
-    report = await verify_generated_module({"module_file": "x"})
+    report = await verify_generated_module(_ctx(), module_file="x", mypy_target="", test_file="")
     assert report.startswith("FAIL")
 
 
@@ -110,7 +116,7 @@ async def test_autofix_module_cleans_imports(tmp_path: pathlib.Path) -> None:
     f = tmp_path / "mod.py"
     # unused import + unsorted -> ruff --fix removes/reorders it
     f.write_text("import sys\nimport os\n\n\ndef g() -> int:\n    return 1\n", encoding="utf-8")
-    report = await autofix_module({"module_file": str(f)})
+    report = await autofix_module(_ctx(), module_file=str(f))
     assert "autofixed" in report
     cleaned = f.read_text(encoding="utf-8")
     assert "import os" not in cleaned
@@ -118,7 +124,7 @@ async def test_autofix_module_cleans_imports(tmp_path: pathlib.Path) -> None:
 
 
 async def test_autofix_module_no_target_is_safe() -> None:
-    report = await autofix_module({})
+    report = await autofix_module(_ctx(), module_file="")
     assert "skipped" in report
 
 
@@ -163,22 +169,25 @@ def _make_pipeline_fake() -> Any:
     - other agent nodes (setup, implement) -> plain text (no tool call needed to
       complete the turn in dry-run; real tool use is exercised in the live run)
     """
-    submitted: dict[str, int] = {"design": 0, "review": 0}
-
     def _factory(model: str) -> Any:
+        # After an agent submits its result, the agent loop calls the stream fn
+        # again to observe the tool result; that follow-up must return a plain
+        # `stop` so the turn ends (otherwise the agent loops forever).
+        submitted: dict[str, bool] = {"designer": False, "reviewer": False}
+
         def _stream_fn(model_id: Any, context: Any, options: Any = None) -> "AiEventStream[AssistantMessage]":
             stream: AiEventStream[AssistantMessage] = AiEventStream()
             sp = _system_prompt_of(context).lower()
 
-            if "designer" in sp and submitted["design"] == 0:
-                submitted["design"] = 1
+            if "designer" in sp and not submitted["designer"]:
+                submitted["designer"] = True
                 payload = {"module_path": "add.py", "test_path": "test_add.py", "summary": "add(a,b)"}
                 msg = AssistantMessage(
                     content=(ToolCall(id="d1", name="submit_result", arguments={"result": payload}),),
                     stop_reason="toolUse",
                 )
-            elif "reviewer" in sp and submitted["review"] == 0:
-                submitted["review"] = 1
+            elif "reviewer" in sp and not submitted["reviewer"]:
+                submitted["reviewer"] = True
                 payload = {"status": "approved", "feedback": "looks good"}
                 msg = AssistantMessage(
                     content=(ToolCall(id="r1", name="submit_result", arguments={"result": payload}),),
@@ -196,23 +205,49 @@ def _make_pipeline_fake() -> Any:
 
 
 async def test_pipeline_dryrun() -> None:
-    """The whole 6-node pipeline completes under a fake stream, no provider needed."""
+    """The whole 6-node pipeline completes under a fake stream, no provider needed.
+
+    Script nodes are stubbed via ``script_resolver`` so no real ruff/mypy/pytest
+    subprocess runs; ``verify`` returns PASS so the review->implement loop stays
+    quiet and the run is fast + deterministic.
+    """
     wf = load_workflow(_WF_PATH)
     factory = _make_pipeline_fake()
 
-    result = await execute(wf, stream_fn_factory=factory, tool_registry=registry_with_filesystem())
+    async def _intake(ctx: Any, **kw: Any) -> str:
+        return json.dumps({"current": "add(a,b)", "remaining": [], "done": False})
 
-    fs = result.final_state
-    # intake (script) produced the task JSON
-    assert "task" in fs
-    assert json.loads(fs["task"])["current"]
+    async def _verify(ctx: Any, **kw: Any) -> str:
+        return "PASS: all checks clean"
+
+    async def _autofix(ctx: Any, **kw: Any) -> str:
+        return "autofixed (stub)"
+
+    def _resolver(run: str) -> Any:
+        if run.endswith(":next_task") or run.endswith(":summarize_spec"):
+            return _intake
+        if run.endswith(":verify_generated_module") or run.endswith(":run_checks"):
+            return _verify
+        return _autofix
+
+    result = await execute(
+        wf,
+        stream_fn_factory=factory,
+        tool_registry=registry_with_filesystem(),
+        script_resolver=_resolver,
+    )
+
+    out = result.outputs
+    # intake (script) produced the task JSON in its 'task' port
+    assert "task" in out["intake"]
+    assert json.loads(out["intake"]["task"])["current"]
     # setup + implement agent nodes ran
-    assert "setup_report" in fs
-    assert "impl_report" in fs
+    assert "setup_report" in out["setup"]
+    assert "impl_report" in out["implement"]
     # design + review produced structured JSON via submit_result
-    assert "plan" in fs
-    plan = json.loads(fs["plan"])
+    assert "plan" in out["design"]
+    plan = json.loads(out["design"]["plan"])
     assert plan["module_path"] == "add.py"
-    assert "review_result" in fs
-    review = json.loads(fs["review_result"])
+    assert "review_result" in out["review"]
+    review = json.loads(out["review"]["review_result"])
     assert review["status"] == "approved"
