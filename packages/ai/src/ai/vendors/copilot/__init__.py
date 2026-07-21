@@ -152,7 +152,11 @@ async def _login_github(domain: str = "github.com") -> str:
 
 async def _exchange_copilot_token(github_token: str) -> dict:
     import httpx
-    async with httpx.AsyncClient() as client:
+
+    # A generous timeout: httpx defaults to 5s, which the GitHub Copilot token
+    # exchange can exceed on a cold TLS handshake or a slow network (observed as
+    # a spurious ReadTimeout that aborts the first web_search of a session).
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         resp = await client.get(
             "https://api.github.com/copilot_internal/v2/token",
             headers={
