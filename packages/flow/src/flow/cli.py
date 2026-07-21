@@ -1,12 +1,15 @@
 """CLI entry point for xdog-flow.
 
+Every command accepts either a ``.json`` workflow or a ``.svg`` document that
+embeds the workflow JSON (see ``xdog-flow graph <wf> --svg``).
+
 Usage::
 
-    xdog-flow validate <config.json>          Validate a workflow definition
-    xdog-flow run <config.json> [--provider X] [--dry-run]
+    xdog-flow validate <config.json|.svg>     Validate a workflow definition
+    xdog-flow run <config.json|.svg> [--provider X] [--dry-run]
                                               Execute a workflow
-    xdog-flow generate <config.json> -o OUT   Generate Python code
-    xdog-flow graph <config.json> [--mermaid] Print workflow graph
+    xdog-flow generate <config.json|.svg> -o OUT   Generate Python code
+    xdog-flow graph <config.json|.svg> [--mermaid|--svg]  Print workflow graph
 """
 
 from __future__ import annotations
@@ -22,11 +25,11 @@ from agent.core import StreamFn
 from ai.types import AssistantMessage, DoneEvent, TextContent
 from ai.utils.event_stream import EventStream as AiEventStream
 
+from flow.builder.io import load_any
 from flow.codegen import generate
 from flow.errors import WorkflowValidationError
 from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid
-from flow.loader import load_workflow
 
 # ---------------------------------------------------------------------------
 # Dry-run stub factory
@@ -65,7 +68,7 @@ def _dry_run_stream_fn_factory(model: str) -> StreamFn:
 def _cmd_validate(config_path: str) -> None:
     """Load and validate a workflow; print OK or error."""
     try:
-        wf = load_workflow(config_path)
+        wf = load_any(config_path)
         print(f"OK: {wf.name}")
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
@@ -81,7 +84,7 @@ async def _cmd_run(
 ) -> None:
     """Execute a workflow and print the final state as JSON."""
     try:
-        wf = load_workflow(config_path)
+        wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
@@ -111,7 +114,7 @@ async def _cmd_run(
 def _cmd_generate(config_path: str, *, output: str | None) -> None:
     """Generate a Python module from the workflow definition."""
     try:
-        wf = load_workflow(config_path)
+        wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
@@ -127,7 +130,7 @@ def _cmd_generate(config_path: str, *, output: str | None) -> None:
 def _cmd_graph(config_path: str, *, mermaid: bool, svg: bool) -> None:
     """Print the workflow graph as ASCII, Mermaid, or SVG."""
     try:
-        wf = load_workflow(config_path)
+        wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
@@ -164,11 +167,11 @@ def main(argv: list[str] | None = None) -> None:
 
     # -- validate ------------------------------------------------------------
     val_p = sub.add_parser("validate", help="Validate a workflow definition")
-    val_p.add_argument("config", help="Path to workflow JSON file")
+    val_p.add_argument("config", help="Path to workflow .json or .svg file")
 
     # -- run -----------------------------------------------------------------
     run_p = sub.add_parser("run", help="Execute a workflow")
-    run_p.add_argument("config", help="Path to workflow JSON file")
+    run_p.add_argument("config", help="Path to workflow .json or .svg file")
     run_p.add_argument("--provider", help="Override AI provider")
     run_p.add_argument("--dry-run", action="store_true", help="Inject stub LLM (offline)")
     run_p.add_argument(
@@ -180,12 +183,12 @@ def main(argv: list[str] | None = None) -> None:
 
     # -- generate ------------------------------------------------------------
     gen_p = sub.add_parser("generate", help="Generate Python code from a workflow")
-    gen_p.add_argument("config", help="Path to workflow JSON file")
+    gen_p.add_argument("config", help="Path to workflow .json or .svg file")
     gen_p.add_argument("-o", "--output", help="Output file (default: stdout)")
 
     # -- graph ---------------------------------------------------------------
     graph_p = sub.add_parser("graph", help="Print workflow graph")
-    graph_p.add_argument("config", help="Path to workflow JSON file")
+    graph_p.add_argument("config", help="Path to workflow .json or .svg file")
     graph_p.add_argument("--mermaid", action="store_true", help="Output Mermaid format")
     graph_p.add_argument("--svg", action="store_true", help="Output SVG document (with embedded JSON)")
 
