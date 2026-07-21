@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from ai.types import TextContent
+
 from agent.core import AgentTool, AgentToolResult
+
 
 def create_web_search_tool_from_fn(search_fn: Callable[[str], Awaitable[str]]) -> AgentTool:
     """Create a web_search tool backed by an injected search function.
@@ -19,6 +21,7 @@ def create_web_search_tool_from_fn(search_fn: Callable[[str], Awaitable[str]]) -
         args: dict[str, Any],
         cancel: Any = None,
         on_update: Any = None,
+        **kwargs: Any,
     ) -> AgentToolResult:
         query = args.get("query", "")
         if not query:

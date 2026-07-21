@@ -93,6 +93,7 @@ async def execute(
     script_resolver: ScriptResolver | None = None,
     base_dir: Path | None = None,
     inputs: Mapping[str, str] | None = None,
+    web_search_fn_factory: Callable[[str], Callable[[str], Awaitable[str]]] | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -123,6 +124,10 @@ async def execute(
         override the workflow's ``state`` defaults key-by-key (a key absent from
         ``state`` simply seeds a new port), so the same workflow can run with
         different inputs without editing the JSON.
+    web_search_fn_factory:
+        Optional factory ``(model_id) -> async (query) -> str`` used to back the
+        built-in ``web_search`` tool for agent nodes that set ``web_search``.
+        Defaults to one built from the real ai provider.  Injectable for tests.
     """
     from flow.tools import default_registry as _default_registry
 
@@ -139,6 +144,15 @@ async def execute(
             return default_stream_fn
 
         stream_fn_factory = _factory
+
+        if web_search_fn_factory is None:
+            from agent.helpers import web_search_fn_from_provider
+
+            def _ws_factory(model: str) -> Callable[[str], Awaitable[str]]:
+                fn: Callable[[str], Awaitable[str]] = web_search_fn_from_provider(provider, model)
+                return fn
+
+            web_search_fn_factory = _ws_factory
 
     # Shared mutable output store: outputs[node_id][port] = value.  Seeded with
     # the reserved $in source carrying the workflow's initial values; run-time
@@ -245,11 +259,18 @@ async def execute(
             )
             final_sys_prompt = sys_prompt + directive
 
+        # Enable the built-in web_search tool when the node opts in.  The search
+        # model may differ from the node model (some models don't browse).
+        web_search_fn = None
+        if node.web_search and web_search_fn_factory is not None:
+            web_search_fn = web_search_fn_factory(node.web_search_model or model)
+
         agent = Agent(
             stream_fn,
             config=AgentConfig(model=model, system_prompt=final_sys_prompt),
             tools=resolved_tools,
             tool_ctx=tool_ctx,
+            web_search_fn=web_search_fn,
         )
 
         logger.debug("Running node %r with model %r", node_id, model)

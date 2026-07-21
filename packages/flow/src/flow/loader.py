@@ -87,6 +87,8 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         output_ports=_parse_output_ports(data),
         output_schema=output_schema,
         code=data.get("code"),
+        web_search=bool(data.get("web_search", False)),
+        web_search_model=data.get("web_search_model"),
     )
 
 

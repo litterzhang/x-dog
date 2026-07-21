@@ -666,3 +666,100 @@ async def test_output_schema_missing_submission() -> None:
 
     with pytest.raises(WorkflowExecutionError, match="did not submit a result"):
         await execute(wf, stream_fn_factory=factory)
+
+
+# ---------------------------------------------------------------------------
+# web_search (agent builtin, enabled per-node)
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_web_search_tool_enabled() -> None:
+    """A node with web_search=True gets a web_search tool backed by the factory.
+
+    The fake stream emits a web_search ToolCall on the first turn, then stops;
+    we assert the injected search fn was invoked with the web_search_model.
+    """
+    searched: list[tuple[str, str]] = []
+
+    def _ws_factory(model: str) -> Any:
+        async def _search(query: str) -> str:
+            searched.append((model, query))
+            return f"web result for {query}"
+
+        return _search
+
+    def _factory(model: str) -> Any:
+        turn = [0]
+
+        def _stream_fn(model_id: Any, context: Any, options: Any = None) -> AiEventStream[AssistantMessage]:
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+            if turn[0] == 0:
+                turn[0] += 1
+                call = ToolCall(id="ws1", name="web_search", arguments={"query": "depin news"})
+                msg = AssistantMessage(content=(call,), stop_reason="toolUse")
+            else:
+                msg = AssistantMessage(content=(TextContent(text="done"),), stop_reason="stop")
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    wf = WorkflowDef(
+        name="ws",
+        provider="fake",
+        entry="a",
+        default_model="m",
+        initial_state=(("q", "depin"),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="agent",
+                prompt="research {{q}}",
+                input_ports=(Port("q"),),
+                output_ports=(Port("r"),),
+                web_search=True,
+                web_search_model="gpt-5.5",
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="a", mapping=(("q", "q"),)),),
+    )
+
+    result = await execute(wf, stream_fn_factory=_factory, web_search_fn_factory=_ws_factory)
+
+    assert result.outputs["a"]["r"] == "done"
+    # the search fn ran, bound to the web_search_model (not the node model)
+    assert searched == [("gpt-5.5", "depin news")]
+
+
+async def test_agent_without_web_search_has_no_search_tool() -> None:
+    """A node without web_search never invokes the search factory."""
+    searched: list[str] = []
+
+    def _ws_factory(model: str) -> Any:
+        async def _search(query: str) -> str:
+            searched.append(query)
+            return "x"
+
+        return _search
+
+    factory = _make_stream_fn({"m": "ok"})
+    wf = WorkflowDef(
+        name="no-ws",
+        provider="fake",
+        entry="a",
+        default_model="m",
+        nodes=(NodeDef(id="a", type="agent", model="m", prompt="hi", output_ports=(Port("r"),)),),
+        edges=(),
+    )
+
+    result = await execute(wf, stream_fn_factory=factory, web_search_fn_factory=_ws_factory)
+
+    assert result.outputs["a"]["r"] == "ok"
+    assert searched == []

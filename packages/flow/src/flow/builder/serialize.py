@@ -57,6 +57,10 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["outputs"] = _ports_to_json(node.output_ports)
     if node.output_schema:
         data["output_schema"] = {k: v for k, v in node.output_schema}
+    if node.web_search:
+        data["web_search"] = True
+    if node.web_search_model is not None:
+        data["web_search_model"] = node.web_search_model
     return data
 
 

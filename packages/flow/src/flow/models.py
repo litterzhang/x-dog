@@ -49,6 +49,12 @@ class NodeDef:
     output_schema: tuple[tuple[str, str], ...] = ()
     # Inline script source (agent nodes leave this empty).
     code: str | None = None
+    # Agent nodes: enable the built-in web_search tool.  ``web_search_model``
+    # optionally overrides which model performs the search (some models don't
+    # browse — e.g. Claude on Copilot — so a browsing model like gpt-5.5 can be
+    # named here); falls back to the node/default model when None.
+    web_search: bool = False
+    web_search_model: str | None = None
 
     @property
     def input_names(self) -> tuple[str, ...]:
