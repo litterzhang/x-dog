@@ -6,7 +6,7 @@ embeds the workflow JSON (see ``xdog-flow graph <wf> --svg``).
 Usage::
 
     xdog-flow validate <config.json|.svg>     Validate a workflow definition
-    xdog-flow run <config.json|.svg> [--provider X] [--dry-run]
+    xdog-flow run <config.json|.svg> [--provider X] [--dry-run] [--input K=V ...]
                                               Execute a workflow
     xdog-flow generate <config.json|.svg> -o OUT   Generate Python code
     xdog-flow graph <config.json|.svg> [--mermaid|--svg]  Print workflow graph
@@ -65,6 +65,22 @@ def _dry_run_stream_fn_factory(model: str) -> StreamFn:
 # ---------------------------------------------------------------------------
 
 
+def _parse_inputs(pairs: list[str]) -> dict[str, str]:
+    """Parse ``--input K=V`` flags into a dict; split on the first ``=`` only.
+
+    Values may themselves contain ``=`` (e.g. ``note=x=y``).  A pair without any
+    ``=`` is a usage error.
+    """
+    out: dict[str, str] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            print(f"error: --input expects K=V, got {pair!r}")
+            raise SystemExit(2)
+        out[key] = value
+    return out
+
+
 def _cmd_validate(config_path: str) -> None:
     """Load and validate a workflow; print OK or error."""
     try:
@@ -81,6 +97,7 @@ async def _cmd_run(
     provider: str | None,
     dry_run: bool,
     timeout: float = 120.0,
+    inputs: dict[str, str] | None = None,
 ) -> None:
     """Execute a workflow and print the final state as JSON."""
     try:
@@ -89,10 +106,13 @@ async def _cmd_run(
         print(str(exc))
         raise SystemExit(1)
 
+    if inputs:
+        logging.getLogger("flow").debug("run inputs override $in: %s", inputs)
+
     base_dir = Path(config_path).resolve().parent
     if dry_run:
         factory = _dry_run_stream_fn_factory
-        result = await execute(wf, stream_fn_factory=factory, timeout=timeout, base_dir=base_dir)
+        result = await execute(wf, stream_fn_factory=factory, timeout=timeout, base_dir=base_dir, inputs=inputs)
     else:
         if provider is not None:
             import ai
@@ -104,9 +124,11 @@ async def _cmd_run(
             def _factory(model: str) -> StreamFn:
                 return base_stream_fn
 
-            result = await execute(wf, stream_fn_factory=_factory, timeout=timeout, base_dir=base_dir)
+            result = await execute(
+                wf, stream_fn_factory=_factory, timeout=timeout, base_dir=base_dir, inputs=inputs
+            )
         else:
-            result = await execute(wf, timeout=timeout, base_dir=base_dir)
+            result = await execute(wf, timeout=timeout, base_dir=base_dir, inputs=inputs)
 
     print(json.dumps(result.outputs, indent=2, ensure_ascii=False))
 
@@ -175,6 +197,13 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("--provider", help="Override AI provider")
     run_p.add_argument("--dry-run", action="store_true", help="Inject stub LLM (offline)")
     run_p.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="K=V",
+        help="Seed/override a $in input port (repeatable), e.g. --input a=3",
+    )
+    run_p.add_argument(
         "--timeout", type=float, default=120.0, help="Per-node wall-clock timeout in seconds (default 120)"
     )
     run_p.add_argument(
@@ -206,7 +235,15 @@ def main(argv: list[str] | None = None) -> None:
             # Surface flow's own DEBUG logs (node execution, loop firing) without
             # the noise of third-party libraries (asyncio, openai, httpx, …).
             logging.getLogger("flow").setLevel(logging.DEBUG)
-        asyncio.run(_cmd_run(args.config, provider=args.provider, dry_run=args.dry_run, timeout=args.timeout))
+        asyncio.run(
+            _cmd_run(
+                args.config,
+                provider=args.provider,
+                dry_run=args.dry_run,
+                timeout=args.timeout,
+                inputs=_parse_inputs(args.input),
+            )
+        )
     elif args.command == "generate":
         _cmd_generate(args.config, output=args.output)
     elif args.command == "graph":

@@ -10,7 +10,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -92,6 +92,7 @@ async def execute(
     tool_registry: ToolRegistry | None = None,
     script_resolver: ScriptResolver | None = None,
     base_dir: Path | None = None,
+    inputs: Mapping[str, str] | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -117,6 +118,11 @@ async def execute(
     script_resolver:
         Callable that maps a ``'module:func'`` string to an async callable for script nodes.
         Defaults to the built-in importlib-based resolver.
+    inputs:
+        Optional run-time values for the ``$in`` source's output ports.  These
+        override the workflow's ``state`` defaults key-by-key (a key absent from
+        ``state`` simply seeds a new port), so the same workflow can run with
+        different inputs without editing the JSON.
     """
     from flow.tools import default_registry as _default_registry
 
@@ -135,9 +141,13 @@ async def execute(
         stream_fn_factory = _factory
 
     # Shared mutable output store: outputs[node_id][port] = value.  Seeded with
-    # the reserved $in source carrying the workflow's initial values.  Only
-    # modified while holding _state_lock or before/after concurrency.
-    outputs: dict[str, dict[str, str]] = {IN_NODE_ID: dict(wf.initial_state)}
+    # the reserved $in source carrying the workflow's initial values; run-time
+    # ``inputs`` override those defaults key-by-key.  Only modified while holding
+    # _state_lock or before/after concurrency.
+    seed = dict(wf.initial_state)
+    if inputs:
+        seed.update(inputs)
+    outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
 
     node_map = {n.id: n for n in wf.nodes}

@@ -229,6 +229,72 @@ async def test_initial_state_available() -> None:
     assert "hello_initial" in captured[0][1]
 
 
+async def test_inputs_override_seed() -> None:
+    """execute(inputs=...) overrides the workflow's $in defaults key-by-key."""
+
+    async def _echo(ctx: Any, a: Any, b: Any) -> str:
+        return f"{a}+{b}"
+
+    wf = WorkflowDef(
+        name="ov",
+        provider="fake",
+        entry="mk",
+        default_model="m",
+        initial_state=(("a", "1"), ("b", "2")),
+        nodes=(
+            NodeDef(
+                id="mk",
+                type="script",
+                run="dummy:fn",
+                input_ports=(Port("a", "integer"), Port("b", "integer")),
+                output_ports=(Port("s"),),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="mk", mapping=(("a", "a"), ("b", "b"))),),
+    )
+
+    # override only `a`; `b` keeps its workflow default
+    result = await execute(
+        wf,
+        stream_fn_factory=_make_stream_fn({}),
+        script_resolver=lambda _r: _echo,
+        inputs={"a": "40"},
+    )
+
+    assert result.outputs[IN_NODE_ID] == {"a": "40", "b": "2"}
+    assert result.outputs["mk"]["s"] == "40+2"
+
+
+async def test_no_inputs_uses_defaults() -> None:
+    """Without inputs=, the $in seed is exactly the workflow's initial_state."""
+
+    async def _echo(ctx: Any, a: Any) -> str:
+        return str(a)
+
+    wf = WorkflowDef(
+        name="def",
+        provider="fake",
+        entry="mk",
+        default_model="m",
+        initial_state=(("a", "7"),),
+        nodes=(
+            NodeDef(
+                id="mk",
+                type="script",
+                run="dummy:fn",
+                input_ports=(Port("a", "integer"),),
+                output_ports=(Port("s"),),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="mk", mapping=(("a", "a"),)),),
+    )
+
+    result = await execute(wf, stream_fn_factory=_make_stream_fn({}), script_resolver=lambda _r: _echo)
+
+    assert result.outputs[IN_NODE_ID] == {"a": "7"}
+    assert result.outputs["mk"]["s"] == "7"
+
+
 async def test_parallel_diamond() -> None:
     """Diamond a -> (b, c) -> d: b and c run concurrently; d sees both outputs."""
     call_order: list[str] = []

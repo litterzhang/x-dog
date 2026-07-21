@@ -104,3 +104,44 @@ def test_generate_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
     assert out_file.exists()
     content = out_file.read_text()
     assert "async def main" in content
+
+
+# ---------------------------------------------------------------------------
+# --input K=V (override $in seed at run time)
+# ---------------------------------------------------------------------------
+
+_AGENT_CALC = str(Path(__file__).parent.parent / "examples" / "agent_calculator.json")
+
+
+def test_parse_inputs_basic() -> None:
+    from flow.cli import _parse_inputs
+
+    assert _parse_inputs(["a=3", "b=4"]) == {"a": "3", "b": "4"}
+
+
+def test_parse_inputs_value_with_equals() -> None:
+    from flow.cli import _parse_inputs
+
+    # value may contain '=' — split on the first only
+    assert _parse_inputs(["note=x=y"]) == {"note": "x=y"}
+
+
+def test_parse_inputs_missing_equals_errors() -> None:
+    from flow.cli import _parse_inputs
+
+    with pytest.raises(SystemExit):
+        _parse_inputs(["abc"])
+
+
+def test_run_input_overrides_seed(capsys: pytest.CaptureFixture[str]) -> None:
+    """`run --input a=2 --input b=40 --dry-run` overrides the JSON state defaults."""
+    main(["run", _AGENT_CALC, "--input", "a=2", "--input", "b=40", "--dry-run"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["$in"] == {"a": "2", "b": "40"}
+    assert out["make_problem"]["problem"] == "2 + 40"
+
+
+def test_run_without_input_uses_defaults(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["run", _AGENT_CALC, "--dry-run"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["make_problem"]["problem"] == "347 + 895"
