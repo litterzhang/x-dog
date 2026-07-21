@@ -412,6 +412,49 @@ async def test_generate_colliding_node_ids_stay_distinct() -> None:
     assert gen_state == dict(run_result.outputs)
 
 
+async def test_generate_cross_dependency_orders_correctly() -> None:
+    """A->B, A->C, B->C: C depends on A AND B, so C must run after B (not with it).
+
+    A naive "gather all successors of A" would put B and C in one wave and run C
+    before B finished.  The generated code must sequence A; B; C, matching the
+    interpreter.  x=5 -> a=6, b=a*10=60, c=a+b=66.
+    """
+    from flow.executor import execute
+
+    def sc(nid: str, code: str, out: str, inp: tuple[Port, ...]) -> NodeDef:
+        return NodeDef(id=nid, type="script", code=code, output_ports=(Port(out, "integer"),), input_ports=inp)
+
+    wf = WorkflowDef(
+        name="cross-dep",
+        provider="copilot",
+        entry="A",
+        default_model="m",
+        initial_state=(("x", "5"),),
+        nodes=(
+            sc("A", "def A(ctx, x):\n    return x + 1", "a", (Port("x", "integer"),)),
+            sc("B", "def B(ctx, a):\n    return a * 10", "b", (Port("a", "integer"),)),
+            sc("C", "def C(ctx, a, b):\n    return a + b", "c", (Port("a", "integer"), Port("b", "integer"))),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="A", mapping=(("x", "x"),)),
+            EdgeDef(src="A", dst="B", mapping=(("a", "a"),)),
+            EdgeDef(src="A", dst="C", mapping=(("a", "a"),)),
+            EdgeDef(src="B", dst="C", mapping=(("b", "b"),)),
+        ),
+    )
+
+    src = generate(wf)
+    # B and C must NOT be gathered together (C waits for B).
+    assert "gather(node_B" not in src and "gather(node_C" not in src
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["C"]["c"] == "66"
+    assert gen_state["B"]["b"] == "60"
+    assert gen_state == dict(run_result.outputs)
+
+
 async def test_generate_escapes_initial_state_values() -> None:
     """initial_state values with backslashes/quotes/newlines must survive verbatim."""
     from flow.executor import execute

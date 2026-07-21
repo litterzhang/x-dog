@@ -251,7 +251,103 @@ def test_unreachable_input_inline_raises() -> None:
         validate_workflow(wf)
 
 
-def test_output_schema_parsed() -> None:
+def test_two_unconditional_edges_into_one_port_raises() -> None:
+    """Two producers feeding the same input port unconditionally is ambiguous.
+
+    This is the clash the flat shared-state model used to allow silently (two
+    nodes writing the same key, last-writer-wins by completion order).  The port
+    model rejects it at validate time.
+    """
+    data = {
+        "name": "ambiguous",
+        "provider": "copilot",
+        "entry": "p",
+        "nodes": [
+            {
+                "id": "p",
+                "type": "script",
+                "code": "def p(ctx):\n    return 1",
+                "outputs": [{"name": "z", "type": "integer"}],
+            },
+            {
+                "id": "q",
+                "type": "script",
+                "code": "def q(ctx):\n    return 2",
+                "outputs": [{"name": "z", "type": "integer"}],
+            },
+            {
+                "id": "end",
+                "type": "script",
+                "inputs": [{"name": "v", "type": "integer"}],
+                "code": "def end(ctx, v):\n    return v",
+                "outputs": [{"name": "r", "type": "integer"}],
+            },
+        ],
+        "edges": [
+            {"from": "p", "to": "end", "map": {"z": "v"}},
+            {"from": "q", "to": "end", "map": {"z": "v"}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="ambiguous producer"):
+        validate_workflow(wf)
+
+
+def test_two_conditional_edges_into_one_port_ok() -> None:
+    """Mutually-exclusive (conditional) producers into one port are allowed."""
+    data = {
+        "name": "cond-merge",
+        "provider": "copilot",
+        "entry": "route",
+        "state": {"n": "1"},
+        "nodes": [
+            {
+                "id": "route",
+                "type": "script",
+                "inputs": [{"name": "n", "type": "integer"}],
+                "code": "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
+                "outputs": [{"name": "kind", "type": "string"}, {"name": "n_out", "type": "integer"}],
+            },
+            {
+                "id": "odd",
+                "type": "script",
+                "inputs": [{"name": "x", "type": "integer"}],
+                "code": "def odd(ctx, x):\n    return x",
+                "outputs": [{"name": "z", "type": "integer"}],
+            },
+            {
+                "id": "even",
+                "type": "script",
+                "inputs": [{"name": "x", "type": "integer"}],
+                "code": "def even(ctx, x):\n    return x",
+                "outputs": [{"name": "z", "type": "integer"}],
+            },
+            {
+                "id": "merge",
+                "type": "script",
+                "inputs": [{"name": "v", "type": "integer"}],
+                "code": "def merge(ctx, v):\n    return v",
+                "outputs": [{"name": "out", "type": "integer"}],
+            },
+        ],
+        "edges": [
+            {"from": "$in", "to": "route", "map": {"n": "n"}},
+            {"from": "$in", "to": "odd", "map": {"n": "x"}},
+            {"from": "$in", "to": "even", "map": {"n": "x"}},
+            {"from": "route", "to": "odd", "when": {"equals": {"text": "{{kind}}", "value": "odd"}}},
+            {"from": "route", "to": "even", "when": {"equals": {"text": "{{kind}}", "value": "even"}}},
+            # two conditional producers into merge.v — allowed (mutually exclusive)
+            {"from": "odd", "to": "merge", "map": {"z": "v"}, "when": {"equals": {"text": "{{kind}}", "value": "odd"}}},
+            {
+                "from": "even",
+                "to": "merge",
+                "map": {"z": "v"},
+                "when": {"equals": {"text": "{{kind}}", "value": "even"}},
+            },
+        ],
+    }
+    wf = parse_workflow(data)
+    validate_workflow(wf)  # should not raise
     data = {
         "name": "schema-test",
         "provider": "anthropic",
@@ -292,22 +388,26 @@ def _wf_with_script(node: dict) -> dict:
 def test_inline_script_parses_typed_io() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow({
-        "name": "t",
-        "provider": "copilot",
-        "entry": "add",
-        "state": {"a": "3", "b": "4"},  # inputs reachable from initial state
-        "nodes": [{
-            "id": "add",
-            "type": "script",
-            "code": "def add(ctx, a, b):\n    return a + b",
-            "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
-            "output": {"name": "sum", "type": "integer"},
-        }],
-        "edges": [
-            {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}},
-        ],
-    })
+    wf = parse_workflow(
+        {
+            "name": "t",
+            "provider": "copilot",
+            "entry": "add",
+            "state": {"a": "3", "b": "4"},  # inputs reachable from initial state
+            "nodes": [
+                {
+                    "id": "add",
+                    "type": "script",
+                    "code": "def add(ctx, a, b):\n    return a + b",
+                    "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
+                    "output": {"name": "sum", "type": "integer"},
+                }
+            ],
+            "edges": [
+                {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}},
+            ],
+        }
+    )
     validate_workflow(wf)  # must not raise
     n = wf.nodes[0]
     assert n.input_names == ("a", "b")
@@ -320,9 +420,16 @@ def test_inline_script_parses_typed_io() -> None:
 def test_inline_bad_syntax_raises() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow(_wf_with_script({
-        "id": "x", "type": "script", "code": "def x(ctx):\n    return (", "output": "y",
-    }))
+    wf = parse_workflow(
+        _wf_with_script(
+            {
+                "id": "x",
+                "type": "script",
+                "code": "def x(ctx):\n    return (",
+                "output": "y",
+            }
+        )
+    )
     with pytest.raises(WorkflowValidationError, match="invalid code"):
         validate_workflow(wf)
 
@@ -330,10 +437,17 @@ def test_inline_bad_syntax_raises() -> None:
 def test_inline_first_param_must_be_ctx() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow(_wf_with_script({
-        "id": "x", "type": "script", "code": "def x(a):\n    return a",
-        "inputs": [{"name": "a", "type": "string"}], "output": "y",
-    }))
+    wf = parse_workflow(
+        _wf_with_script(
+            {
+                "id": "x",
+                "type": "script",
+                "code": "def x(a):\n    return a",
+                "inputs": [{"name": "a", "type": "string"}],
+                "output": "y",
+            }
+        )
+    )
     with pytest.raises(WorkflowValidationError, match="first parameter must be 'ctx'"):
         validate_workflow(wf)
 
@@ -341,10 +455,17 @@ def test_inline_first_param_must_be_ctx() -> None:
 def test_inline_params_must_match_inputs() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow(_wf_with_script({
-        "id": "x", "type": "script", "code": "def x(ctx, a, b):\n    return a",
-        "inputs": [{"name": "a", "type": "string"}], "output": "y",
-    }))
+    wf = parse_workflow(
+        _wf_with_script(
+            {
+                "id": "x",
+                "type": "script",
+                "code": "def x(ctx, a, b):\n    return a",
+                "inputs": [{"name": "a", "type": "string"}],
+                "output": "y",
+            }
+        )
+    )
     with pytest.raises(WorkflowValidationError, match="!= declared inputs"):
         validate_workflow(wf)
 
@@ -352,10 +473,17 @@ def test_inline_params_must_match_inputs() -> None:
 def test_script_code_and_run_both_set_raises() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow(_wf_with_script({
-        "id": "x", "type": "script", "code": "def x(ctx):\n    return ''",
-        "run": "m:f", "output": "y",
-    }))
+    wf = parse_workflow(
+        _wf_with_script(
+            {
+                "id": "x",
+                "type": "script",
+                "code": "def x(ctx):\n    return ''",
+                "run": "m:f",
+                "output": "y",
+            }
+        )
+    )
     with pytest.raises(WorkflowValidationError, match="not both"):
         validate_workflow(wf)
 
