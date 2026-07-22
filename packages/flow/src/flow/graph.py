@@ -126,32 +126,56 @@ def to_ascii_diagram(wf: WorkflowDef) -> str:
         a, b = mid(order[e.src]), mid(order[e.dst])
         return (min(a, b), max(a, b))
 
-    # Interval-graph colouring: assign each lane edge the lowest column whose last
-    # occupant ends before this edge starts.  Deterministic (sorted by span).
-    lane_col: dict[int, int] = {}
-    lane_ends: list[int] = []
-    for idx, e in sorted(enumerate(lane_edges), key=lambda p: row_span(p[1])):
+    # Nested-lane packing: longer spans take inner columns (closer to the spine)
+    # and shorter spans nest outside them.  This keeps the edge turning in on any
+    # given row the right-most thing there, so its ◄ corner and inline label never
+    # sit behind an outer lane.  Longest-first; each edge takes the first column
+    # whose occupied intervals stay disjoint.  Deterministic.
+    def _span_len(e: EdgeDef) -> int:
         s, t = row_span(e)
-        chosen = next((j for j, end in enumerate(lane_ends) if end < s), None)
-        if chosen is None:
-            chosen = len(lane_ends)
-            lane_ends.append(t)
-        else:
-            lane_ends[chosen] = t
-        lane_col[idx] = chosen
-    n_lanes = len(lane_ends)
+        return t - s
+
+    keyed = sorted(
+        range(len(lane_edges)),
+        key=lambda i: (-_span_len(lane_edges[i]), row_span(lane_edges[i])[0]),
+    )
+    lanes: list[list[tuple[int, int]]] = []
+    lane_col: dict[int, int] = {}
+    for idx in keyed:
+        s, t = row_span(lane_edges[idx])
+        placed = False
+        for j, occupied in enumerate(lanes):
+            if all(t < a or s > b for a, b in occupied):
+                occupied.append((s, t))
+                lane_col[idx] = j
+                placed = True
+                break
+        if not placed:
+            lanes.append([(s, t)])
+            lane_col[idx] = len(lanes) - 1
+    n_lanes = len(lanes)
 
     lane_base = spine + 2
 
     def lane_x(k: int) -> int:
         return lane_base + k * 3
 
-    label_col = lane_x(n_lanes - 1) + 3 if n_lanes else spine + 2
+    def _tag(e: EdgeDef) -> str:
+        lbl = _port_label(e)
+        return f"{e.src}→{e.dst}" + (f" [{lbl}]" if lbl else "")
+
+    # A single label column to the right of every lane.  Each edge's corner is
+    # joined to its label by a horizontal leader, so labels stay aligned and
+    # visibly connected (never floating past an intervening lane).  Edges that
+    # share a destination share a row, so their tags are joined for that row.
+    label_col = lane_x(n_lanes - 1) + 2 if n_lanes else spine + 2
+    row_tags: dict[int, list[str]] = {}
+    for idx, e in enumerate(lane_edges):
+        row_tags.setdefault(mid(order[e.dst]), []).append(_tag(e))
+    row_label = {r: "  ".join(tags) for r, tags in row_tags.items()}
+
     total_rows = (n - 1) * row_h + 3
-    max_label = max(
-        (len(f"{e.src}→{e.dst}") + len(_port_label(e)) + 4 for e in lane_edges),
-        default=0,
-    )
+    max_label = max((len(s) for s in row_label.values()), default=0)
     width = label_col + max_label + 2
 
     mask = [[0] * width for _ in range(total_rows)]
@@ -208,9 +232,14 @@ def to_ascii_diagram(wf: WorkflowDef) -> str:
         for c in range(box_w[di], col):
             add(tr, c, _E | _W)
         put(tr, box_w[di], "◄")
-        lbl = _port_label(e)
-        tag = f"{e.src}→{e.dst}" + (f" [{lbl}]" if lbl else "")
-        put(tr, label_col, tag)
+        # Leader east from the corner to the aligned label column; the corner
+        # gains an east bit (┘→┴ / ┐→┬) and any lane it crosses becomes ┼.
+        add(tr, col, _E)
+        for c in range(col + 1, label_col):
+            add(tr, c, _E | _W)
+
+    for label_row, label_text in row_label.items():
+        put(label_row, label_col, label_text)
 
     out: list[str] = []
     for r in range(total_rows):
