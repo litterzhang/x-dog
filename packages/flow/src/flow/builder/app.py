@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 from tui.keys import KeyEvent
 from tui.tui import TUI, Component
-from tui.utils import visible_width
+from tui.utils import visible_width, wrap_text_with_ansi
 
 from flow.builder import actions, style
 from flow.builder.io import dump_any, load_any
@@ -146,11 +146,14 @@ class BuilderApp(Component):
 
     # -- left panel: three boxed blocks ---------------------------------------
 
-    def _box(self, title: str, inner: list[str], width: int, *, focused: bool) -> list[str]:
+    def _box(self, title: str, inner: list[str], width: int, *, focused: bool, wrap: bool = False) -> list[str]:
         """Frame *inner* lines in a titled box of exactly *width* columns.
 
         A focused box is drawn in the accent colour; an unfocused box is dimmed
-        so it recedes.  Inner lines keep their own styling when focused.
+        so it recedes.  Inner lines keep their own styling when focused.  When
+        *wrap* is set, each inner line is soft-wrapped to the box width (ANSI
+        preserved) so long content flows onto continuation lines instead of
+        being truncated.
         """
         inner_w = max(1, width - 2)
         label = f"─ {title} "
@@ -159,6 +162,11 @@ class BuilderApp(Component):
         fill = inner_w - visible_width(label)
         top = "┌" + label + "─" * fill + "┐"
         bot = "└" + "─" * inner_w + "┘"
+        if wrap:
+            wrapped: list[str] = []
+            for line in inner:
+                wrapped.extend(wrap_text_with_ansi(line, inner_w) or [""])
+            inner = wrapped
         body = ["│" + style.pad(line, inner_w) + "│" for line in inner]
         if focused:
             return [style.bold(style.fg(top, style.TITLE)), *body, style.fg(bot, style.TITLE)]
@@ -228,10 +236,12 @@ class BuilderApp(Component):
         if self._page == "tools":
             return self._tools_right(w)
         if self._focus == "graph":
+            # The diagram is a pre-laid-out 2-D drawing; wrapping would corrupt
+            # it, so it truncates (and scrolls) rather than soft-wrapping.
             return self._box("GRAPH", self._graph_diagram(), w, focused=True)
         if self._focus == "edges":
-            return self._box("EDGE", self._edge_detail_lines(), w, focused=True)
-        return self._box("DETAILS", self._detail_lines(), w, focused=True)
+            return self._box("EDGE", self._edge_detail_lines(), w, focused=True, wrap=True)
+        return self._box("DETAILS", self._detail_lines(), w, focused=True, wrap=True)
 
     def _graph_diagram(self) -> list[str]:
         lines: list[str] = []
@@ -334,7 +344,7 @@ class BuilderApp(Component):
         if not scripts:
             return self._box("SOURCE", [style.dim("(select a script node)")], w, focused=True)
         node = scripts[min(self._fn_idx, len(scripts) - 1)]
-        return self._box(f"SOURCE · {node.id}", self._script_source_lines(node), w, focused=True)
+        return self._box(f"SOURCE · {node.id}", self._script_source_lines(node), w, focused=True, wrap=True)
 
     def _script_source_lines(self, node: NodeDef) -> list[str]:
         """Source lines for *node*: inline code verbatim, or the imported run: fn."""
@@ -390,7 +400,7 @@ class BuilderApp(Component):
             out.extend(textwrap.dedent(info.source).splitlines())
         else:
             out.append(style.dim("(source unavailable)"))
-        return self._box(f"TOOL · {info.name}", out, w, focused=True)
+        return self._box(f"TOOL · {info.name}", out, w, focused=True, wrap=True)
 
     # -- input dispatch --------------------------------------------------------
 

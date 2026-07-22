@@ -562,6 +562,39 @@ def test_tools_source_is_dedented() -> None:
     assert not any("│    async def execute(" in r for r in rows)
 
 
+# --- right pane soft-wraps long content (no truncation) ----------------------
+
+
+def test_tools_right_pane_wraps_long_description(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A long tool description flows onto continuation lines instead of truncating."""
+    app = _cgb_app()
+    monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 40))
+    _shift_tab(app)  # functions
+    _shift_tab(app)  # tools — bash has a long, multi-sentence description
+    joined = strip_ansi("\n".join(app.render(78)))
+    # Text that lives past the visible box width must still appear (wrapped),
+    # proving it isn't cut off at the right border.
+    assert "terminal operations" in joined  # tail of bash's description
+    # No rendered row exceeds the frame width (wrapping keeps rows in-bounds).
+    assert {visible_width(line) for line in app.render(78)} == {78}
+
+
+def test_details_pane_wraps_long_field(tmp_path: pathlib.Path) -> None:
+    """A long node field (e.g. prompt) wraps in DETAILS rather than truncating."""
+    app = build_app(tmp_path / "wf.json")
+    app.handle_input(KeyEvent(key="a"))  # agent node
+    long_prompt = "word " * 60  # far wider than any pane
+    from flow.builder import actions
+
+    app._model = actions.set_field(app.model, "agent", "prompt", long_prompt.strip())
+    app.handle_input(KeyEvent(key="tab"))  # graph -> nodes: DETAILS pane
+    rendered = app.render(80)
+    joined = strip_ansi("\n".join(rendered))
+    # the prompt's tail survives (wrapped onto later rows), and rows stay in-bounds
+    assert joined.count("word") >= 60
+    assert {visible_width(line) for line in rendered} == {80}
+
+
 # --- fill-screen + scroll ----------------------------------------------------
 
 
