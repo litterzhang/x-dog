@@ -22,7 +22,7 @@
   <h2>{{ title }}</h2>
   <div class="cards grid">
     {% for pkg in pkgs %}
-      <div class="card -3of12 cell" id="{{ pkg.name }}">
+      <div class="card -5of12 cell" id="{{ pkg.name }}">
         <header class="card-header">
           <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
           {% if pkg.cli %}&nbsp;|&nbsp;<span><code>{{ pkg.cli }}</code></span>{% endif %}
