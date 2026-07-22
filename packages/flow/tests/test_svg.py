@@ -139,9 +139,49 @@ def test_ascii_diagram_boxes_and_edges() -> None:
         assert node_id in d
     # box drawing chars present
     assert "┌" in d and "└" in d and "│" in d
-    # a sequential arrow and the conditional/loop back-edge marker
+    # a sequential down-arrow on the spine
     assert "▼" in d
-    assert "↺" in d  # c -> b is a back-edge (loop)
+    # the c -> b loop back-edge is routed through a right-hand lane that turns
+    # into the destination box with a ◄ arrow, labelled with its condition/loop.
+    assert "◄" in d
+    assert "c→b" in d
+    assert "REVISE" in d or "contains" in d
+    assert "loop" in d
+
+
+def test_ascii_diagram_labels_ports() -> None:
+    """Sequential edges carrying a port mapping print the port name."""
+    from flow.graph import to_ascii_diagram
+
+    wf = WorkflowDef(
+        name="ports",
+        provider="copilot",
+        entry="a",
+        nodes=(
+            NodeDef(id="a", type="script", run="m:a", output_ports=(Port("data"),)),
+            NodeDef(id="b", type="script", run="m:b"),
+        ),
+        edges=(EdgeDef(src="a", dst="b", mapping=(("data", "data"),)),),
+    )
+    d = to_ascii_diagram(wf)
+    assert "▼" in d
+    assert "data" in d  # the moved port is labelled on the sequential arrow
+
+
+def test_ascii_diagram_omits_in_edges() -> None:
+    """Edges from the reserved $in source are not drawn (they only add noise)."""
+    from flow.graph import to_ascii_diagram
+
+    wf = WorkflowDef(
+        name="seeded",
+        provider="copilot",
+        entry="a",
+        nodes=(NodeDef(id="a", type="script", run="m:a"),),
+        edges=(EdgeDef(src="$in", dst="a", mapping=(("repo", "repo"),)),),
+    )
+    d = to_ascii_diagram(wf)
+    assert "a [script]" in d
+    assert "$in" not in d
 
 
 def test_ascii_diagram_empty() -> None:
