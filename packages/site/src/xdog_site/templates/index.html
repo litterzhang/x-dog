@@ -4,11 +4,12 @@
 
 {% block content %}
 <section>
+  <h2>What is x-dog?</h2>
   <p>
-    <strong>x-dog</strong> is a Python monorepo of small, composable packages for
-    building AI agents and managing LLM deployments. Each package does one thing
-    and they stack: a provider API at the bottom, an agent runtime and a workflow
-    engine in the middle, ready-to-use tools on top.
+    x-dog is a Python monorepo of small, composable packages for building AI
+    agents and managing LLM deployments. Each package does one thing and they
+    stack: a provider API at the bottom, an agent runtime and a workflow engine
+    in the middle, ready-to-use tools on top.
   </p>
   <p>
     <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-primary">Explore packages</a>
@@ -16,25 +17,24 @@
   </p>
 </section>
 
-<hr>
-
 {% for title, pkgs in layers %}
 <section>
-  <h3>{{ title }}</h3>
-  <div class="grid">
+  <h2>{{ title }}</h2>
+  <div class="cards grid">
     {% for pkg in pkgs %}
-    <div class="card cell">
-      <header class="card-header">
-        <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
-        {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% endif %}
-      </header>
-      <div class="card-content">
-        <div class="inner">
-          <p>{{ pkg.tagline }}.</p>
-          <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Details &rarr;</a></p>
+      <div class="card -3of12 cell" id="{{ pkg.name }}">
+        <header class="card-header">
+          <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
+          {% if pkg.cli %}&nbsp;|&nbsp;<span><code>{{ pkg.cli }}</code></span>{% endif %}
+        </header>
+        <div class="card-content">
+          <div class="inner">
+            {{ pkg.tagline }}.
+            <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Details &rarr;</a></p>
+          </div>
         </div>
       </div>
-    </div>
+      <div class="cell -1of12 spacer"></div>
     {% endfor %}
   </div>
 </section>

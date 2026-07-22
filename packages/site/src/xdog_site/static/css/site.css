@@ -95,12 +95,10 @@ body.hack {
   }
 }
 
-/* x-dog additions */
+/* x-dog additions (depins does not restyle .card — layout is hack.css + spacer
+   cells; only these site-specific elements need rules). */
 .muted {
   color: #888;
-}
-.card {
-  margin-bottom: 1rem;
 }
 details > summary {
   cursor: pointer;

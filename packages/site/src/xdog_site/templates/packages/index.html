@@ -1,27 +1,28 @@
 {% extends "base.html" %}
 {% block title %} — Packages{% endblock %}
-{% block ctitle %}/ Packages{% endblock %}
+{% block ctitle %} &gt; Packages{% endblock %}
 
 {% block content %}
 <section>
-  <p>Six composable packages. Each is installable and testable on its own.</p>
-</section>
-
-{% for pkg in packages %}
-<section>
-  <div class="card">
-    <header class="card-header">
-      <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
-      {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% else %}<span class="muted">library</span>{% endif %}
-    </header>
-    <div class="card-content">
-      <div class="inner">
-        <p><em>{{ pkg.tagline }}.</em></p>
-        <p>{{ pkg.summary[0] }}</p>
-        <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
+  <h2>x-dog Packages</h2>
+  <div class="cards grid">
+    {% for pkg in packages %}
+      <div class="card -3of12 cell" id="{{ pkg.name }}">
+        <header class="card-header">
+          <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
+          &nbsp;|&nbsp;
+          <span>{% if pkg.cli %}<code>{{ pkg.cli }}</code>{% else %}library{% endif %}</span>
+        </header>
+        <div class="card-content">
+          <div class="inner">
+            <p><em>{{ pkg.tagline }}.</em></p>
+            {{ pkg.summary[0] }}
+            <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
+          </div>
+        </div>
       </div>
-    </div>
+      <div class="cell -1of12 spacer"></div>
+    {% endfor %}
   </div>
 </section>
-{% endfor %}
 {% endblock %}
