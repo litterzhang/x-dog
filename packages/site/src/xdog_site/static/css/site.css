@@ -95,8 +95,8 @@ body.hack {
   }
 }
 
-/* x-dog additions (depins does not restyle .card — layout is hack.css + spacer
-   cells; only these site-specific elements need rules). */
+/* x-dog-only elements (blog meta, FAQ accordion, pagination) — depins has no
+   equivalents. No .card rules here: card styling comes entirely from hack.css. */
 .muted {
   color: #888;
 }
