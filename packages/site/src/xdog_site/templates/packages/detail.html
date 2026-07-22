@@ -3,7 +3,6 @@
 {% block ctitle %}/ Packages / {{ pkg.name }}{% endblock %}
 
 {% block content %}
-{% if pkg.name == 'flow' %}{% set tab = 'overview' %}{% include "packages/flow/_tabs.html" %}{% endif %}
 <section>
   <h2>{{ pkg.name }}</h2>
   <div><em>{{ pkg.tagline }}.</em></div>

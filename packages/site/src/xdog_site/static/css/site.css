@@ -111,24 +111,7 @@ details[open] > summary {
   margin: 0 0.2rem;
 }
 
-/* flow deep-dive: tab bar + inline SVG diagram fit. */
-.flow-tabs {
-  margin: 0 0 1rem 0;
-  padding-bottom: 0.3rem;
-  border-bottom: 1px solid #ccc;
-}
-.flow-tabs a {
-  display: inline-block;
-  margin-right: 1rem;
-  padding: 0.2rem 0;
-  border-bottom: 2px solid transparent;
-}
-.flow-tabs a.active {
-  color: #333;
-  font-weight: bold;
-  border-bottom: 2px solid #ff2e88;
-  background: none;
-}
+/* flow deep-dive: inline SVG diagram fit. */
 .diagram {
   margin: 1rem 0;
   overflow-x: auto;

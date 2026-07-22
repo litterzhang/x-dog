@@ -33,7 +33,7 @@ def test_home_ok_lists_every_package(client: FlaskClient) -> None:
 
 
 def test_packages_index_ok(client: FlaskClient) -> None:
-    resp = client.get("/packages")
+    resp = client.get("/packages/all")
     assert resp.status_code == 200
     assert "Packages" in resp.get_data(as_text=True)
 
@@ -99,20 +99,23 @@ def test_404_page_is_styled(client: FlaskClient) -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    "path,crumb",
     [
-        "/packages/flow",
-        "/packages/flow/design",
-        "/packages/flow/features",
-        "/packages/flow/examples",
-        "/packages/flow/roadmap",
+        ("/packages/flow", "flow"),
+        ("/packages/flow/design", "flow / Design"),
+        ("/packages/flow/features", "flow / Features"),
+        ("/packages/flow/examples", "flow / Examples"),
+        ("/packages/flow/roadmap", "flow / Roadmap"),
     ],
 )
-def test_flow_subpages_ok_with_tabs(client: FlaskClient, path: str) -> None:
+def test_flow_subpages_ok_with_breadcrumb(client: FlaskClient, path: str, crumb: str) -> None:
     resp = client.get(path)
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "flow-tabs" in body  # shared tab bar renders on every flow page
+    # the h1 breadcrumb reflects the sub-page, e.g. "x-dog / Packages / flow / Design"
+    assert f"Packages / {crumb}" in body
+    # the left-nav flow submenu links every sub-page
+    assert "/packages/flow/design" in body and "/packages/flow/roadmap" in body
 
 
 def test_flow_examples_renders_live_svg_and_ascii(client: FlaskClient) -> None:

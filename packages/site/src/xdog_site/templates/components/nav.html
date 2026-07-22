@@ -63,7 +63,7 @@
         <li><a href="{{ url_for('main.package_detail', name=name) }}">{{ name }}</a></li>
         {% endfor %}
         <li>
-          <a href="{{ url_for('main.package_detail', name='flow') }}">flow</a>
+          flow
           <ul style="margin:0">
             <input type="checkbox" />
             <li><a href="{{ url_for('main.package_detail', name='flow') }}">Overview</a></li>
@@ -81,16 +81,14 @@
 </div>
 
 <script>
-/* Highlight the current page and expand its parent section (no jQuery). */
+/* Highlight the current page and expand its parent section(s) (no jQuery). */
 (function () {
-  var path = window.location.pathname;
+  var path = window.location.pathname.replace(/\/+$/, '') || '/';
   var links = document.querySelectorAll('.nav a[href]');
   links.forEach(function (a) {
-    var href = a.getAttribute('href');
-    // Exact match, or a package/blog detail page under its section root.
-    var isActive = href === path
-      || (href !== '/' && path.indexOf(href + '/') === 0);
-    if (isActive) {
+    var href = (a.getAttribute('href') || '').replace(/\/+$/, '') || '/';
+    // Exact match only — avoids /packages also lighting up on /packages/flow/*.
+    if (href === path) {
       a.classList.add('active');
       var ul = a.closest('ul');
       while (ul) {

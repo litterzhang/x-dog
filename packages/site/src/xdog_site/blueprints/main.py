@@ -22,7 +22,7 @@ def home() -> str:
     return render_template("index.html", packages=PACKAGES, layers=layers)
 
 
-@bp.route("/packages")
+@bp.route("/packages/all")
 def packages() -> str:
     return render_template("packages/index.html", packages=PACKAGES)
 
@@ -32,30 +32,22 @@ def packages() -> str:
 
 @bp.route("/packages/flow/design")
 def flow_design() -> str:
-    return render_template(
-        "packages/flow/design.html", pkg=PACKAGES_BY_NAME["flow"], sections=DESIGN_SECTIONS, tab="design"
-    )
+    return render_template("packages/flow/design.html", pkg=PACKAGES_BY_NAME["flow"], sections=DESIGN_SECTIONS)
 
 
 @bp.route("/packages/flow/features")
 def flow_features() -> str:
-    return render_template(
-        "packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], features=FEATURES, tab="features"
-    )
+    return render_template("packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], features=FEATURES)
 
 
 @bp.route("/packages/flow/examples")
 def flow_examples() -> str:
-    return render_template(
-        "packages/flow/examples.html", pkg=PACKAGES_BY_NAME["flow"], examples=_flow_examples(), tab="examples"
-    )
+    return render_template("packages/flow/examples.html", pkg=PACKAGES_BY_NAME["flow"], examples=_flow_examples())
 
 
 @bp.route("/packages/flow/roadmap")
 def flow_roadmap() -> str:
-    return render_template(
-        "packages/flow/roadmap.html", pkg=PACKAGES_BY_NAME["flow"], gaps=GAPS, roadmap=ROADMAP, tab="roadmap"
-    )
+    return render_template("packages/flow/roadmap.html", pkg=PACKAGES_BY_NAME["flow"], gaps=GAPS, roadmap=ROADMAP)
 
 
 @bp.route("/packages/<name>")
