@@ -15,9 +15,9 @@
         </header>
         <div class="card-content">
           <div class="inner">
-            <p><em>{{ pkg.tagline }}.</em></p>
-            {{ pkg.summary[0] }}
-            <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
+            <div><em>{{ pkg.tagline }}.</em></div>
+            <div>{{ pkg.summary[0] }}</div>
+            <div><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></div>
           </div>
         </div>
       </div>
