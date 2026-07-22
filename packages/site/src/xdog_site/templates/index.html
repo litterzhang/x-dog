@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %} — composable packages for AI agents{% endblock %}
+{% block ctitle %}{% endblock %}
+
+{% block content %}
+<section>
+  <p>
+    <strong>x-dog</strong> is a Python monorepo of small, composable packages for
+    building AI agents and managing LLM deployments. Each package does one thing
+    and they stack: a provider API at the bottom, an agent runtime and a workflow
+    engine in the middle, ready-to-use tools on top.
+  </p>
+  <p>
+    <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-primary">Explore packages</a>
+    <a href="{{ url_for('blog.blog_index') }}" class="btn btn-ghost btn-default">Read the blog</a>
+  </p>
+</section>
+
+<hr>
+
+{% for title, pkgs in layers %}
+<section>
+  <h3>{{ title }}</h3>
+  <div class="grid">
+    {% for pkg in pkgs %}
+    <div class="cell -6of12">
+      <div class="card">
+        <div class="card-header">
+          <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
+          {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% endif %}
+        </div>
+        <p>{{ pkg.tagline }}.</p>
+        <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Details &rarr;</a></p>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

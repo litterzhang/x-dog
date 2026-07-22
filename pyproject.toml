@@ -17,6 +17,7 @@ dependencies = [
     "ai",
     "agent",
     "flow",
+    "site",
 ]
 
 [dependency-groups]
@@ -46,6 +47,7 @@ members = [
     "packages/agent",
     "packages/flow",
     "packages/tui",
+    "packages/site",
 ]
 
 [tool.uv.sources]
@@ -53,12 +55,14 @@ ai = { workspace = true }
 agent = { workspace = true }
 flow = { workspace = true }
 tui = { workspace = true }
+site = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
     "packages/ai/tests",
     "packages/agent/tests",
     "packages/flow/tests",
+    "packages/site/tests",
 ]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib"

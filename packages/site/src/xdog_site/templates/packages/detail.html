@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %} — {{ pkg.name }}{% endblock %}
+{% block ctitle %}/ Packages / {{ pkg.name }}{% endblock %}
+
+{% block content %}
+<section>
+  <h2>{{ pkg.name }}</h2>
+  <p><em>{{ pkg.tagline }}.</em></p>
+  {% if pkg.cli %}<p class="state">CLI: <code>{{ pkg.cli }}</code></p>{% else %}<p class="state">Library (no CLI)</p>{% endif %}
+</section>
+
+<section>
+  {% for para in pkg.summary %}
+  <p>{{ para }}</p>
+  {% endfor %}
+</section>
+
+<section>
+  <h3>Highlights</h3>
+  <ul>
+    {% for h in pkg.highlights %}
+    <li>{{ h }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+{% if pkg.install %}
+<section>
+  <h3>Try it</h3>
+  <pre><code>{{ pkg.install }}</code></pre>
+</section>
+{% endif %}
+
+<section>
+  <p>
+    <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>
+    <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-default btn-small">&larr; All packages</a>
+  </p>
+</section>
+{% endblock %}

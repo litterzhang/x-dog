@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %} — FAQ{% endblock %}
+{% block ctitle %}/ FAQ{% endblock %}
+
+{% block content %}
+<section>
+  <p>Frequently asked questions about x-dog.</p>
+</section>
+
+{% for item in faqs %}
+<section>
+  <details {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ item.q }}</strong></summary>
+    <p>{{ item.a }}</p>
+  </details>
+</section>
+{% endfor %}
+{% endblock %}

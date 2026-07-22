@@ -1,0 +1,118 @@
+/* 3-column layout 20/60/20 */
+body.hack {
+  display: grid;
+  grid-template-columns: 5% 15% 60% 15% 5%;
+  grid-template-areas: "_before left main right _after";
+  margin: 0 auto;
+  padding: 0 0 2rem 0;
+  max-width: 1500px;
+  min-width: 360px;
+}
+
+/* Areas */
+.left { 
+  grid-area: left; 
+  padding: 0 1rem; 
+}
+.main {
+  grid-area: main;
+  width: 100%;
+  min-width: 20rem;
+}
+.right { 
+  grid-area: right; 
+  padding: 0 1rem; 
+}
+
+.right section {
+  max-width: 25rem;
+}
+
+.main .content {
+  /* Ensure main column occupies at least 80% of viewport height */
+  min-height: 60vh;
+}
+
+/* Responsive: stack (mobile: show left, right, main vertically) */
+@media (max-width: 960px) {
+  body.hack {
+    grid-template-columns: 100%;
+    grid-template-areas:
+      "left"
+      "right"
+      "main";
+  }
+  .left, .right, .main { width: 100%; margin: 0;}
+  .left, .right { display: block; }
+  .main .content {
+    min-height: 30vh;
+  }
+}
+
+.dev-icon {
+  height: 1.5rem;
+  width: 1.5rem;
+  vertical-align: middle;
+  margin-right: 0.5rem;
+  display: inline-block;
+}
+
+.state {
+  color: #ccc;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #ccc;
+  margin-bottom: 0;
+  display: inline-block;
+}
+.state-success {
+  color: #2d7;
+  border-color: #2d7;
+}
+.state-error {
+  color: #f44;
+  border-color: #f44;
+}
+.state-warning {
+  color: #fa0;
+  border-color: #fa0;
+}
+
+.spacer {
+  min-height: 1rem;
+}
+
+.btn-small {
+  padding: 0.4rem 0.8rem;
+}
+
+.title-break {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .title-break {
+    display: inline;
+  }
+}
+
+/* x-dog additions */
+.muted {
+  color: #888;
+}
+.card {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.card .card-header {
+  margin-bottom: 0.5rem;
+}
+details > summary {
+  cursor: pointer;
+  padding: 0.3rem 0;
+}
+details[open] > summary {
+  color: #ff2e88;
+}
+.pagination a {
+  margin: 0 0.2rem;
+}

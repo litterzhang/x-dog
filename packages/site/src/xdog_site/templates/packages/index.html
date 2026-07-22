@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %} — Packages{% endblock %}
+{% block ctitle %}/ Packages{% endblock %}
+
+{% block content %}
+<section>
+  <p>Six composable packages. Each is installable and testable on its own.</p>
+</section>
+
+{% for pkg in packages %}
+<section>
+  <div class="card">
+    <div class="card-header">
+      <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
+      {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% else %}<span class="muted">library</span>{% endif %}
+    </div>
+    <p><em>{{ pkg.tagline }}.</em></p>
+    <p>{{ pkg.summary[0] }}</p>
+    <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

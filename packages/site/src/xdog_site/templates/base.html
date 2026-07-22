@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" id="top">
+<head>
+  <meta charset="utf-8">
+  <title>x-dog{% block title %}{% endblock %}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="{% block meta_description %}x-dog — composable Python packages for building AI agents and managing LLM deployments.{% endblock %}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/hack.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="hack">
+  <div class="left">
+    {% include "components/nav.html" %}
+  </div>
+  <div class="right">
+    <section>
+      <p class="muted"><strong>x-dog</strong></p>
+      <p class="muted">Tools for building AI agents and managing LLM deployments.</p>
+      <p><a href="https://github.com/litterzhang/x-dog" class="btn btn-ghost btn-default btn-small">GitHub &rarr;</a></p>
+    </section>
+  </div>
+
+  <div class="main container">
+    <div class="header grid">
+      <h1 class="cell">
+        x-dog {% block ctitle %}{% endblock %}
+      </h1>
+    </div>
+
+    <div class="content grid">
+      <div class="cell content" id="content">
+        {% block content %}{% endblock %}
+      </div>
+    </div>
+
+    <div class="footer grid">
+      <div class="cell">
+        <hr>
+        <div class="footer-content">
+          <span>&copy; 2026 x-dog &middot; MIT licensed</span>
+          <a href="#top" class="back-to-top" aria-label="Back to top">Back to top &uarr;</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
