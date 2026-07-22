@@ -23,14 +23,16 @@
   <h3>{{ title }}</h3>
   <div class="grid">
     {% for pkg in pkgs %}
-    <div class="cell -6of12">
-      <div class="card">
-        <div class="card-header">
-          <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
-          {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% endif %}
+    <div class="card cell">
+      <header class="card-header">
+        <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
+        {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% endif %}
+      </header>
+      <div class="card-content">
+        <div class="inner">
+          <p>{{ pkg.tagline }}.</p>
+          <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Details &rarr;</a></p>
         </div>
-        <p>{{ pkg.tagline }}.</p>
-        <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Details &rarr;</a></p>
       </div>
     </div>
     {% endfor %}

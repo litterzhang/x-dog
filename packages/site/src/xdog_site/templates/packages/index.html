@@ -10,13 +10,17 @@
 {% for pkg in packages %}
 <section>
   <div class="card">
-    <div class="card-header">
+    <header class="card-header">
       <strong><a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a></strong>
       {% if pkg.cli %}<code>{{ pkg.cli }}</code>{% else %}<span class="muted">library</span>{% endif %}
+    </header>
+    <div class="card-content">
+      <div class="inner">
+        <p><em>{{ pkg.tagline }}.</em></p>
+        <p>{{ pkg.summary[0] }}</p>
+        <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
+      </div>
     </div>
-    <p><em>{{ pkg.tagline }}.</em></p>
-    <p>{{ pkg.summary[0] }}</p>
-    <p><a href="{{ url_for('main.package_detail', name=pkg.name) }}">Learn more &rarr;</a></p>
   </div>
 </section>
 {% endfor %}

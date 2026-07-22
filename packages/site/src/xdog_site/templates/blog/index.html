@@ -1,29 +1,32 @@
 {% extends "base.html" %}
 {% from "components/pagination.html" import pagination %}
 {% block title %} — Blog{% endblock %}
-{% block ctitle %}/ Blog{% endblock %}
+{% block ctitle %} &gt; Blog{% endblock %}
 
 {% block content %}
 <section>
+  <h2>Latest Articles</h2>
   <p>Notes on the design and internals of the x-dog packages.</p>
-</section>
-
-{% for article in articles %}
-<section>
-  <div class="card">
-    <div class="card-header">
-      <strong><a href="{{ url_for('blog.blog_article', slug=article.slug) }}">{{ article.title }}</a></strong>
-    </div>
-    <p class="muted">{{ article.date.strftime('%Y-%m-%d') }}
-      {% for tag in article.tags %}<code>{{ tag }}</code> {% endfor %}
-    </p>
-    <p>{{ article.description }}</p>
-    <p><a href="{{ url_for('blog.blog_article', slug=article.slug) }}">Read &rarr;</a></p>
+  <div class="articles-list">
+    {% if articles %}
+      {% for a in articles %}
+        <article class="article-card">
+          <h3>
+            <a class="article-link" href="{{ url_for('blog.blog_article', slug=a.slug) }}">{{ a.title }}</a>
+          </h3>
+          <p class="article-meta">
+            {{ a.date.strftime("%Y-%m-%d") }} · {% if a.tags %}{{ a.tags|join(", ") }}{% endif %}
+          </p>
+          <p class="article-desc">{{ a.description }}</p>
+          <p class="article-readmore">
+            <a href="{{ url_for('blog.blog_article', slug=a.slug) }}">Read more &rarr;</a>
+          </p>
+        </article>
+      {% endfor %}
+      {{ pagination(url_for('blog.blog_index'), page, total_pages) }}
+    {% else %}
+      <p>No articles published yet.</p>
+    {% endif %}
   </div>
 </section>
-{% else %}
-<section><p class="muted">No articles yet.</p></section>
-{% endfor %}
-
-{{ pagination(url_for('blog.blog_index'), page, total_pages) }}
 {% endblock %}
