@@ -104,3 +104,55 @@ def test_register_workflow_tools_uses_manifest_name() -> None:
     assert {"reverse", "rev2"} <= reg.names()
     assert reg.get("reverse").name == "reverse"
     assert reg.get("rev2").name == "rev2"
+
+
+# --- describe_tools (builder Tools page) --------------------------------------
+
+
+def test_describe_tools_includes_builtins() -> None:
+    from flow.tools import describe_tools
+
+    wf = WorkflowDef(name="w", provider="fake", entry="n", nodes=(), edges=())
+    infos = describe_tools(wf)
+    names = {i.name for i in infos}
+    assert {"echo", "bash", "filesystem"} <= names
+    assert all(i.origin == "builtin" for i in infos)
+    echo = next(i for i in infos if i.name == "echo")
+    assert echo.description == "Echo the given text."
+    assert echo.source is not None  # inspect.getsource on the execute fn
+
+
+def test_describe_tools_includes_custom_from_manifest() -> None:
+    from flow.tools import describe_tools
+
+    wf = WorkflowDef(
+        name="w",
+        provider="fake",
+        entry="n",
+        nodes=(),
+        edges=(),
+        tool_refs=(("reverse", "mytools:make_reverse"),),
+    )
+    infos = describe_tools(wf, _FIXTURES)
+    rev = next(i for i in infos if i.name == "reverse")
+    assert rev.origin == "custom"
+    assert rev.description == "Reverse the given text."
+    assert rev.source is not None
+    assert "reverse" in rev.params.get("properties", {}) or "text" in rev.params.get("properties", {})
+
+
+def test_describe_tools_broken_ref_is_skipped_gracefully() -> None:
+    from flow.tools import describe_tools
+
+    wf = WorkflowDef(
+        name="w",
+        provider="fake",
+        entry="n",
+        nodes=(),
+        edges=(),
+        tool_refs=(("broken", "mytools:NOT_A_TOOL"),),
+    )
+    infos = describe_tools(wf, _FIXTURES)
+    broken = next(i for i in infos if i.name == "broken")
+    assert broken.origin == "custom"
+    assert broken.source is None

@@ -31,6 +31,14 @@ def test_tilde_sequences():
     assert len(events) == 1
     assert events[0].matches("shift+up")
 
+def test_backtab_csi_z():
+    """CSI Z is Shift+Tab (backtab) on legacy xterm-style terminals."""
+    events = parse_key_events(b'\x1b[Z')
+    assert len(events) == 1
+    assert events[0].key == "tab"
+    assert events[0].shift is True
+    assert events[0].matches("shift+tab")
+
 # ---------- Kitty keyboard protocol tests ----------
 
 from tui.keys import (

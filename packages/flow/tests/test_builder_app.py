@@ -83,6 +83,7 @@ def test_selection_moves_with_j_k(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="a"))
     app.handle_input(KeyEvent(key="a"))
     app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="tab"))  # graph -> nodes (arrows act on nodes)
     # selection starts on last-added; move up then assert it changed
     top = app.model.node_ids[0]
     app.handle_input(KeyEvent(key="k"))
@@ -202,6 +203,7 @@ def test_edge_mode_connects_source_to_dest(tmp_path: pathlib.Path) -> None:
     app = _new_app(tmp_path)
     app.handle_input(KeyEvent(key="a"))  # 'agent'  (selected)
     app.handle_input(KeyEvent(key="a"))  # 'agent2' (selected)
+    app.handle_input(KeyEvent(key="tab"))  # graph -> nodes (arrows act on nodes)
     # select the source
     app.handle_input(KeyEvent(key="k"))  # move selection up to 'agent'
     assert app.model.selected == "agent"
@@ -287,6 +289,7 @@ def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="p"))  # edit prompt
     _type(app, "hello world")
     app.handle_input(KeyEvent(key="enter"))
+    app.handle_input(KeyEvent(key="tab"))  # graph -> nodes: right panel shows DETAILS
     joined = strip_ansi("\n".join(app.render(100)))
     assert "DETAILS" in joined
     assert "hello world" in joined  # the prompt is visible in details
@@ -309,22 +312,31 @@ def test_left_panel_has_three_boxed_blocks() -> None:
 
 
 def test_tab_cycles_focus_nodes_edges_graph() -> None:
-    """Tab advances focus nodes -> edges -> graph -> nodes (wrapping)."""
+    """Tab advances focus graph -> nodes -> edges -> graph (wrapping)."""
     app = _rwr_app()
-    assert app._focus == "nodes"  # default focus
+    assert app._focus == "graph"  # default focus is the Graph block
+    app.handle_input(KeyEvent(key="tab"))
+    assert app._focus == "nodes"
     app.handle_input(KeyEvent(key="tab"))
     assert app._focus == "edges"
     app.handle_input(KeyEvent(key="tab"))
+    assert app._focus == "graph"  # wrapped
+
+
+def test_default_focus_is_graph_and_arrows_are_inert() -> None:
+    """The builder opens on the Graph block; up/down do NOT move the node selection."""
+    app = _rwr_app()
     assert app._focus == "graph"
-    app.handle_input(KeyEvent(key="tab"))
-    assert app._focus == "nodes"  # wrapped
+    before = app.model.selected
+    app.handle_input(KeyEvent(key="down"))
+    app.handle_input(KeyEvent(key="j"))
+    app.handle_input(KeyEvent(key="up"))
+    assert app.model.selected == before  # graph focus swallows navigation
 
 
 def test_graph_focus_shows_diagram_on_right() -> None:
-    """With the Graph block focused, the right panel shows the ASCII diagram."""
+    """With the Graph block focused (the default), the right panel shows the diagram."""
     app = _rwr_app()
-    app.handle_input(KeyEvent(key="tab"))  # -> edges
-    app.handle_input(KeyEvent(key="tab"))  # -> graph
     joined = strip_ansi("\n".join(app.render(100)))
     assert "GRAPH" in joined
     # the boxed node diagram from to_ascii_diagram is present
@@ -334,6 +346,7 @@ def test_graph_focus_shows_diagram_on_right() -> None:
 def test_edges_focus_shows_edge_detail_and_param_flow() -> None:
     """With the Edges block focused, the right panel shows 'src -> dst' + param flow."""
     app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     joined = strip_ansi("\n".join(app.render(100)))
     assert "EDGE" in joined
@@ -344,6 +357,7 @@ def test_edges_focus_shows_edge_detail_and_param_flow() -> None:
 def test_jk_navigate_edges_when_edges_focused() -> None:
     """In the Edges block, j/k move the edge selection (not the node selection)."""
     app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     selected_before = app.model.selected
     assert app._edge_idx == 0
@@ -358,6 +372,7 @@ def test_jk_navigate_edges_when_edges_focused() -> None:
 def test_d_deletes_edge_when_edges_focused() -> None:
     """In the Edges block, 'd' removes the selected edge, leaving nodes intact."""
     app = _rwr_app()
+    app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     edges_before = len(app.model.wf.edges)
     nodes_before = len(app.model.wf.nodes)
@@ -391,6 +406,7 @@ def test_multiline_field_does_not_corrupt_layout(tmp_path: pathlib.Path) -> None
     from flow.builder import actions
 
     app._model = actions.set_field(app.model, "agent", "prompt", "line one\n\nline two")
+    app.handle_input(KeyEvent(key="tab"))  # graph -> nodes: DETAILS shows the prompt
     lines = app.render(100)
     # no rendered element carries an embedded newline/tab (each row is one line)
     assert all("\n" not in line and "\t" not in line for line in lines)
@@ -399,3 +415,102 @@ def test_multiline_field_does_not_corrupt_layout(tmp_path: pathlib.Path) -> None
     # both prompt fragments are still visible (flattened onto one row)
     joined = strip_ansi("\n".join(lines))
     assert "line one" in joined and "line two" in joined
+
+
+# --- Shift+Tab page navigation: Builder / Functions / Tools -------------------
+
+_CGB = "packages/flow/examples/codegen_builder.json"  # has code + run: scripts, tools
+
+
+def _cgb_app() -> BuilderApp:
+    return build_app(pathlib.Path(_CGB))
+
+
+def _shift_tab(app: BuilderApp) -> None:
+    app.handle_input(KeyEvent(key="tab", shift=True))
+
+
+def test_shift_tab_cycles_pages() -> None:
+    """Shift+Tab advances the top-level page builder -> functions -> tools -> builder."""
+    app = _cgb_app()
+    assert app._page == "builder"
+    _shift_tab(app)
+    assert app._page == "functions"
+    _shift_tab(app)
+    assert app._page == "tools"
+    _shift_tab(app)
+    assert app._page == "builder"  # wrapped
+
+
+def test_functions_page_lists_scripts_and_shows_source() -> None:
+    """The Functions page lists the workflow's script nodes and shows their source."""
+    app = _cgb_app()
+    _shift_tab(app)  # -> functions
+    joined = strip_ansi("\n".join(app.render(120)))
+    assert "Functions" in joined
+    assert "SOURCE" in joined
+    # codegen_builder has script nodes 'intake' (run:) and 'verify' (run:)
+    assert "intake" in joined
+    # the right pane shows real imported source (a def/async def line)
+    assert "def " in joined
+
+
+def test_functions_page_navigates_scripts() -> None:
+    """j/k move the selected script on the Functions page."""
+    app = _cgb_app()
+    _shift_tab(app)  # -> functions
+    assert app._fn_idx == 0
+    app.handle_input(KeyEvent(key="j"))
+    assert app._fn_idx == 1
+    app.handle_input(KeyEvent(key="k"))
+    assert app._fn_idx == 0
+
+
+def test_tools_page_lists_builtin_and_shows_source() -> None:
+    """The Tools page lists built-in tools with description + execute source."""
+    app = _cgb_app()
+    _shift_tab(app)  # -> functions
+    _shift_tab(app)  # -> tools
+    joined = strip_ansi("\n".join(app.render(120)))
+    assert "Tools" in joined
+    assert "builtin" in joined  # origin tag
+    assert "bash" in joined and "filesystem" in joined
+    assert "source" in joined.lower()  # the source divider/section
+
+
+def test_tools_page_shows_custom_tool_from_manifest(tmp_path: pathlib.Path) -> None:
+    """A workflow with a tool manifest surfaces its custom tool on the Tools page."""
+    import shutil
+
+    # Bundle a fixture tool module beside a manifest workflow.
+    fixtures = pathlib.Path(__file__).parent / "fixtures"
+    shutil.copy(fixtures / "mytools.py", tmp_path / "mytools.py")
+    wf_json = tmp_path / "wf.json"
+    wf_json.write_text(
+        """{
+          "name": "tw", "provider": "copilot", "defaults": {"model": "m"}, "entry": "a",
+          "tools": {"reverse": "mytools:make_reverse"},
+          "nodes": [{"id": "a", "type": "agent", "model": "m", "prompt": "p", "tools": ["reverse"]}],
+          "edges": []
+        }""",
+        encoding="utf-8",
+    )
+    app = build_app(wf_json)
+    _shift_tab(app)  # -> functions
+    _shift_tab(app)  # -> tools
+    # Move selection onto the custom tool (last in the list, after builtins).
+    infos = app._tool_infos()
+    app._tool_idx = next(i for i, info in enumerate(infos) if info.name == "reverse")
+    joined = strip_ansi("\n".join(app.render(120)))
+    assert "reverse" in joined
+    assert "custom" in joined  # origin tag
+    assert "Reverse the given text." in joined  # description
+
+
+def test_shift_tab_ignored_in_prompt_mode(tmp_path: pathlib.Path) -> None:
+    """Shift+Tab must not switch pages while editing a prompt (text mode owns keys)."""
+    app = _new_app(tmp_path)
+    app.handle_input(KeyEvent(key="a"))
+    app.handle_input(KeyEvent(key="p"))  # enter prompt mode
+    _shift_tab(app)
+    assert app._page == "builder"  # unchanged

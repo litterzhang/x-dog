@@ -6,9 +6,8 @@ and the Kitty keyboard protocol (CSI u sequences).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Sequence
 
 
 class SpecialKey(Enum):
@@ -458,6 +457,10 @@ def _parse_csi(buf: bytes, start: int, length: int) -> tuple[KeyEvent, int] | No
                 elif len(params) >= 1 and params[0] == "1" and len(params) < 2:
                     pass  # CSI 1 A  -- just the key, no modifier
                 return KeyEvent(key=key, ctrl=ctrl, alt=alt, shift=shift), consumed
+
+            # Backtab: CSI Z is Shift+Tab on legacy xterm-style terminals.
+            if final == "Z":
+                return KeyEvent(key="tab", shift=True), consumed
 
             return None
         else:

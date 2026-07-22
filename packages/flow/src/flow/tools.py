@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import inspect
 import sys
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from agent.core import AgentTool, AgentToolResult
 from ai.types import TextContent
@@ -177,3 +178,76 @@ def bind_tool(obj: object, name: str) -> AgentTool:
     ``flow.tools`` line — no ``dataclasses`` import needed).
     """
     return replace(coerce_tool(obj), name=name)
+
+
+# ---------------------------------------------------------------------------
+# Tool introspection (for the builder's Tools page)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToolInfo:
+    """A descriptive snapshot of a tool for read-only display.
+
+    ``origin`` is ``"builtin"`` for tools from :func:`default_registry` or
+    ``"custom"`` for tools declared in a workflow's ``tool_refs`` manifest.
+    ``source`` is the ``execute`` callable's source when retrievable, else
+    ``None``.
+    """
+
+    name: str
+    origin: Literal["builtin", "custom"]
+    description: str
+    params: dict[str, Any]
+    source: str | None
+
+
+def _tool_source(tool: AgentTool) -> str | None:
+    """Best-effort source of a tool's ``execute`` callable, or ``None``."""
+    fn = tool.execute
+    if fn is None:
+        return None
+    try:
+        return inspect.getsource(fn)
+    except (OSError, TypeError):
+        return None
+
+
+def describe_tools(wf: WorkflowDef, base_dir: Path | None = None) -> tuple[ToolInfo, ...]:
+    """Return :class:`ToolInfo` for every built-in and manifest tool of *wf*.
+
+    Built-ins come from :func:`default_registry`; custom tools are loaded from
+    the workflow's ``tool_refs`` (via :func:`load_tool_ref`, *base_dir*-aware).
+    A custom tool that fails to load is skipped rather than raising, so the
+    builder's read-only view degrades gracefully.
+    """
+    infos: list[ToolInfo] = []
+    for name in sorted(default_registry().names()):
+        tool = default_registry().get(name)
+        infos.append(
+            ToolInfo(
+                name=name,
+                origin="builtin",
+                description=tool.description,
+                params=dict(tool.parameters),
+                source=_tool_source(tool),
+            )
+        )
+    for name, ref in wf.tool_refs:
+        try:
+            tool = replace(load_tool_ref(ref, base_dir), name=name)
+        except Exception:  # noqa: BLE001 - a broken ref shouldn't crash the viewer
+            infos.append(
+                ToolInfo(name=name, origin="custom", description=f"(failed to load {ref})", params={}, source=None)
+            )
+            continue
+        infos.append(
+            ToolInfo(
+                name=name,
+                origin="custom",
+                description=tool.description,
+                params=dict(tool.parameters),
+                source=_tool_source(tool),
+            )
+        )
+    return tuple(infos)

@@ -16,6 +16,7 @@ trivially unit-testable by feeding synthetic ``KeyEvent`` objects.  Only
 
 from __future__ import annotations
 
+import inspect
 import pathlib
 from collections.abc import Callable
 
@@ -27,14 +28,19 @@ from flow.builder import actions, style
 from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.graph import to_ascii_diagram
+from flow.models import NodeDef
+from flow.tools import ToolInfo, describe_tools
 
 _MIN_WIDTH = 60
 _LEFT_MAX = 40
 _GAP = "  "
-_KEYHINT = "tab block   a/s add   j/k move   d del   p prompt   e edge   w save   q quit"
+_KEYHINT = "S-tab page   tab block   a/s add   j/k move   d del   p prompt   e edge   w save   q quit"
 
 # The three left-panel blocks, in Tab-cycle order.
 _FOCI = ("graph", "nodes", "edges")
+
+# The three top-level pages, in Shift+Tab-cycle order.
+_PAGES = ("builder", "functions", "tools")
 
 
 class BuilderApp(Component):
@@ -44,8 +50,11 @@ class BuilderApp(Component):
         self._model = model
         self._path = path
         self._mode = "normal"
-        self._focus = "nodes"  # which left block is active (graph/nodes/edges)
+        self._page = "builder"  # top-level page (builder/functions/tools)
+        self._focus = "graph"  # which left block is active within the builder page
         self._edge_idx = 0  # selected edge within the Edges block
+        self._fn_idx = 0  # selected script within the Functions page
+        self._tool_idx = 0  # selected tool within the Tools page
         self._buf = ""
         self._edge_src: str | None = None
         self._message = ""
@@ -74,6 +83,8 @@ class BuilderApp(Component):
         title = style.bold(style.fg(f" flow builder — {model.wf.name} ", style.TITLE))
         out.append(style.pad(title, w))
         out.append(style.dim("─" * w))
+        # Page tab strip.
+        out.append(style.pad(self._page_tabs(), w))
         # Zip the two columns row by row.
         rows = max(len(left), len(right))
         gap = _GAP
@@ -87,7 +98,8 @@ class BuilderApp(Component):
             status = style.fg("● valid", style.OK)
         else:
             status = style.fg(f"✗ {model.error}", style.ERR)
-        mode = style.dim(f"[{self._mode}·{self._focus}]")
+        locus = f"{self._page}·{self._focus}" if self._page == "builder" else self._page
+        mode = style.dim(f"[{self._mode}·{locus}]")
         out.append(style.pad(f"{status}   {mode}", w))
         if self._mode == "prompt":
             out.append(style.pad(style.fg(f"prompt> {self._buf}", style.ENTRY), w))
@@ -95,6 +107,20 @@ class BuilderApp(Component):
             out.append(style.pad(style.dim(self._message), w))
         out.append(style.pad(style.dim(_KEYHINT), w))
         return [style.pad(line, w) for line in out]
+
+    # -- page tab strip --------------------------------------------------------
+
+    def _page_tabs(self) -> str:
+        """A one-line strip showing the three pages, current one highlighted."""
+        labels = {"builder": "1 Builder", "functions": "2 Functions", "tools": "3 Tools"}
+        cells: list[str] = []
+        for page in _PAGES:
+            text = f" {labels[page]} "
+            if page == self._page:
+                cells.append(style.bold(style.fg(text, style.TITLE)))
+            else:
+                cells.append(style.dim(text))
+        return "  ".join(cells) + style.dim("   (Shift+Tab)")
 
     # -- left panel: three boxed blocks ---------------------------------------
 
@@ -117,6 +143,10 @@ class BuilderApp(Component):
         return [style.dim(top), *[style.dim(line) for line in body], style.dim(bot)]
 
     def _left_column(self, w: int) -> list[str]:
+        if self._page == "functions":
+            return self._functions_left(w)
+        if self._page == "tools":
+            return self._tools_left(w)
         out: list[str] = []
         out += self._box("Graph", self._graph_block(), w, focused=self._focus == "graph")
         out += self._box("Nodes", self._nodes_block(w - 2), w, focused=self._focus == "nodes")
@@ -171,6 +201,10 @@ class BuilderApp(Component):
     # -- right panel: follows the focused block -------------------------------
 
     def _right_column(self, w: int) -> list[str]:
+        if self._page == "functions":
+            return self._functions_right(w)
+        if self._page == "tools":
+            return self._tools_right(w)
         if self._focus == "graph":
             return self._box("GRAPH", self._graph_diagram(), w, focused=True)
         if self._focus == "edges":
@@ -250,14 +284,144 @@ class BuilderApp(Component):
             out.append(row("map", style.dim("(control edge, no data)")))
         return out
 
+    # -- Functions page: script node sources ----------------------------------
+
+    def _script_nodes(self) -> list[NodeDef]:
+        """The current workflow's script nodes, in declaration order."""
+        return [n for n in self._model.wf.nodes if n.type == "script"]
+
+    def _functions_left(self, w: int) -> list[str]:
+        scripts = self._script_nodes()
+        inner_w = w - 2
+        if not scripts:
+            return self._box("Functions", [style.dim("(no script nodes)")], w, focused=True)
+        idx = min(self._fn_idx, len(scripts) - 1)
+        lines: list[str] = []
+        for i, node in enumerate(scripts):
+            kind = "code" if node.code is not None else "run"
+            tag = style.fg(f"[{kind}]", style.SCRIPT)
+            marker = "▸ " if i == idx else "  "
+            row = f"{marker}{node.id} {tag}"
+            if i == idx:
+                row = style.bg(style.pad(row, inner_w), style.SELECT_BG)
+            lines.append(row)
+        return self._box("Functions", lines, w, focused=True)
+
+    def _functions_right(self, w: int) -> list[str]:
+        scripts = self._script_nodes()
+        if not scripts:
+            return self._box("SOURCE", [style.dim("(select a script node)")], w, focused=True)
+        node = scripts[min(self._fn_idx, len(scripts) - 1)]
+        return self._box(f"SOURCE · {node.id}", self._script_source_lines(node), w, focused=True)
+
+    def _script_source_lines(self, node: NodeDef) -> list[str]:
+        """Source lines for *node*: inline code verbatim, or the imported run: fn."""
+        if node.code is not None:
+            return node.code.splitlines() or [style.dim("(empty)")]
+        # run: "module:func" — resolve relative to the workflow dir and inspect.
+        from flow.executor import _resolve_script_fn
+
+        try:
+            fn = _resolve_script_fn(node, self._path.parent)
+            return inspect.getsource(fn).splitlines()
+        except Exception as exc:  # noqa: BLE001 - viewer must never crash
+            return [style.dim(f"(source unavailable: {type(exc).__name__}: {exc})")]
+
+    # -- Tools page: built-in + custom tool sources ----------------------------
+
+    def _tool_infos(self) -> tuple[ToolInfo, ...]:
+        return describe_tools(self._model.wf, self._path.parent)
+
+    def _tools_left(self, w: int) -> list[str]:
+        infos = self._tool_infos()
+        inner_w = w - 2
+        if not infos:
+            return self._box("Tools", [style.dim("(no tools)")], w, focused=True)
+        idx = min(self._tool_idx, len(infos) - 1)
+        lines: list[str] = []
+        for i, info in enumerate(infos):
+            accent = style.SCRIPT if info.origin == "custom" else style.AGENT
+            tag = style.fg(f"[{info.origin}]", accent)
+            marker = "▸ " if i == idx else "  "
+            row = f"{marker}{info.name} {tag}"
+            if i == idx:
+                row = style.bg(style.pad(row, inner_w), style.SELECT_BG)
+            lines.append(row)
+        return self._box("Tools", lines, w, focused=True)
+
+    def _tools_right(self, w: int) -> list[str]:
+        infos = self._tool_infos()
+        if not infos:
+            return self._box("TOOL", [style.dim("(no tools)")], w, focused=True)
+        info = infos[min(self._tool_idx, len(infos) - 1)]
+
+        def row(label: str, value: str) -> str:
+            return style.dim(f"{label:<8}") + value
+
+        out: list[str] = [row("name", info.name), row("origin", info.origin)]
+        if info.description:
+            out.append(row("desc", info.description))
+        props = info.params.get("properties") if isinstance(info.params, dict) else None
+        if isinstance(props, dict) and props:
+            fields = ", ".join(f"{k}:{v.get('type', '?') if isinstance(v, dict) else '?'}" for k, v in props.items())
+            out.append(row("params", fields))
+        out.append(style.dim("── source ──"))
+        if info.source is not None:
+            out.extend(info.source.splitlines())
+        else:
+            out.append(style.dim("(source unavailable)"))
+        return self._box(f"TOOL · {info.name}", out, w, focused=True)
+
     # -- input dispatch --------------------------------------------------------
 
     def handle_input(self, event: KeyEvent) -> bool:
+        # Shift+Tab cycles the top-level page from any normal-mode context.
+        if self._mode == "normal" and event.matches("shift+tab"):
+            self._page = _PAGES[(_PAGES.index(self._page) + 1) % len(_PAGES)]
+            return True
         if self._mode == "prompt":
             return self._handle_prompt(event)
         if self._mode == "edge":
             return self._handle_edge(event)
+        if self._page == "functions":
+            return self._handle_functions(event)
+        if self._page == "tools":
+            return self._handle_tools(event)
         return self._handle_normal(event)
+
+    def _handle_functions(self, event: KeyEvent) -> bool:
+        """Read-only Functions page: up/down move the script selection; q quits."""
+        key = event.key
+        if key in ("j", "down"):
+            self._fn_idx = self._clamp_idx(self._fn_idx + 1, len(self._script_nodes()))
+            return True
+        if key in ("k", "up"):
+            self._fn_idx = self._clamp_idx(self._fn_idx - 1, len(self._script_nodes()))
+            return True
+        if key == "q" and self.on_quit is not None:
+            self.on_quit()
+            return True
+        return True
+
+    def _handle_tools(self, event: KeyEvent) -> bool:
+        """Read-only Tools page: up/down move the tool selection; q quits."""
+        key = event.key
+        if key in ("j", "down"):
+            self._tool_idx = self._clamp_idx(self._tool_idx + 1, len(self._tool_infos()))
+            return True
+        if key in ("k", "up"):
+            self._tool_idx = self._clamp_idx(self._tool_idx - 1, len(self._tool_infos()))
+            return True
+        if key == "q" and self.on_quit is not None:
+            self.on_quit()
+            return True
+        return True
+
+    @staticmethod
+    def _clamp_idx(idx: int, count: int) -> int:
+        if count == 0:
+            return 0
+        return max(0, min(count - 1, idx))
 
     def _handle_normal(self, event: KeyEvent) -> bool:
         key = event.key
@@ -344,7 +508,13 @@ class BuilderApp(Component):
     # -- helpers ---------------------------------------------------------------
 
     def _nav(self, delta: int) -> None:
-        """Move the selection within the focused block (nodes or edges)."""
+        """Move the selection within the focused block (nodes or edges).
+
+        The Graph block has no selectable content, so arrows are inert there —
+        press Tab to move focus to Nodes before navigating.
+        """
+        if self._focus == "graph":
+            return
         if self._focus == "edges":
             self._move_edge(delta)
         else:
