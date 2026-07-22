@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import importlib
@@ -178,6 +179,71 @@ def bind_tool(obj: object, name: str) -> AgentTool:
     ``flow.tools`` line — no ``dataclasses`` import needed).
     """
     return replace(coerce_tool(obj), name=name)
+
+
+# ---------------------------------------------------------------------------
+# Static source reading (for the builder's Functions page)
+# ---------------------------------------------------------------------------
+
+
+def _extract_function_source(module_source: str, func_name: str) -> str | None:
+    """Return the source of top-level ``func_name`` in *module_source*, or None."""
+    try:
+        tree = ast.parse(module_source)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == func_name:
+            segment = ast.get_source_segment(module_source, node)
+            if segment is not None:
+                return segment
+    return None
+
+
+def read_run_source(run: str, base_dir: Path | None = None) -> str | None:
+    """Return the source of a script node's ``run: "module:func"`` reference.
+
+    Read-only and side-effect-free: it never imports the workflow's modules
+    (which may pull in heavy or missing dependencies).  Resolution order:
+
+    1. If *module* is already importable (e.g. an in-tree ``flow.codegen_tools``),
+       import it and use :func:`inspect.getsource` on the function.
+    2. Otherwise search *base_dir* and its immediate subdirectories for
+       ``<last_module_part>.py`` and statically extract the function via AST.
+
+    Returns ``None`` when the source can't be located.
+    """
+    module_name, _, func_name = run.partition(":")
+    if not func_name:
+        return None
+
+    # 1) Already-importable module — safe to introspect its live object.
+    with contextlib.suppress(Exception):
+        module = importlib.import_module(module_name)
+        fn = getattr(module, func_name, None)
+        if fn is not None:
+            return inspect.getsource(fn)
+
+    # 2) Static file search — no import, no execution.
+    if base_dir is None:
+        return None
+    leaf = module_name.split(".")[-1]
+    candidates = [base_dir / f"{leaf}.py", *(sub / f"{leaf}.py" for sub in _child_dirs(base_dir))]
+    for path in candidates:
+        if path.is_file():
+            with contextlib.suppress(OSError):
+                extracted = _extract_function_source(path.read_text(encoding="utf-8"), func_name)
+                if extracted is not None:
+                    return extracted
+    return None
+
+
+def _child_dirs(base_dir: Path) -> list[Path]:
+    """Immediate subdirectories of *base_dir* (sorted, non-hidden)."""
+    try:
+        return sorted(p for p in base_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+    except OSError:
+        return []
 
 
 # ---------------------------------------------------------------------------

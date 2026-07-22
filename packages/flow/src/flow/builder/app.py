@@ -16,8 +16,9 @@ trivially unit-testable by feeding synthetic ``KeyEvent`` objects.  Only
 
 from __future__ import annotations
 
-import inspect
+import os
 import pathlib
+import textwrap
 from collections.abc import Callable
 
 from tui.keys import KeyEvent
@@ -29,12 +30,12 @@ from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.graph import to_ascii_diagram
 from flow.models import NodeDef
-from flow.tools import ToolInfo, describe_tools
+from flow.tools import ToolInfo, describe_tools, read_run_source
 
 _MIN_WIDTH = 60
 _LEFT_MAX = 40
 _GAP = "  "
-_KEYHINT = "S-tab page   tab block   a/s add   j/k move   d del   p prompt   e edge   w save   q quit"
+_KEYHINT = "S-tab page   tab block   a/s add   j/k move   PgUp/PgDn scroll   d del   p prompt   e edge   w save   q"
 
 # The three left-panel blocks, in Tab-cycle order.
 _FOCI = ("graph", "nodes", "edges")
@@ -55,6 +56,7 @@ class BuilderApp(Component):
         self._edge_idx = 0  # selected edge within the Edges block
         self._fn_idx = 0  # selected script within the Functions page
         self._tool_idx = 0  # selected tool within the Tools page
+        self._scroll = 0  # vertical scroll offset of the right (detail) pane
         self._buf = ""
         self._edge_src: str | None = None
         self._message = ""
@@ -73,27 +75,47 @@ class BuilderApp(Component):
         w = max(width, _MIN_WIDTH)
         left_w = min(_LEFT_MAX, max(24, w * 2 // 5))
         right_w = max(20, w - left_w - visible_width(_GAP))
-        model = self._model
+
+        # Header + footer chrome is fixed height; the body fills the rest of the
+        # screen.  The left list stays put while the right (detail/source) pane
+        # scrolls independently, so long sources are fully reachable.
+        header = self._render_header(w)
+        footer = self._render_footer(w)
+        body_h = max(1, self._screen_height() - len(header) - len(footer))
 
         left = self._left_column(left_w)
         right = self._right_column(right_w)
 
-        out: list[str] = []
-        # Title bar.
-        title = style.bold(style.fg(f" flow builder — {model.wf.name} ", style.TITLE))
-        out.append(style.pad(title, w))
-        out.append(style.dim("─" * w))
-        # Page tab strip.
-        out.append(style.pad(self._page_tabs(), w))
-        # Zip the two columns row by row.
-        rows = max(len(left), len(right))
+        # Scroll the right pane; clamp so the last line stays in view.
+        max_scroll = max(0, len(right) - body_h)
+        self._scroll = max(0, min(self._scroll, max_scroll))
+        right_view = right[self._scroll : self._scroll + body_h]
+
+        out: list[str] = list(header)
         gap = _GAP
-        for i in range(rows):
+        for i in range(body_h):
             lcell = left[i] if i < len(left) else ""
-            rcell = right[i] if i < len(right) else ""
+            rcell = right_view[i] if i < len(right_view) else ""
             out.append(style.pad(style.pad(lcell, left_w) + gap + style.pad(rcell, right_w), w))
-        # Footer: status + mode + keyhint.
-        out.append(style.dim("─" * w))
+        out += footer
+        return [style.pad(line, w) for line in out]
+
+    @staticmethod
+    def _screen_height() -> int:
+        """Terminal height in rows (fallback to a sensible default off-tty)."""
+        try:
+            return max(10, os.get_terminal_size().lines)
+        except OSError:
+            return 30
+
+    def _render_header(self, w: int) -> list[str]:
+        model = self._model
+        title = style.bold(style.fg(f" flow builder — {model.wf.name} ", style.TITLE))
+        return [style.pad(title, w), style.dim("─" * w), style.pad(self._page_tabs(), w)]
+
+    def _render_footer(self, w: int) -> list[str]:
+        model = self._model
+        out: list[str] = [style.dim("─" * w)]
         if model.error is None:
             status = style.fg("● valid", style.OK)
         else:
@@ -106,7 +128,7 @@ class BuilderApp(Component):
         if self._message:
             out.append(style.pad(style.dim(self._message), w))
         out.append(style.pad(style.dim(_KEYHINT), w))
-        return [style.pad(line, w) for line in out]
+        return out
 
     # -- page tab strip --------------------------------------------------------
 
@@ -317,15 +339,13 @@ class BuilderApp(Component):
     def _script_source_lines(self, node: NodeDef) -> list[str]:
         """Source lines for *node*: inline code verbatim, or the imported run: fn."""
         if node.code is not None:
-            return node.code.splitlines() or [style.dim("(empty)")]
-        # run: "module:func" — resolve relative to the workflow dir and inspect.
-        from flow.executor import _resolve_script_fn
-
-        try:
-            fn = _resolve_script_fn(node, self._path.parent)
-            return inspect.getsource(fn).splitlines()
-        except Exception as exc:  # noqa: BLE001 - viewer must never crash
-            return [style.dim(f"(source unavailable: {type(exc).__name__}: {exc})")]
+            return textwrap.dedent(node.code).splitlines() or [style.dim("(empty)")]
+        # run: "module:func" — statically read the source (no import / execution),
+        # searching the workflow dir and its subdirectories (e.g. scripts/).
+        source = read_run_source(node.run or "", self._path.parent)
+        if source is None:
+            return [style.dim(f"(source unavailable for {node.run})")]
+        return textwrap.dedent(source).splitlines()
 
     # -- Tools page: built-in + custom tool sources ----------------------------
 
@@ -367,7 +387,7 @@ class BuilderApp(Component):
             out.append(row("params", fields))
         out.append(style.dim("── source ──"))
         if info.source is not None:
-            out.extend(info.source.splitlines())
+            out.extend(textwrap.dedent(info.source).splitlines())
         else:
             out.append(style.dim("(source unavailable)"))
         return self._box(f"TOOL · {info.name}", out, w, focused=True)
@@ -378,6 +398,7 @@ class BuilderApp(Component):
         # Shift+Tab cycles the top-level page from any normal-mode context.
         if self._mode == "normal" and event.matches("shift+tab"):
             self._page = _PAGES[(_PAGES.index(self._page) + 1) % len(_PAGES)]
+            self._scroll = 0  # each page starts scrolled to the top
             return True
         if self._mode == "prompt":
             return self._handle_prompt(event)
@@ -393,28 +414,69 @@ class BuilderApp(Component):
         """Read-only Functions page: up/down move the script selection; q quits."""
         key = event.key
         if key in ("j", "down"):
-            self._fn_idx = self._clamp_idx(self._fn_idx + 1, len(self._script_nodes()))
+            self._select_fn(self._fn_idx + 1)
             return True
         if key in ("k", "up"):
-            self._fn_idx = self._clamp_idx(self._fn_idx - 1, len(self._script_nodes()))
+            self._select_fn(self._fn_idx - 1)
+            return True
+        if self._scroll_key(event):
             return True
         if key == "q" and self.on_quit is not None:
             self.on_quit()
             return True
         return True
 
+    def _select_fn(self, idx: int) -> None:
+        new = self._clamp_idx(idx, len(self._script_nodes()))
+        if new != self._fn_idx:
+            self._fn_idx = new
+            self._scroll = 0  # new source starts from the top
+
     def _handle_tools(self, event: KeyEvent) -> bool:
         """Read-only Tools page: up/down move the tool selection; q quits."""
         key = event.key
         if key in ("j", "down"):
-            self._tool_idx = self._clamp_idx(self._tool_idx + 1, len(self._tool_infos()))
+            self._select_tool(self._tool_idx + 1)
             return True
         if key in ("k", "up"):
-            self._tool_idx = self._clamp_idx(self._tool_idx - 1, len(self._tool_infos()))
+            self._select_tool(self._tool_idx - 1)
+            return True
+        if self._scroll_key(event):
             return True
         if key == "q" and self.on_quit is not None:
             self.on_quit()
             return True
+        return True
+
+    def _select_tool(self, idx: int) -> None:
+        new = self._clamp_idx(idx, len(self._tool_infos()))
+        if new != self._tool_idx:
+            self._tool_idx = new
+            self._scroll = 0
+
+    def _scroll_key(self, event: KeyEvent) -> bool:
+        """Scroll the right (detail/source) pane.  Returns True if consumed.
+
+        PageDown / Ctrl+F jump a screenful down; PageUp / Ctrl+B a screenful up;
+        Ctrl+D / Ctrl+U a half; ``g`` / ``G`` jump to top / bottom.  The offset
+        is clamped against the content in :meth:`render`.
+        """
+        page = max(1, self._screen_height() - 6)
+        key = event.key
+        if key == "pagedown" or (event.ctrl and key == "f"):
+            self._scroll += page
+        elif key == "pageup" or (event.ctrl and key == "b"):
+            self._scroll = max(0, self._scroll - page)
+        elif event.ctrl and key == "d":
+            self._scroll += page // 2
+        elif event.ctrl and key == "u":
+            self._scroll = max(0, self._scroll - page // 2)
+        elif key == "g":
+            self._scroll = 0
+        elif key == "G":
+            self._scroll = 10**9  # clamped down to max in render()
+        else:
+            return False
         return True
 
     @staticmethod
@@ -428,6 +490,7 @@ class BuilderApp(Component):
         model = self._model
         if key == "tab":
             self._focus = _FOCI[(_FOCI.index(self._focus) + 1) % len(_FOCI)]
+            self._scroll = 0  # each block's detail pane starts at the top
             return True
         if key == "a":
             self._model = actions.add_node(model, "agent")
@@ -440,6 +503,8 @@ class BuilderApp(Component):
             return True
         if key in ("k", "up"):
             self._nav(-1)
+            return True
+        if self._scroll_key(event):
             return True
         if key == "d":
             self._delete()

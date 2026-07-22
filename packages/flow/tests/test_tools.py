@@ -156,3 +156,39 @@ def test_describe_tools_broken_ref_is_skipped_gracefully() -> None:
     broken = next(i for i in infos if i.name == "broken")
     assert broken.origin == "custom"
     assert broken.source is None
+
+
+# --- read_run_source (builder Functions page, static / no-import) -------------
+
+
+def test_read_run_source_in_tree_module() -> None:
+    """An importable module resolves via inspect (e.g. flow.codegen_tools)."""
+    from flow.tools import read_run_source
+
+    src = read_run_source("flow.codegen_tools:next_task", None)
+    assert src is not None
+    assert "def next_task" in src
+
+
+def test_read_run_source_from_subdir_without_import(tmp_path: Path) -> None:
+    """A run: module in a subdir (scripts/) is read statically — no import runs."""
+    from flow.tools import read_run_source
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    # Top-level import of a missing module: a naive import-based reader would fail;
+    # the static AST reader must still return the function body.
+    (scripts / "nodes.py").write_text(
+        "import a_module_that_does_not_exist\n\n\ndef scope(ctx, repo):\n    return '{}'\n",
+        encoding="utf-8",
+    )
+    src = read_run_source("nodes:scope", tmp_path)
+    assert src is not None
+    assert src.startswith("def scope(ctx, repo):")
+    assert "return '{}'" in src
+
+
+def test_read_run_source_missing_returns_none(tmp_path: Path) -> None:
+    from flow.tools import read_run_source
+
+    assert read_run_source("nonexistent:fn", tmp_path) is None

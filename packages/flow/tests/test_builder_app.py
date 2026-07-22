@@ -514,3 +514,99 @@ def test_shift_tab_ignored_in_prompt_mode(tmp_path: pathlib.Path) -> None:
     app.handle_input(KeyEvent(key="p"))  # enter prompt mode
     _shift_tab(app)
     assert app._page == "builder"  # unchanged
+
+
+# --- Functions page: run: source resolution + dedent -------------------------
+
+
+def test_functions_page_reads_run_source_from_subdir(tmp_path: pathlib.Path) -> None:
+    """A run: module living in scripts/ is shown even though it isn't importable."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "nodes.py").write_text(
+        "import a_missing_dependency_xyz\n\n\ndef scope(ctx, repo):\n    return '{}'\n",
+        encoding="utf-8",
+    )
+    wf_json = tmp_path / "wf.json"
+    wf_json.write_text(
+        """{
+          "name": "sub", "provider": "copilot", "defaults": {"model": "m"}, "entry": "scope",
+          "nodes": [{"id": "scope", "type": "script", "run": "nodes:scope",
+                     "inputs": ["repo"], "output": "scope"}],
+          "edges": [{"from": "$in", "to": "scope", "map": {"repo": "repo"}}],
+          "state": {"repo": "/x"}
+        }""",
+        encoding="utf-8",
+    )
+    app = build_app(wf_json)
+    _shift_tab(app)  # -> functions
+    joined = strip_ansi("\n".join(app.render(90)))
+    assert "def scope(ctx, repo)" in joined  # source located statically
+    assert "source unavailable" not in joined
+
+
+def test_tools_source_is_dedented() -> None:
+    """A tool's execute source (a class method) is dedented to column 0.
+
+    ``inspect.getsource`` on a method keeps its class-body indentation; the
+    viewer must strip it so the ``async def`` sits flush against the box border
+    (rendered as ``│async def execute(``), not indented four spaces.
+    """
+    app = _cgb_app()
+    _shift_tab(app)  # functions
+    _shift_tab(app)  # tools — first tool (bash) is a builtin with method source
+    rows = [strip_ansi(line) for line in app.render(120)]
+    # box padding is trailing-only, so a dedented line renders as '│async def…'.
+    assert any("│async def execute(" in r for r in rows)
+    # and NOT the original 4-space-indented form
+    assert not any("│    async def execute(" in r for r in rows)
+
+
+# --- fill-screen + scroll ----------------------------------------------------
+
+
+def test_render_fills_screen_height(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The rendered frame spans the full terminal height, not just the content."""
+    app = _cgb_app()
+    monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 40))
+    _shift_tab(app)  # functions (short left list, long right source)
+    assert len(app.render(100)) == 40
+
+
+def test_tools_page_scrolls_right_pane(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """PageDown reveals lower source lines; g returns to the top."""
+    app = _cgb_app()
+    monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
+    _shift_tab(app)  # functions
+    _shift_tab(app)  # tools
+    top_view = strip_ansi("\n".join(app.render(110)))
+    app.handle_input(KeyEvent(key="pagedown"))
+    assert app._scroll > 0
+    scrolled_view = strip_ansi("\n".join(app.render(110)))
+    assert scrolled_view != top_view  # the source pane moved
+    app.handle_input(KeyEvent(key="g"))
+    assert app._scroll == 0
+
+
+def test_changing_selection_resets_scroll(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Moving to a different tool/script resets the source scroll to the top."""
+    app = _cgb_app()
+    monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
+    _shift_tab(app)  # functions
+    _shift_tab(app)  # tools
+    app.handle_input(KeyEvent(key="pagedown"))
+    assert app._scroll > 0
+    app.handle_input(KeyEvent(key="down"))  # select next tool
+    assert app._scroll == 0
+
+
+def test_shift_tab_resets_scroll(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Switching pages starts the new page scrolled to the top."""
+    app = _cgb_app()
+    monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
+    _shift_tab(app)  # functions
+    _shift_tab(app)  # tools
+    app.handle_input(KeyEvent(key="pagedown"))
+    assert app._scroll > 0
+    _shift_tab(app)  # -> builder
+    assert app._scroll == 0
