@@ -5,13 +5,13 @@
 {% block content %}
 <section>
   <h2>{{ pkg.name }}</h2>
-  <p><em>{{ pkg.tagline }}.</em></p>
-  {% if pkg.cli %}<p class="state">CLI: <code>{{ pkg.cli }}</code></p>{% else %}<p class="state">Library (no CLI)</p>{% endif %}
+  <div><em>{{ pkg.tagline }}.</em></div>
+  {% if pkg.cli %}<div class="state">CLI: <code>{{ pkg.cli }}</code></div>{% else %}<div class="state">Library (no CLI)</div>{% endif %}
 </section>
 
 <section>
   {% for para in pkg.summary %}
-  <p>{{ para }}</p>
+  <div>{{ para }}</div>
   {% endfor %}
 </section>
 
@@ -32,9 +32,9 @@
 {% endif %}
 
 <section>
-  <p>
+  <div>
     <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>
     <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-default btn-small">&larr; All packages</a>
-  </p>
+  </div>
 </section>
 {% endblock %}
