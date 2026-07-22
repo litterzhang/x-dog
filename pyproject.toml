@@ -81,5 +81,5 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["agent", "agent.*", "ai", "ai.*"]
+module = ["agent", "agent.*", "ai", "ai.*", "flow", "flow.*", "flask", "flask.*", "markupsafe", "markupsafe.*"]
 ignore_missing_imports = true

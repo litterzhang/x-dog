@@ -1,0 +1,8 @@
+{# Shared tab bar for the flow deep-dive sub-pages. #}
+<div class="flow-tabs">
+  <a href="{{ url_for('main.package_detail', name='flow') }}" class="{% if tab == 'overview' %}active{% endif %}">Overview</a>
+  <a href="{{ url_for('main.flow_design') }}" class="{% if tab == 'design' %}active{% endif %}">Design</a>
+  <a href="{{ url_for('main.flow_features') }}" class="{% if tab == 'features' %}active{% endif %}">Features</a>
+  <a href="{{ url_for('main.flow_examples') }}" class="{% if tab == 'examples' %}active{% endif %}">Examples</a>
+  <a href="{{ url_for('main.flow_roadmap') }}" class="{% if tab == 'roadmap' %}active{% endif %}">Roadmap</a>
+</div>

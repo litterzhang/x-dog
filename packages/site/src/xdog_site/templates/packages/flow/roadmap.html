@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %} — flow / Roadmap{% endblock %}
+{% block ctitle %}/ Packages / flow{% endblock %}
+
+{% block content %}
+{% include "packages/flow/_tabs.html" %}
+
+<section>
+  <h2>Roadmap</h2>
+  <div>flow's modeling layer — typed ports, explicit edges, conditional and bounded-loop edges,
+    codegen, and a strict type-checked codebase — is solid. The distance to a production-grade
+    orchestrator is mostly runtime resilience and operations. Here is an honest account of the
+    gaps and the plan to close them.</div>
+</section>
+
+<section>
+  <h3>Gaps vs production-grade orchestrators</h3>
+  {% for g in gaps %}
+  <div><strong>{{ g.area }}.</strong> {{ g.detail }}</div>
+  {% endfor %}
+</section>
+
+<section>
+  <h3>Planned work</h3>
+  {% for phase in roadmap %}
+  <div class="card">
+    <header class="card-header">{{ phase.tag }} &nbsp;|&nbsp; {{ phase.title }}</header>
+    <div class="card-content">
+      <div class="inner">
+        <ul>
+          {% for item in phase.items %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -93,3 +93,45 @@ def test_404_page_is_styled(client: FlaskClient) -> None:
     body = client.get("/no-such-page").get_data(as_text=True)
     assert "404" in body
     assert "hack.css" in body  # renders through base.html
+
+
+# --- flow deep-dive sub-pages ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/packages/flow",
+        "/packages/flow/design",
+        "/packages/flow/features",
+        "/packages/flow/examples",
+        "/packages/flow/roadmap",
+    ],
+)
+def test_flow_subpages_ok_with_tabs(client: FlaskClient, path: str) -> None:
+    resp = client.get(path)
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "flow-tabs" in body  # shared tab bar renders on every flow page
+
+
+def test_flow_examples_renders_live_svg_and_ascii(client: FlaskClient) -> None:
+    body = client.get("/packages/flow/examples").get_data(as_text=True)
+    # a real Graphviz-generated inline SVG is embedded
+    assert "<svg" in body
+    # the ASCII diagram is shown in a <pre> block
+    assert "<pre>" in body
+    # a known example title is present
+    assert "Parallel Diamond" in body
+
+
+def test_flow_roadmap_has_gaps_and_phases(client: FlaskClient) -> None:
+    body = client.get("/packages/flow/roadmap").get_data(as_text=True)
+    assert "retry" in body.lower()  # a named gap
+    assert "Checkpoint" in body  # a roadmap phase
+
+
+def test_flow_content_module_importable() -> None:
+    from xdog_site.content.flow import DESIGN_SECTIONS, EXAMPLES, FEATURES, GAPS, ROADMAP
+
+    assert DESIGN_SECTIONS and FEATURES and EXAMPLES and GAPS and ROADMAP

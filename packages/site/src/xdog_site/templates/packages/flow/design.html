@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %} — flow / Design{% endblock %}
+{% block ctitle %}/ Packages / flow{% endblock %}
+
+{% block content %}
+{% include "packages/flow/_tabs.html" %}
+
+<section>
+  <h2>Design</h2>
+  <div>How flow models a multi-agent pipeline and runs it.</div>
+</section>
+
+{% for s in sections %}
+<section>
+  <h3>{{ s.heading }}</h3>
+  {% for line in s.body %}
+  <div>{{ line }}</div>
+  {% endfor %}
+  {% if s.bullets %}
+  <ul>
+    {% for b in s.bullets %}<li>{{ b }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

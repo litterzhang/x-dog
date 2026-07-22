@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %} — flow / Examples{% endblock %}
+{% block ctitle %}/ Packages / flow{% endblock %}
+
+{% block content %}
+{% include "packages/flow/_tabs.html" %}
+
+<section>
+  <h2>Examples</h2>
+  <div>Real workflows from the flow package, rendered live. Each diagram is generated on request
+    from the same JSON definition the runtime executes.</div>
+</section>
+
+{% if not examples %}
+<section><div class="muted">Example diagrams are unavailable in this environment.</div></section>
+{% endif %}
+
+{% for ex in examples %}
+<section>
+  <h3>{{ ex.title }}</h3>
+  <div>{{ ex.blurb }}</div>
+
+  {% if ex.svg %}
+  <div class="diagram">{{ ex.svg }}</div>
+  {% endif %}
+
+  {% if ex.ascii %}
+  <details>
+    <summary>ASCII diagram</summary>
+    <pre>{{ ex.ascii }}</pre>
+  </details>
+  {% endif %}
+
+  <div><strong>When you run it:</strong> {{ ex.effect }}</div>
+</section>
+{% endfor %}
+
+{% set codegen = (examples | selectattr('code') | list | first) %}
+{% if codegen %}
+<section>
+  <h3>Generated Python</h3>
+  <div>flow can compile a workflow to a standalone module. Here is the code generated for
+    <code>{{ codegen.stem }}</code>:</div>
+  <pre><code>{{ codegen.code }}</code></pre>
+</section>
+{% endif %}
+{% endblock %}
