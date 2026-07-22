@@ -63,6 +63,27 @@ def test_roundtrip_rich() -> None:
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
+def test_roundtrip_tool_manifest() -> None:
+    wf = WorkflowDef(
+        name="tw",
+        provider="copilot",
+        entry="a",
+        nodes=(
+            NodeDef(
+                id="a",
+                prompt="p",
+                input_ports=(Port("topic"),),
+                output_ports=(Port("x"),),
+                tools=("reverse",),
+            ),
+        ),
+        edges=(EdgeDef(src="$in", dst="a", mapping=(("topic", "topic"),)),),
+        initial_state=(("topic", "hi"),),
+        tool_refs=(("reverse", "mytools:make_reverse"), ("weather", "mytools:MY_WEATHER_TOOL")),
+    )
+    assert parse_workflow(workflow_to_dict(wf)) == wf
+
+
 def test_roundtrip_nested_condition() -> None:
     wf = WorkflowDef(
         name="cond",

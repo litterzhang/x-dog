@@ -494,3 +494,51 @@ def test_script_neither_code_nor_run_raises() -> None:
     wf = parse_workflow(_wf_with_script({"id": "x", "type": "script", "output": "y"}))
     with pytest.raises(WorkflowValidationError, match="must set 'code' or 'run'"):
         validate_workflow(wf)
+
+
+# --- custom tool manifest ----------------------------------------------------
+
+
+def _wf_with_tools(tools: dict[str, str], node_tools: list[str]) -> dict[str, object]:
+    return {
+        "name": "tw",
+        "provider": "fake",
+        "defaults": {"model": "m"},
+        "entry": "a",
+        "tools": tools,
+        "nodes": [{"id": "a", "type": "agent", "model": "m", "prompt": "p", "tools": node_tools}],
+        "edges": [],
+    }
+
+
+def test_parse_tool_manifest() -> None:
+    wf = parse_workflow(_wf_with_tools({"reverse": "mytools:make_reverse"}, ["reverse"]))
+    assert wf.tool_refs == (("reverse", "mytools:make_reverse"),)
+
+
+def test_validate_manifest_tool_name_ok() -> None:
+    wf = parse_workflow(_wf_with_tools({"reverse": "mytools:make_reverse"}, ["reverse"]))
+    validate_workflow(wf)  # should not raise
+
+
+def test_validate_builtin_tool_name_ok() -> None:
+    wf = parse_workflow(_wf_with_tools({}, ["filesystem"]))
+    validate_workflow(wf)  # built-in resolves without a manifest entry
+
+
+def test_validate_unknown_tool_name_fails_fast() -> None:
+    wf = parse_workflow(_wf_with_tools({"reverse": "mytools:make_reverse"}, ["revrese"]))
+    with pytest.raises(WorkflowValidationError, match="unknown tool 'revrese'"):
+        validate_workflow(wf)
+
+
+def test_validate_bad_manifest_ref_syntax_fails() -> None:
+    wf = parse_workflow(_wf_with_tools({"reverse": "not_a_ref"}, ["reverse"]))
+    with pytest.raises(WorkflowValidationError, match="must match 'module.path:callable'"):
+        validate_workflow(wf)
+
+
+def test_validate_empty_manifest_name_fails() -> None:
+    wf = parse_workflow(_wf_with_tools({"": "mytools:make_reverse"}, []))
+    with pytest.raises(WorkflowValidationError, match="tool name must be non-empty"):
+        validate_workflow(wf)

@@ -89,6 +89,8 @@ def workflow_to_dict(wf: WorkflowDef) -> dict[str, Any]:
     if wf.default_model:
         data["defaults"] = {"model": wf.default_model}
     data["entry"] = wf.entry
+    if wf.tool_refs:
+        data["tools"] = {name: ref for name, ref in wf.tool_refs}
     if wf.initial_state:
         data["state"] = {k: v for k, v in wf.initial_state}
     data["nodes"] = [_node_to_dict(n) for n in wf.nodes]

@@ -128,6 +128,13 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
     else:
         initial_state = ()
 
+    raw_tools = data.get("tools", {})
+    tool_refs: tuple[tuple[str, str], ...]
+    if isinstance(raw_tools, dict) and raw_tools:
+        tool_refs = tuple((str(k), str(v)) for k, v in raw_tools.items())
+    else:
+        tool_refs = ()
+
     nodes = tuple(_parse_node(n) for n in data.get("nodes", []))
     edges = tuple(_parse_edge(e) for e in data.get("edges", []))
 
@@ -139,6 +146,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         edges=edges,
         default_model=default_model,
         initial_state=initial_state,
+        tool_refs=tool_refs,
     )
 
 
@@ -215,10 +223,31 @@ def validate_workflow(wf: WorkflowDef) -> None:
         raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes")
 
     _run_re = re.compile(r"^[\w.]+:[\w]+$")
+
+    # Validate the custom-tool manifest and build the set of resolvable tool
+    # names (built-ins + manifest keys) so unknown node tool names fail fast.
+    from flow.tools import default_registry
+
+    manifest_names: set[str] = set()
+    for tname, ref in wf.tool_refs:
+        if not tname:
+            raise WorkflowValidationError("Tool manifest: tool name must be non-empty")
+        if not _run_re.match(ref):
+            raise WorkflowValidationError(
+                f"Tool {tname!r}: ref must match 'module.path:callable', got {ref!r}"
+            )
+        manifest_names.add(tname)
+    known_tools = default_registry().names() | manifest_names
+
     for node in wf.nodes:
         for tool in node.tools:
             if not tool:
                 raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
+            if tool not in known_tools:
+                known = ", ".join(sorted(known_tools)) or "<none>"
+                raise WorkflowValidationError(
+                    f"Node {node.id!r} references unknown tool {tool!r}. Known tools: {known}"
+                )
         if node.type == "script":
             _validate_script_node(node, _run_re)
         elif node.type == "agent":

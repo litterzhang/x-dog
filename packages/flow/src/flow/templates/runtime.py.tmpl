@@ -14,7 +14,7 @@ $script_imports
 # carries the workflow's initial values.
 _OUT: dict[str, dict[str, str]] = {$in_node_id: $initial_state}
 
-_REGISTRY = default_registry()
+_REGISTRY = default_registry()$tool_registration
 
 
 async def _run_agent(

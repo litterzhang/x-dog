@@ -130,9 +130,12 @@ async def execute(
         Defaults to one built from the real ai provider.  Injectable for tests.
     """
     from flow.tools import default_registry as _default_registry
+    from flow.tools import register_workflow_tools
 
     if tool_registry is None:
         tool_registry = _default_registry()
+    if wf.tool_refs:
+        register_workflow_tools(wf, tool_registry, base_dir)
     if stream_fn_factory is None:
         import ai
         from agent.helpers import stream_fn_from_provider

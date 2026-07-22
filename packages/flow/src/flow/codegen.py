@@ -468,6 +468,14 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     flow_tools_aliases = extra.pop("flow.tools", [])
     lines: list[str] = ["from flow.tools import default_registry"]
 
+    # Custom-tool manifest: import each ref plus the bind_tool helper used to
+    # register it under its manifest name (see _render_tool_registration).
+    if wf.tool_refs:
+        lines[0] = "from flow.tools import bind_tool, default_registry"
+        for i, (_name, ref) in enumerate(wf.tool_refs):
+            module, attr = ref.rsplit(":", 1)
+            lines.append(f"from {module} import {attr} as _tool_{i}")
+
     script_nodes = [n for n in wf.nodes if n.type == "script"]
     if script_nodes:
         coercers = []
@@ -486,6 +494,22 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             lines.append(f"from {module} import {alias}")
 
     return "\n".join(lines) + "\n"
+
+
+def _render_tool_registration(wf: WorkflowDef) -> str:
+    """Emit ``_REGISTRY.register(...)`` calls for the custom-tool manifest.
+
+    Returns an empty string when there is no manifest, so the template line stays
+    ``_REGISTRY = default_registry()`` unchanged.  Each ref (imported as
+    ``_tool_i`` by :func:`_render_script_imports`) is coerced to an AgentTool and
+    re-named to its manifest key, mirroring ``register_workflow_tools``.
+    """
+    if not wf.tool_refs:
+        return ""
+    lines = [""]
+    for i, (name, _ref) in enumerate(wf.tool_refs):
+        lines.append(f"_REGISTRY.register(bind_tool(_tool_{i}, {name!r}))")
+    return "\n".join(lines)
 
 
 def generate(wf: WorkflowDef) -> str:
@@ -509,5 +533,6 @@ def generate(wf: WorkflowDef) -> str:
         provider=wf.provider,
         main_body=main_body,
         script_imports=_render_script_imports(wf, safe_ids),
+        tool_registration=_render_tool_registration(wf),
     )
     return result

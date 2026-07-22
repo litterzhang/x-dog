@@ -594,3 +594,50 @@ async def test_generate_conditional_branch_positive_path_runs_downstream() -> No
 
     assert gen_state["even"]["branch"] == "E4"
     assert gen_state == dict(run_result.outputs)
+
+
+# ---------------------------------------------------------------------------
+# custom tool manifest
+# ---------------------------------------------------------------------------
+
+
+def _make_tool_manifest_wf() -> WorkflowDef:
+    return WorkflowDef(
+        name="tool_manifest",
+        provider="copilot",
+        entry="build",
+        default_model="gpt-4o",
+        nodes=(
+            NodeDef(
+                id="build",
+                model="gpt-4o",
+                prompt="reverse {{topic}}",
+                input_ports=(Port("topic"),),
+                output_ports=(Port("report"),),
+                tools=("reverse", "filesystem"),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="build", mapping=(("topic", "topic"),)),),
+        initial_state=(("topic", "hi"),),
+        tool_refs=(("reverse", "mytools:make_reverse"),),
+    )
+
+
+def test_generate_tool_manifest_registers_and_imports() -> None:
+    src = generate(_make_tool_manifest_wf())
+    assert "from mytools import make_reverse as _tool_0" in src
+    assert "from flow.tools import bind_tool, default_registry" in src
+    assert "_REGISTRY.register(bind_tool(_tool_0, 'reverse'))" in src
+    assert '_REGISTRY.resolve(("reverse", "filesystem",))' in src
+
+
+def test_generate_tool_manifest_ruff_clean() -> None:
+    ok, msg = _ruff_clean(generate(_make_tool_manifest_wf()))
+    assert ok, msg
+
+
+def test_generate_no_manifest_unchanged_registry_line() -> None:
+    """Workflows without a manifest keep the bare registry line (no extra imports)."""
+    src = generate(_make_linear_wf())
+    assert "_REGISTRY = default_registry()\n" in src
+    assert "coerce_tool" not in src

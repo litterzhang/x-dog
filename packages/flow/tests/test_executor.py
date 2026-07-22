@@ -556,6 +556,49 @@ async def test_agent_tools() -> None:
     assert tools_seen[0] == (spy_tool,)
 
 
+async def test_agent_custom_tool_from_manifest() -> None:
+    """A workflow tool manifest is loaded from base_dir and reaches the agent."""
+    from pathlib import Path
+
+    from agent.core import AgentTool
+
+    fixtures = Path(__file__).parent / "fixtures"
+    tools_seen: list[tuple[AgentTool, ...]] = []
+
+    original_init = Agent.__init__
+
+    def _patching_init(self: Agent, stream_fn: Any, **kwargs: Any) -> None:
+        tools_arg = kwargs.get("tools")
+        if tools_arg is not None:
+            tools_seen.append(tuple(tools_arg))
+        original_init(self, stream_fn, **kwargs)
+
+    import agent.agent as _agent_module
+
+    _agent_module.Agent.__init__ = _patching_init  # type: ignore[method-assign]
+    try:
+        factory = _make_stream_fn({"m": "agent_result"})
+        wf = WorkflowDef(
+            name="manifest_test",
+            provider="fake",
+            entry="n1",
+            default_model="m",
+            nodes=(NodeDef(id="n1", model="m", prompt="do work", output_ports=(Port("out"),), tools=("reverse",)),),
+            edges=(),
+            tool_refs=(("reverse", "mytools:make_reverse"),),
+        )
+
+        result = await execute(wf, stream_fn_factory=factory, base_dir=fixtures)
+    finally:
+        _agent_module.Agent.__init__ = original_init  # type: ignore[method-assign]
+
+    assert result.outputs["n1"]["out"] == "agent_result"
+    assert len(tools_seen) == 1
+    # The loaded tool reached the agent under its MANIFEST name (not the internal one).
+    assert len(tools_seen[0]) == 1
+    assert tools_seen[0][0].name == "reverse"
+
+
 # ---------------------------------------------------------------------------
 # output_schema / submit_result integration
 # ---------------------------------------------------------------------------
