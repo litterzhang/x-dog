@@ -38,6 +38,16 @@ body.hack {
   min-width: 0;
 }
 
+/* Every flex cell inside the main column must be allowed to shrink below its
+   content's intrinsic width. A flex item defaults to min-width:auto, so a nested
+   `.cell` wrapping a wide <pre> (e.g. the HaveFun/Examples `-Nof12` sections)
+   would grow to fit the widest line — and the <pre>'s max-width:100% is then
+   100% of an already-widened cell. Pinning min-width:0 keeps the cell at column
+   width so the <pre>'s overflow-x:auto scrolls instead of stretching. */
+.main .cell {
+  min-width: 0;
+}
+
 /* Responsive: stack (mobile: show left, right, main vertically) */
 @media (max-width: 960px) {
   body.hack {
