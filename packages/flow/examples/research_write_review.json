@@ -2,7 +2,7 @@
   "name": "research_write_review",
   "provider": "copilot",
   "defaults": {
-    "model": "claude-sonnet-4.5"
+    "model": "claude-sonnet-4.6"
   },
   "entry": "research",
   "state": {
