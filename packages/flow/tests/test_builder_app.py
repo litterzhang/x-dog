@@ -48,10 +48,19 @@ from __future__ import annotations
 import pathlib
 
 from flow.builder.app import BuilderApp, build_app
+from flow.builder.io import dump_any
 from flow.loader import load_workflow
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 from tui.keys import KeyEvent
 from tui.tui import Component
 from tui.utils import strip_ansi, visible_width
+
+
+def _write_wf(tmp: pathlib.Path, wf: WorkflowDef) -> pathlib.Path:
+    """Serialise *wf* to a temp JSON and return its path (for build_app)."""
+    path = tmp / "wf.json"
+    dump_any(wf, path)
+    return path
 
 
 def _new_app(tmp_path: pathlib.Path) -> BuilderApp:
@@ -264,11 +273,9 @@ def test_render_has_visible_content_and_status(tmp_path: pathlib.Path) -> None:
     assert "valid" in joined.lower()  # a status/validation line is present
 
 
-def test_render_is_two_column_and_equal_width() -> None:
+def test_render_is_two_column_and_equal_width(tmp_path: pathlib.Path) -> None:
     """Body rows are two columns joined by a vertical separator, all equal width."""
-    import pathlib as _pl
-
-    app = build_app(_pl.Path("packages/flow/examples/research_write_review.json"))
+    app = _rwr_app(tmp_path)
     lines = app.render(100)
     # every rendered line has the same DISPLAY width (columns align under color)
     widths = {visible_width(line) for line in lines}
@@ -297,23 +304,60 @@ def test_render_shows_selected_node_details(tmp_path: pathlib.Path) -> None:
 
 # --- three-block layout: Tab-cycled focus (Graph / Nodes / Edges) -------------
 
-_RWR = "packages/flow/examples/research_write_review.json"
+
+def _rwr_app(tmp_path: pathlib.Path) -> BuilderApp:
+    """A research → write → review agent chain with a bounded review→write loop.
+
+    Built in-code (no shipped example needed) with the structural properties the
+    builder-app tests assert on: three agent nodes, a ``research → write`` edge,
+    multiple edges to navigate, and a loop back-edge.
+    """
+    wf = WorkflowDef(
+        name="rwr",
+        provider="copilot",
+        entry="research",
+        default_model="m",
+        nodes=(
+            NodeDef(id="research", type="agent", prompt="p", output_ports=(Port("research_notes"),)),
+            NodeDef(
+                id="write",
+                type="agent",
+                prompt="q",
+                input_ports=(Port("research_notes"),),
+                output_ports=(Port("article"),),
+            ),
+            NodeDef(
+                id="review",
+                type="agent",
+                prompt="r",
+                input_ports=(Port("article"),),
+                output_ports=(Port("review_result"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src="research", dst="write", mapping=(("research_notes", "research_notes"),)),
+            EdgeDef(src="write", dst="review", mapping=(("article", "article"),)),
+            EdgeDef(
+                src="review",
+                dst="write",
+                when=Condition(op="contains", value="{{review_result}}", text="REVISE"),
+                loop_max=2,
+            ),
+        ),
+    )
+    return build_app(_write_wf(tmp_path, wf))
 
 
-def _rwr_app() -> BuilderApp:
-    return build_app(pathlib.Path(_RWR))
-
-
-def test_left_panel_has_three_boxed_blocks() -> None:
+def test_left_panel_has_three_boxed_blocks(tmp_path: pathlib.Path) -> None:
     """The left panel always shows Graph, Nodes, and Edges as boxed blocks."""
-    joined = strip_ansi("\n".join(_rwr_app().render(100)))
+    joined = strip_ansi("\n".join(_rwr_app(tmp_path).render(100)))
     assert "Graph" in joined and "Nodes" in joined and "Edges" in joined
     assert "┌" in joined and "└" in joined  # boxes are drawn
 
 
-def test_tab_cycles_focus_nodes_edges_graph() -> None:
+def test_tab_cycles_focus_nodes_edges_graph(tmp_path: pathlib.Path) -> None:
     """Tab advances focus graph -> nodes -> edges -> graph (wrapping)."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     assert app._focus == "graph"  # default focus is the Graph block
     app.handle_input(KeyEvent(key="tab"))
     assert app._focus == "nodes"
@@ -323,9 +367,9 @@ def test_tab_cycles_focus_nodes_edges_graph() -> None:
     assert app._focus == "graph"  # wrapped
 
 
-def test_default_focus_is_graph_and_arrows_are_inert() -> None:
+def test_default_focus_is_graph_and_arrows_are_inert(tmp_path: pathlib.Path) -> None:
     """The builder opens on the Graph block; up/down do NOT move the node selection."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     assert app._focus == "graph"
     before = app.model.selected
     app.handle_input(KeyEvent(key="down"))
@@ -334,18 +378,18 @@ def test_default_focus_is_graph_and_arrows_are_inert() -> None:
     assert app.model.selected == before  # graph focus swallows navigation
 
 
-def test_graph_focus_shows_diagram_on_right() -> None:
+def test_graph_focus_shows_diagram_on_right(tmp_path: pathlib.Path) -> None:
     """With the Graph block focused (the default), the right panel shows the diagram."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     joined = strip_ansi("\n".join(app.render(100)))
     assert "GRAPH" in joined
     # the boxed node diagram from to_ascii_diagram is present
     assert "[agent]" in joined
 
 
-def test_edges_focus_shows_edge_detail_and_param_flow() -> None:
+def test_edges_focus_shows_edge_detail_and_param_flow(tmp_path: pathlib.Path) -> None:
     """With the Edges block focused, the right panel shows 'src -> dst' + param flow."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     joined = strip_ansi("\n".join(app.render(100)))
@@ -354,9 +398,9 @@ def test_edges_focus_shows_edge_detail_and_param_flow() -> None:
     assert "parameter flow" in joined  # produces/consumes wiring shown
 
 
-def test_jk_navigate_edges_when_edges_focused() -> None:
+def test_jk_navigate_edges_when_edges_focused(tmp_path: pathlib.Path) -> None:
     """In the Edges block, j/k move the edge selection (not the node selection)."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     selected_before = app.model.selected
@@ -369,9 +413,9 @@ def test_jk_navigate_edges_when_edges_focused() -> None:
     assert app.model.selected == selected_before
 
 
-def test_d_deletes_edge_when_edges_focused() -> None:
+def test_d_deletes_edge_when_edges_focused(tmp_path: pathlib.Path) -> None:
     """In the Edges block, 'd' removes the selected edge, leaving nodes intact."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     app.handle_input(KeyEvent(key="tab"))  # -> nodes
     app.handle_input(KeyEvent(key="tab"))  # -> edges
     edges_before = len(app.model.wf.edges)
@@ -381,9 +425,9 @@ def test_d_deletes_edge_when_edges_focused() -> None:
     assert len(app.model.wf.nodes) == nodes_before  # nodes untouched
 
 
-def test_equal_width_across_all_foci() -> None:
+def test_equal_width_across_all_foci(tmp_path: pathlib.Path) -> None:
     """Every focus renders equal-width rows (columns stay aligned under color)."""
-    app = _rwr_app()
+    app = _rwr_app(tmp_path)
     for _ in range(3):
         widths = {visible_width(line) for line in app.render(100)}
         assert widths == {100}, f"unequal widths at focus {app._focus}: {sorted(widths)}"
@@ -419,20 +463,56 @@ def test_multiline_field_does_not_corrupt_layout(tmp_path: pathlib.Path) -> None
 
 # --- Shift+Tab page navigation: Builder / Functions / Tools -------------------
 
-_CGB = "packages/flow/examples/codegen_builder.json"  # has code + run: scripts, tools
 
-
-def _cgb_app() -> BuilderApp:
-    return build_app(pathlib.Path(_CGB))
+def _cgb_app(tmp_path: pathlib.Path) -> BuilderApp:
+    """A workflow with two run: script nodes (real importable source) + an agent
+    node with tools, built in-code for the Functions/Tools page tests."""
+    wf = WorkflowDef(
+        name="cgb",
+        provider="copilot",
+        entry="intake",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="intake",
+                type="script",
+                run="flow.codegen_tools:next_task",
+                input_ports=(Port("tasks"),),
+                output_ports=(Port("task"),),
+            ),
+            NodeDef(
+                id="implement",
+                type="agent",
+                prompt="build it",
+                tools=("filesystem", "bash"),
+                input_ports=(Port("task"),),
+                output_ports=(Port("impl_report"),),
+            ),
+            NodeDef(
+                id="verify",
+                type="script",
+                run="flow.codegen_tools:run_checks",
+                input_ports=(Port("target_path"),),
+                output_ports=(Port("report"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src="$in", dst="intake", mapping=(("tasks", "tasks"),)),
+            EdgeDef(src="intake", dst="implement", mapping=(("task", "task"),)),
+            EdgeDef(src="implement", dst="verify", mapping=(("impl_report", "target_path"),)),
+        ),
+        initial_state=(("tasks", '["add(a,b)"]'),),
+    )
+    return build_app(_write_wf(tmp_path, wf))
 
 
 def _shift_tab(app: BuilderApp) -> None:
     app.handle_input(KeyEvent(key="tab", shift=True))
 
 
-def test_shift_tab_cycles_pages() -> None:
+def test_shift_tab_cycles_pages(tmp_path: pathlib.Path) -> None:
     """Shift+Tab advances the top-level page builder -> functions -> tools -> builder."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     assert app._page == "builder"
     _shift_tab(app)
     assert app._page == "functions"
@@ -442,22 +522,22 @@ def test_shift_tab_cycles_pages() -> None:
     assert app._page == "builder"  # wrapped
 
 
-def test_functions_page_lists_scripts_and_shows_source() -> None:
+def test_functions_page_lists_scripts_and_shows_source(tmp_path: pathlib.Path) -> None:
     """The Functions page lists the workflow's script nodes and shows their source."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     _shift_tab(app)  # -> functions
     joined = strip_ansi("\n".join(app.render(120)))
     assert "Functions" in joined
     assert "SOURCE" in joined
-    # codegen_builder has script nodes 'intake' (run:) and 'verify' (run:)
+    # the workflow has script nodes 'intake' (run:) and 'verify' (run:)
     assert "intake" in joined
     # the right pane shows real imported source (a def/async def line)
     assert "def " in joined
 
 
-def test_functions_page_navigates_scripts() -> None:
+def test_functions_page_navigates_scripts(tmp_path: pathlib.Path) -> None:
     """j/k move the selected script on the Functions page."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     _shift_tab(app)  # -> functions
     assert app._fn_idx == 0
     app.handle_input(KeyEvent(key="j"))
@@ -466,9 +546,9 @@ def test_functions_page_navigates_scripts() -> None:
     assert app._fn_idx == 0
 
 
-def test_tools_page_lists_builtin_and_shows_source() -> None:
+def test_tools_page_lists_builtin_and_shows_source(tmp_path: pathlib.Path) -> None:
     """The Tools page lists built-in tools with description + execute source."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     _shift_tab(app)  # -> functions
     _shift_tab(app)  # -> tools
     joined = strip_ansi("\n".join(app.render(120)))
@@ -545,14 +625,14 @@ def test_functions_page_reads_run_source_from_subdir(tmp_path: pathlib.Path) -> 
     assert "source unavailable" not in joined
 
 
-def test_tools_source_is_dedented() -> None:
+def test_tools_source_is_dedented(tmp_path: pathlib.Path) -> None:
     """A tool's execute source (a class method) is dedented to column 0.
 
     ``inspect.getsource`` on a method keeps its class-body indentation; the
     viewer must strip it so the ``async def`` sits flush against the box border
     (rendered as ``│async def execute(``), not indented four spaces.
     """
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     _shift_tab(app)  # functions
     _shift_tab(app)  # tools — first tool (bash) is a builtin with method source
     rows = [strip_ansi(line) for line in app.render(120)]
@@ -565,9 +645,9 @@ def test_tools_source_is_dedented() -> None:
 # --- right pane soft-wraps long content (no truncation) ----------------------
 
 
-def test_tools_right_pane_wraps_long_description(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_tools_right_pane_wraps_long_description(tmp_path: pathlib.Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """A long tool description flows onto continuation lines instead of truncating."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 40))
     _shift_tab(app)  # functions
     _shift_tab(app)  # tools — bash has a long, multi-sentence description
@@ -598,17 +678,17 @@ def test_details_pane_wraps_long_field(tmp_path: pathlib.Path) -> None:
 # --- fill-screen + scroll ----------------------------------------------------
 
 
-def test_render_fills_screen_height(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_render_fills_screen_height(tmp_path: pathlib.Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """The rendered frame spans the full terminal height, not just the content."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 40))
     _shift_tab(app)  # functions (short left list, long right source)
     assert len(app.render(100)) == 40
 
 
-def test_tools_page_scrolls_right_pane(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_tools_page_scrolls_right_pane(tmp_path: pathlib.Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """PageDown reveals lower source lines; g returns to the top."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
     _shift_tab(app)  # functions
     _shift_tab(app)  # tools
@@ -621,9 +701,9 @@ def test_tools_page_scrolls_right_pane(monkeypatch) -> None:  # type: ignore[no-
     assert app._scroll == 0
 
 
-def test_changing_selection_resets_scroll(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_changing_selection_resets_scroll(tmp_path: pathlib.Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Moving to a different tool/script resets the source scroll to the top."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
     _shift_tab(app)  # functions
     _shift_tab(app)  # tools
@@ -633,9 +713,9 @@ def test_changing_selection_resets_scroll(monkeypatch) -> None:  # type: ignore[
     assert app._scroll == 0
 
 
-def test_shift_tab_resets_scroll(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_shift_tab_resets_scroll(tmp_path: pathlib.Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Switching pages starts the new page scrolled to the top."""
-    app = _cgb_app()
+    app = _cgb_app(tmp_path)
     monkeypatch.setattr(BuilderApp, "_screen_height", staticmethod(lambda: 20))
     _shift_tab(app)  # functions
     _shift_tab(app)  # tools

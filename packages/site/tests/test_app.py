@@ -124,8 +124,8 @@ def test_flow_examples_renders_live_svg_and_ascii(client: FlaskClient) -> None:
     assert "<svg" in body
     # the ASCII diagram is shown in a <pre> block
     assert "<pre>" in body
-    # a known example title is present
-    assert "Parallel Diamond" in body
+    # the calculator example title is present
+    assert "Agent Calculator" in body
 
 
 def test_flow_roadmap_has_gaps_and_phases(client: FlaskClient) -> None:
@@ -216,13 +216,13 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
 
     ex_dir = _examples_dir()
     assert ex_dir is not None
-    wf = load_workflow(ex_dir / "research_write_review.json")
+    wf = load_workflow(ex_dir / "agent_calculator.json")
 
-    job_id = runner.start(wf, {"topic": "t"}, stream_fn_factory=_dry_run_stream_fn_factory)
+    job_id = runner.start(wf, {"a": "3", "b": "4"}, stream_fn_factory=_dry_run_stream_fn_factory)
     assert job_id is not None
     # a second start while the first may still hold the slot is refused (or the
     # first already finished — retry once quickly to observe the busy state).
-    second = runner.start(wf, {"topic": "u"}, stream_fn_factory=_dry_run_stream_fn_factory)
+    second = runner.start(wf, {"a": "1", "b": "2"}, stream_fn_factory=_dry_run_stream_fn_factory)
     # second is either None (busy) or a new id (first finished first); if a new id
     # was returned, the single-slot invariant still held (never two at once).
     assert second is None or isinstance(second, str)
@@ -236,4 +236,4 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
     final = runner.get(second) if second else runner.get(job_id)
     assert final is not None
     assert final.state == "done"
-    assert final.result is not None and "research" in final.result
+    assert final.result is not None and "make_problem" in final.result

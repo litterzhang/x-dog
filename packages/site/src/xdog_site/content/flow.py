@@ -124,47 +124,18 @@ FEATURES: tuple[Feature, ...] = (
 )
 
 
-# --- Examples (curated subset of packages/flow/examples/*.json) --------------
+# --- Examples (the shipped packages/flow/examples/*.json) --------------------
 
 EXAMPLES: tuple[Example, ...] = (
     Example(
-        stem="research_write_review",
-        title="Research → Write → Review (with a revise loop)",
-        blurb="Three agent nodes: research gathers notes, write drafts an article, review critiques it. "
-        "A conditional back-edge sends the draft back to write while the review says REVISE, bounded to "
-        "two iterations.",
-        effect="Produces a reviewed article. The loop edge (review→write, contains:REVISE, loop≤2) fires "
-        "at most twice before the pipeline completes.",
-    ),
-    Example(
-        stem="parallel_diamond",
-        title="Parallel Diamond (fan-out / fan-in)",
-        blurb="A pure-script diamond: seed feeds both double and square, which both feed combine. double "
-        "and square run concurrently.",
-        effect="combine receives both branch results and merges them — a minimal demonstration of the "
-        "readiness-based parallel executor.",
-    ),
-    Example(
-        stem="codegen_builder",
-        title="Codegen Pipeline",
-        blurb="A six-node mix of script and agent nodes (intake → setup → design → implement → verify → "
-        "review) that drives a small code-generation-and-check loop.",
-        effect="Exercises conditional review, script verification, and agent implementation in one graph — "
-        "the capability demo for multi-stage agent pipelines.",
-    ),
-    Example(
-        stem="auto_enrich",
-        title="Autonomous Enrichment",
-        blurb="pull (script) → enrich (agent) → persist (script): the shape of an autonomous content "
-        "pipeline that reads state, has an agent make one change, and writes it back.",
-        effect="The pattern behind a real autonomous-enrichment daemon: deterministic I/O around a single "
-        "gated agent edit.",
-    ),
-    Example(
-        stem="tools_script",
-        title="Script + Per-node Tools",
-        blurb="prep (script) prepares input; analyze (agent) works on it with node-scoped tools.",
-        effect="Shows how a script node feeds an agent node and how tools are scoped per node.",
+        stem="agent_calculator",
+        title="Agent Calculator (script → agent + bash)",
+        blurb="Two nodes: make_problem (a script node) turns the typed integer inputs a and b into an "
+        "arithmetic string like \"347 + 895\"; solve (an agent node with the bash tool) is told not to do "
+        "the math in its head — it shells out to compute the expression and replies with the integer.",
+        effect="make_problem builds the expression from the inputs, then solve runs a bash command and "
+        "returns the answer (e.g. a=12, b=30 → answer \"42\"). A dry-run only exercises the wiring; a real "
+        "run has the agent actually compute via bash.",
     ),
 )
 
