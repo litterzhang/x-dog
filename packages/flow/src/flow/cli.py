@@ -99,7 +99,7 @@ async def _cmd_run(
     timeout: float = 120.0,
     inputs: dict[str, str] | None = None,
 ) -> None:
-    """Execute a workflow and print the final state as JSON."""
+    """Execute a workflow and print its outputs ($output) as JSON."""
     try:
         wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
@@ -130,7 +130,10 @@ async def _cmd_run(
         else:
             result = await execute(wf, timeout=timeout, base_dir=base_dir, inputs=inputs)
 
-    print(json.dumps(result.outputs, indent=2, ensure_ascii=False))
+    # By default show the workflow's declared outputs ($output); when a workflow
+    # declares none, fall back to the full runtime container for debugging.
+    rt = result.runtime
+    print(json.dumps(rt["out"] if rt["out"] else rt, indent=2, ensure_ascii=False))
 
 
 def _cmd_generate(config_path: str, *, output: str | None) -> None:

@@ -1,8 +1,9 @@
 """Tests for flow.codegen — port-model workflow code generation.
 
 Generated modules keep node-private outputs in a nested ``_OUT[node][port]`` dict
-(same shape as ``ExecResult.outputs``).  The regression tests assert the generated
-module and the interpreter agree by comparing those nested outputs.
+(``$in`` + real nodes).  The regression tests assert the generated module and the
+interpreter agree by comparing that dict to the interpreter's reconstructed
+equivalent (``{$in: runtime["in"], **runtime["state"]}``).
 """
 
 from __future__ import annotations
@@ -15,7 +16,13 @@ import uuid
 from pathlib import Path
 
 from flow.codegen import generate
+from flow.executor import ExecResult
 from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+
+
+def _interp_out(result: ExecResult) -> dict[str, dict[str, str]]:
+    """Reconstruct the generated ``_OUT`` shape ($in + real nodes) from a runtime."""
+    return {IN_NODE_ID: dict(result.runtime["in"]), **{k: dict(v) for k, v in result.runtime["state"].items()}}
 
 
 def _make_linear_wf() -> WorkflowDef:
@@ -323,7 +330,7 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
     # n=7 is odd -> only handle_odd fires
     assert gen_state["handle_odd"]["result"] == "ODD:21"
     assert "handle_even" not in gen_state
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_conditional_loop_matches_runtime() -> None:
@@ -370,7 +377,7 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
 
     # increments stop as soon as c == 3, not after all 10 iterations
     assert gen_state["inc"]["c"] == "3"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_colliding_node_ids_stay_distinct() -> None:
@@ -409,7 +416,7 @@ async def test_generate_colliding_node_ids_stay_distinct() -> None:
     run_result = await execute(wf)
 
     assert gen_state["a.b"]["vc"] == "1-B.B"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_cross_dependency_orders_correctly() -> None:
@@ -452,7 +459,7 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
 
     assert gen_state["C"]["c"] == "66"
     assert gen_state["B"]["b"] == "60"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_escapes_initial_state_values() -> None:
@@ -482,7 +489,7 @@ async def test_generate_escapes_initial_state_values() -> None:
 
     assert gen_state[IN_NODE_ID]["p"] == "a\\b"
     assert gen_state["mk"]["out"] == "a\\b!"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 def _sc(nid: str, code: str, out: str, inp: tuple[Port, ...] = ()) -> NodeDef:
@@ -521,7 +528,7 @@ async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> N
 
     assert "merge" not in gen_state  # merge skipped: even branch never ran
     assert gen_state["odd"]["branch"] == "O7"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_conditional_skip_propagates_downstream() -> None:
@@ -562,7 +569,7 @@ async def test_generate_conditional_skip_propagates_downstream() -> None:
     run_result = await execute(wf)
 
     assert "a" not in gen_state and "b" not in gen_state  # a skipped -> b skipped
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 async def test_generate_conditional_branch_positive_path_runs_downstream() -> None:
@@ -593,7 +600,7 @@ async def test_generate_conditional_branch_positive_path_runs_downstream() -> No
     run_result = await execute(wf)
 
     assert gen_state["even"]["branch"] == "E4"
-    assert gen_state == dict(run_result.outputs)
+    assert gen_state == _interp_out(run_result)
 
 
 # ---------------------------------------------------------------------------

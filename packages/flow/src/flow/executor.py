@@ -24,7 +24,7 @@ from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowExecutionError
 from flow.interpolate import interpolate
-from flow.models import IN_NODE_ID, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -77,11 +77,18 @@ def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
 class ExecResult:
     """Result of executing a workflow.
 
-    ``outputs`` is nested: ``outputs[node_id][port_name] -> value``.  The reserved
-    source node :data:`flow.models.IN_NODE_ID` holds the workflow's initial values.
+    ``runtime`` is a single container describing the whole run:
+
+    - ``ctx``   — runtime info of the last node to run: ``{step, node_id, workflow_name}``.
+    - ``stack`` — per-node execution trace; one delta frame ``{step, node, in, out}``
+      pushed each time a node runs (a looped node appears multiple times).
+    - ``state`` — accumulated real-node outputs only: ``{node_id: {port: value}}``
+      (excludes ``$in`` and ``$output``).
+    - ``in``    — the workflow's initial values (the reserved ``$in`` source).
+    - ``out``   — the collected workflow outputs (edges targeting ``$output``).
     """
 
-    outputs: dict[str, dict[str, str]]
+    runtime: dict[str, Any]
 
 
 async def execute(
@@ -167,6 +174,14 @@ async def execute(
     outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
 
+    # Per-node execution trace (delta frames) and a monotonic step counter.  Both
+    # are only touched while holding _state_lock (as each node records its frame).
+    stack: list[dict[str, Any]] = []
+    step_counter = 0
+    # Live workflow output: updated the moment a node feeding ``$output`` finishes,
+    # so a looped writer's latest value wins and the result is progressive.
+    out_live: dict[str, str] = {}
+
     node_map = {n.id: n for n in wf.nodes}
 
     # edges_from: src -> list[EdgeDef]
@@ -203,6 +218,35 @@ async def execute(
     # Per-edge loop fire counter (loop_max edges only)
     loop_counters: dict[EdgeDef, int] = {}
 
+    async def _reserve_step() -> int:
+        """Reserve the next monotonic step number (under the state lock)."""
+        nonlocal step_counter
+        async with _state_lock:
+            step = step_counter
+            step_counter += 1
+        return step
+
+    async def _record_frame(node_id: str, ins: dict[str, str], step: int) -> None:
+        """Append a delta trace frame for a just-run node, and flush its outputs.
+
+        Records the node's step, assembled input namespace, and its output ports.
+        A looped node produces one frame per iteration, so the trace shows the
+        refinement history.  If the node feeds ``$output``, its mapped keys are
+        written to the live workflow output immediately (a looped writer's latest
+        value wins).  Must be called after the node's outputs are stored.
+        """
+        async with _state_lock:
+            node_ports = dict(outputs.get(node_id, {}))
+            stack.append({"step": step, "node": node_id, "in": dict(ins), "out": node_ports})
+            for edge in edges_from.get(node_id, []):
+                if edge.dst != OUT_NODE_ID:
+                    continue
+                if edge.when is not None and not evaluate(edge.when, node_ports):
+                    continue
+                for sport, okey in edge.mapping:
+                    if sport in node_ports:
+                        out_live[okey] = node_ports[sport]
+
     async def _run_node(node_id: str) -> None:
         """Execute a single node and store its output ports."""
         node = node_map[node_id]
@@ -219,14 +263,17 @@ async def execute(
             else:
                 fn = _resolve_script_fn(node, base_dir)
 
-            async def _run_script(fn: ScriptFn = fn) -> None:
-                ctx = RuntimeContext(inputs=dict(ins), workflow_name=wf.name, node_id=node_id)
+            step = await _reserve_step()
+
+            async def _run_script(fn: ScriptFn = fn, step: int = step) -> None:
+                ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
                 kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
                 raw = fn(ctx, **kwargs)
                 value = await raw if inspect.isawaitable(raw) else raw
                 await _store_script_output(node, node_id, value)
 
             await asyncio.wait_for(_run_script(), timeout=timeout)
+            await _record_frame(node_id, ins, step)
             completed.add(node_id)
             return
 
@@ -305,6 +352,7 @@ async def execute(
             async with _state_lock:
                 outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_text
 
+        await _record_frame(node_id, ins, await _reserve_step())
         completed.add(node_id)
 
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
@@ -351,6 +399,8 @@ async def execute(
         for edge in edges_from.get(node_id, []):
             if edge.loop_max is not None:
                 continue  # loop edges handled separately
+            if edge.dst == OUT_NODE_ID:
+                continue  # the $output sink is collected after the run, never scheduled
             if edge.when is None or evaluate(edge.when, _source_ports(edge.src)):
                 result.append(edge.dst)
         return result
@@ -364,6 +414,8 @@ async def execute(
             for edge in edges_from.get(cur, []):
                 if edge.loop_max is not None:
                     continue
+                if edge.dst == OUT_NODE_ID:
+                    continue  # sink, not a runnable node
                 if edge.dst not in visited:
                     visited.add(edge.dst)
                     queue.append(edge.dst)
@@ -422,4 +474,16 @@ async def execute(
                 if succ not in completed and succ not in in_flight:
                     pending.add(succ)
 
-    return ExecResult(outputs=outputs)
+    last = stack[-1] if stack else {}
+    runtime: dict[str, Any] = {
+        "ctx": {
+            "step": last.get("step", -1),
+            "node_id": last.get("node", ""),
+            "workflow_name": wf.name,
+        },
+        "stack": stack,
+        "state": {k: v for k, v in outputs.items() if k != IN_NODE_ID},
+        "in": outputs[IN_NODE_ID],
+        "out": out_live,
+    }
+    return ExecResult(runtime=runtime)

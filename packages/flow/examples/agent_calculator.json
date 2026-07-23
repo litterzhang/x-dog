@@ -32,6 +32,7 @@
   ],
   "edges": [
     {"from": "$in", "to": "make_problem", "map": {"a": "a", "b": "b"}},
-    {"from": "make_problem", "to": "solve", "map": {"problem": "problem"}}
+    {"from": "make_problem", "to": "solve", "map": {"problem": "problem"}},
+    {"from": "solve", "to": "$output", "map": {"answer": "result"}}
   ]
 }

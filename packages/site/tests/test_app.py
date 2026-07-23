@@ -236,7 +236,9 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
     final = runner.get(second) if second else runner.get(job_id)
     assert final is not None
     assert final.state == "done"
-    assert final.result is not None and "make_problem" in final.result
+    # job.result is the workflow's $output (runtime["out"]); agent_calculator maps
+    # solve.answer -> result.
+    assert final.result is not None and "result" in final.result
 
 
 def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:

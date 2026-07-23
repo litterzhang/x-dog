@@ -79,11 +79,15 @@ async def test_run_dry_run(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_run_dry_run_sync(capsys: pytest.CaptureFixture[str]) -> None:
-    """main() --dry-run integration path."""
+    """main() --dry-run integration path; linear.json has no $output so the CLI
+    falls back to printing the full runtime container."""
     main(["run", _LINEAR, "--dry-run"])
     out = capsys.readouterr().out
     data = json.loads(out)
     assert isinstance(data, dict)
+    # fallback container shape: ctx/stack/state/in/out keys present
+    assert {"ctx", "stack", "state", "in", "out"} <= set(data)
+    assert data["out"] == {}  # no $output declared
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +138,16 @@ def test_parse_inputs_missing_equals_errors() -> None:
 
 
 def test_run_input_overrides_seed(capsys: pytest.CaptureFixture[str]) -> None:
-    """`run --input a=2 --input b=40 --dry-run` overrides the JSON state defaults."""
+    """`run --input a=2 --input b=40 --dry-run` prints the workflow's $output."""
     main(["run", _AGENT_CALC, "--input", "a=2", "--input", "b=40", "--dry-run"])
     out = json.loads(capsys.readouterr().out)
-    assert out["$in"] == {"a": "2", "b": "40"}
-    assert out["make_problem"]["problem"] == "2 + 40"
+    # agent_calculator declares $output (solve.answer -> result); the CLI prints it.
+    assert "result" in out
+    assert out["result"].startswith("DRYRUN:")
 
 
 def test_run_without_input_uses_defaults(capsys: pytest.CaptureFixture[str]) -> None:
     main(["run", _AGENT_CALC, "--dry-run"])
     out = json.loads(capsys.readouterr().out)
-    assert out["make_problem"]["problem"] == "347 + 895"
+    assert "result" in out
+    assert out["result"].startswith("DRYRUN:")

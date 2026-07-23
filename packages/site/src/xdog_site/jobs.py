@@ -71,7 +71,7 @@ class Job:
 
     id: str
     state: str = "running"  # running | done | error
-    result: dict[str, dict[str, str]] | None = None
+    result: dict[str, str] | None = None  # the workflow's $output map (runtime["out"])
     error: str | None = None
     log: list[str] = field(default_factory=list)
     started: float = 0.0
@@ -153,7 +153,7 @@ class JobRunner:
                     inputs=inputs,
                 )
             )
-            job.result = result.outputs
+            job.result = result.runtime["out"]
             job.state = "done"
         except Exception as exc:  # noqa: BLE001 - report any failure to the UI
             job.error = f"{type(exc).__name__}: {exc}"

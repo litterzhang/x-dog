@@ -103,6 +103,57 @@ def test_edge_unknown_dst_raises() -> None:
         validate_workflow(wf)
 
 
+def test_output_sink_edge_ok() -> None:
+    """An edge to the reserved $output sink validates when the source port exists."""
+    data = {
+        "name": "out-ok",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "output": "r"}],
+        "edges": [{"from": "a", "to": "$output", "map": {"r": "result"}}],
+    }
+    validate_workflow(parse_workflow(data))
+
+
+def test_output_sink_unknown_source_port_raises() -> None:
+    """An $output edge whose source port does not exist fails validation."""
+    data = {
+        "name": "out-bad",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "output": "r"}],
+        "edges": [{"from": "a", "to": "$output", "map": {"nope": "result"}}],
+    }
+    with pytest.raises(WorkflowValidationError, match="output port"):
+        validate_workflow(parse_workflow(data))
+
+
+def test_output_as_edge_source_raises() -> None:
+    """$output is a sink only; using it as an edge source is rejected."""
+    data = {
+        "name": "out-src",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "inputs": ["x"]}],
+        "edges": [{"from": "$output", "to": "a", "map": {"x": "x"}}],
+    }
+    with pytest.raises(WorkflowValidationError, match="sink only"):
+        validate_workflow(parse_workflow(data))
+
+
+def test_output_reserved_node_id_raises() -> None:
+    """A real node may not claim the reserved $output id."""
+    data = {
+        "name": "out-id",
+        "provider": "anthropic",
+        "entry": "$output",
+        "nodes": [{"id": "$output"}],
+        "edges": [],
+    }
+    with pytest.raises(WorkflowValidationError, match="reserved"):
+        validate_workflow(parse_workflow(data))
+
+
 def test_parse_condition_equals() -> None:
     data = {
         "name": "cond",

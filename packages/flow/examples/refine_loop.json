@@ -32,6 +32,8 @@
   "edges": [
     {"from": "$in", "to": "draft", "map": {"topic": "topic", "feedback": "feedback"}},
     {"from": "draft", "to": "critic", "map": {"answer": "answer"}},
+    {"from": "draft", "to": "$output", "map": {"answer": "answer"}},
+    {"from": "critic", "to": "$output", "map": {"feedback": "verdict"}},
     {
       "from": "critic",
       "to": "draft",

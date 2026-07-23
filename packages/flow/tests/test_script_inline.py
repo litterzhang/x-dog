@@ -6,19 +6,17 @@ import pathlib
 
 from flow.executor import execute
 from flow.loader import load_workflow, parse_workflow
-from flow.models import IN_NODE_ID, NodeDef, WorkflowDef
+from flow.models import NodeDef, WorkflowDef
 
 
 def _run(wf: WorkflowDef, base_dir: pathlib.Path | None = None) -> dict[str, str]:
     import asyncio
 
     result = asyncio.run(execute(wf, base_dir=base_dir))
-    # Flatten the nested node outputs (skipping the reserved $in source) into a
-    # single name->value view, the way the old flat final_state read.
+    # Flatten the nested real-node outputs into a single name->value view, the way
+    # the old flat final_state read.
     flat: dict[str, str] = {}
-    for node_id, ports in result.outputs.items():
-        if node_id == IN_NODE_ID:
-            continue
+    for ports in result.runtime["state"].values():
         flat.update(ports)
     return flat
 
@@ -61,7 +59,8 @@ def test_inline_async_script() -> None:
     assert _run(wf)["y"] == "HI"
 
 
-def test_ctx_exposes_state_and_ids() -> None:
+def test_ctx_exposes_runtime_info() -> None:
+    """ctx carries runtime info only (step/node_id/workflow_name), not inputs."""
     wf = parse_workflow({
         "name": "ctxwf",
         "provider": "copilot",
@@ -72,14 +71,14 @@ def test_ctx_exposes_state_and_ids() -> None:
             "type": "script",
             "code": (
                 "def s(ctx, seed):\n"
-                "    return f'{ctx.workflow_name}/{ctx.node_id}/{ctx.inputs[\"seed\"]}'"
+                "    return f'{ctx.workflow_name}/{ctx.node_id}/{ctx.step}/{seed}'"
             ),
             "inputs": [{"name": "seed", "type": "string"}],
             "output": {"name": "out", "type": "string"},
         }],
         "edges": [{"from": "$in", "to": "s", "map": {"seed": "seed"}}],
     })
-    assert _run(wf)["out"] == "ctxwf/s/z"
+    assert _run(wf)["out"] == "ctxwf/s/0/z"
 
 
 def test_object_output_serialized() -> None:

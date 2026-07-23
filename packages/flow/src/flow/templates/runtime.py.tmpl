@@ -12,7 +12,12 @@ from ai.types import AssistantMessage, TextContent
 $script_imports
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
-_OUT: dict[str, dict[str, str]] = {$in_node_id: $initial_state}
+_OUT: dict[str, dict[str, str]] = $in_seed
+# Per-node execution trace (delta frames) and the collected workflow output.
+_STACK: list[dict[str, object]] = []
+_OUTPUT: dict[str, str] = {}
+# The runtime container, populated by main() (see ExecResult.runtime).
+_RUNTIME: dict[str, object] = {}
 
 _REGISTRY = default_registry()$tool_registration
 
@@ -40,7 +45,17 @@ $node_functions
 async def main() -> None:
     provider = ai.provider("$provider")
 $main_body
-    print(json.dumps(_OUT, indent=2, ensure_ascii=False))
+    _last = _STACK[-1] if _STACK else {"step": -1, "node": ""}
+    _RUNTIME.update(
+        {
+            "ctx": {"step": _last["step"], "node_id": _last["node"], "workflow_name": "$workflow_name"},
+            "stack": _STACK,
+            "state": {_k: _v for _k, _v in _OUT.items() if _k != $in_node_id},
+            "in": _OUT[$in_node_id],
+            "out": _OUTPUT,
+        }
+    )
+    print(json.dumps(_RUNTIME["out"] if _RUNTIME["out"] else _RUNTIME, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
 """Tests for flow.executor — linear + parallel workflow execution.
 
 Data flows through node-private ports: a node reads its input ports (fed by
-incoming edge mappings) and writes its output ports.  ``result.outputs`` is
-nested ``outputs[node_id][port]``; the reserved ``$in`` source holds the initial
-state.  Prompt ``{{x}}`` is PORT-LOCAL (reads this node's input port ``x``).
+incoming edge mappings) and writes its output ports.  ``result.runtime`` is the
+run container; ``runtime["state"][node_id][port]`` holds real-node outputs,
+``runtime["in"]`` the initial state, and ``runtime["out"]`` the collected
+``$output``.  Prompt ``{{x}}`` is PORT-LOCAL (reads this node's input port ``x``).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
 from ai.utils.event_stream import EventStream as AiEventStream
 from flow.errors import WorkflowExecutionError
 from flow.executor import ExecResult, execute
-from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -110,8 +111,8 @@ async def test_linear_two_nodes() -> None:
     result = await execute(wf, stream_fn_factory=factory)
 
     assert isinstance(result, ExecResult)
-    assert result.outputs["node1"]["step1_out"] == "result_from_a"
-    assert result.outputs["node2"]["step2_out"] == "result_from_b"
+    assert result.runtime["state"]["node1"]["step1_out"] == "result_from_a"
+    assert result.runtime["state"]["node2"]["step2_out"] == "result_from_b"
 
 
 async def test_linear_sentinel_threading() -> None:
@@ -144,8 +145,8 @@ async def test_linear_sentinel_threading() -> None:
     assert _SENTINEL in node2_prompt
     assert "response_from_m" in node2_prompt  # upstream output from node1
 
-    assert "out1" in result.outputs["node1"]
-    assert "out2" in result.outputs["node2"]
+    assert "out1" in result.runtime["state"]["node1"]
+    assert "out2" in result.runtime["state"]["node2"]
 
 
 async def test_linear_three_nodes() -> None:
@@ -178,9 +179,9 @@ async def test_linear_three_nodes() -> None:
     factory = _make_stream_fn({"m": "ok"})
     result = await execute(wf, stream_fn_factory=factory)
 
-    assert result.outputs["a"]["va"] == "ok"
-    assert result.outputs["b"]["vb"] == "ok"
-    assert result.outputs["c"]["vc"] == "ok"
+    assert result.runtime["state"]["a"]["va"] == "ok"
+    assert result.runtime["state"]["b"]["vb"] == "ok"
+    assert result.runtime["state"]["c"]["vc"] == "ok"
 
 
 async def test_no_output_node() -> None:
@@ -197,7 +198,7 @@ async def test_no_output_node() -> None:
     result = await execute(wf, stream_fn_factory=factory)
 
     # Only the $in source is present; the node wrote no ports.
-    assert result.outputs.get("only", {}) == {}
+    assert result.runtime["state"].get("only", {}) == {}
 
 
 async def test_initial_state_available() -> None:
@@ -261,8 +262,8 @@ async def test_inputs_override_seed() -> None:
         inputs={"a": "40"},
     )
 
-    assert result.outputs[IN_NODE_ID] == {"a": "40", "b": "2"}
-    assert result.outputs["mk"]["s"] == "40+2"
+    assert result.runtime["in"] == {"a": "40", "b": "2"}
+    assert result.runtime["state"]["mk"]["s"] == "40+2"
 
 
 async def test_no_inputs_uses_defaults() -> None:
@@ -291,8 +292,8 @@ async def test_no_inputs_uses_defaults() -> None:
 
     result = await execute(wf, stream_fn_factory=_make_stream_fn({}), script_resolver=lambda _r: _echo)
 
-    assert result.outputs[IN_NODE_ID] == {"a": "7"}
-    assert result.outputs["mk"]["s"] == "7"
+    assert result.runtime["in"] == {"a": "7"}
+    assert result.runtime["state"]["mk"]["s"] == "7"
 
 
 async def test_parallel_diamond() -> None:
@@ -348,9 +349,9 @@ async def test_parallel_diamond() -> None:
 
     result = await execute(wf, stream_fn_factory=_factory)
 
-    assert result.outputs["b"]["vb"] == "output_from_b"
-    assert result.outputs["c"]["vc"] == "output_from_c"
-    assert result.outputs["d"]["vd"] == "output_from_d"
+    assert result.runtime["state"]["b"]["vb"] == "output_from_b"
+    assert result.runtime["state"]["c"]["vc"] == "output_from_c"
+    assert result.runtime["state"]["d"]["vd"] == "output_from_d"
 
     assert call_order[0] == "a"
     assert call_order[-1] == "d"
@@ -387,8 +388,8 @@ async def test_conditional_edge_not_taken() -> None:
 
     result = await execute(wf, stream_fn_factory=factory)
 
-    assert result.outputs["a"]["va"] == "no_match"
-    assert "b" not in result.outputs
+    assert result.runtime["state"]["a"]["va"] == "no_match"
+    assert "b" not in result.runtime["state"]
 
 
 async def test_loop() -> None:
@@ -454,8 +455,50 @@ async def test_loop() -> None:
     result = await execute(wf, stream_fn_factory=_factory)
 
     assert write_run_count[0] == 2
-    assert result.outputs["review"]["verdict"] == "APPROVE"
+    assert result.runtime["state"]["review"]["verdict"] == "APPROVE"
     assert review_call[0] == 2
+
+    # The stack is a per-node delta trace: write, review, write, review (looped
+    # once), each frame recording the node's input namespace and output ports.
+    stack = result.runtime["stack"]
+    assert [f["node"] for f in stack] == ["write", "review", "write", "review"]
+    assert [f["step"] for f in stack] == [0, 1, 2, 3]
+    # the second review saw the second draft as its input (loop fed the revision)
+    assert stack[3]["in"] == {"draft": "draft"}
+    assert stack[3]["out"] == {"verdict": "APPROVE"}
+    # ctx reflects the last node to run
+    assert result.runtime["ctx"] == {"step": 3, "node_id": "review", "workflow_name": "review_loop"}
+
+
+async def test_output_sink_collects_declared_outputs() -> None:
+    """Edges targeting $output populate runtime['out']; a looped writer's latest wins."""
+    wf = WorkflowDef(
+        name="out_wf",
+        provider="fake",
+        entry="mk",
+        default_model="m",
+        initial_state=(("a", "5"),),
+        nodes=(
+            NodeDef(
+                id="mk",
+                type="script",
+                input_ports=(Port("a", "integer"),),
+                code="def mk(ctx, a):\n    return a * 2",
+                output_ports=(Port("doubled", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="mk", mapping=(("a", "a"),)),
+            EdgeDef(src="mk", dst=OUT_NODE_ID, mapping=(("doubled", "result"),)),
+        ),
+    )
+
+    result = await execute(wf, stream_fn_factory=_make_stream_fn({}))
+
+    # $in / $output kept separate from the real-node state map
+    assert result.runtime["in"] == {"a": "5"}
+    assert result.runtime["state"] == {"mk": {"doubled": "10"}}
+    assert result.runtime["out"] == {"result": "10"}
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +535,7 @@ async def test_script_node() -> None:
         script_resolver=lambda _run: _my_script,
     )
 
-    assert result.outputs["s1"]["result"] == "SCRIPTOUT"
+    assert result.runtime["state"]["s1"]["result"] == "SCRIPTOUT"
     assert stream_fn_called == []
 
 
@@ -551,7 +594,7 @@ async def test_agent_tools() -> None:
     finally:
         _agent_module.Agent.__init__ = original_init  # type: ignore[method-assign]
 
-    assert result.outputs["n1"]["out"] == "agent_result"
+    assert result.runtime["state"]["n1"]["out"] == "agent_result"
     assert len(tools_seen) == 1
     assert tools_seen[0] == (spy_tool,)
 
@@ -592,7 +635,7 @@ async def test_agent_custom_tool_from_manifest() -> None:
     finally:
         _agent_module.Agent.__init__ = original_init  # type: ignore[method-assign]
 
-    assert result.outputs["n1"]["out"] == "agent_result"
+    assert result.runtime["state"]["n1"]["out"] == "agent_result"
     assert len(tools_seen) == 1
     # The loaded tool reached the agent under its MANIFEST name (not the internal one).
     assert len(tools_seen[0]) == 1
@@ -680,8 +723,8 @@ async def test_output_schema_success() -> None:
     factory = _make_submit_result_factory(valid_obj)
     result = await execute(wf, stream_fn_factory=factory)
 
-    assert "out" in result.outputs["n1"]
-    parsed = json.loads(result.outputs["n1"]["out"])
+    assert "out" in result.runtime["state"]["n1"]
+    parsed = json.loads(result.runtime["state"]["n1"]["out"])
     assert parsed == valid_obj
 
 
@@ -776,7 +819,7 @@ async def test_agent_web_search_tool_enabled() -> None:
 
     result = await execute(wf, stream_fn_factory=_factory, web_search_fn_factory=_ws_factory)
 
-    assert result.outputs["a"]["r"] == "done"
+    assert result.runtime["state"]["a"]["r"] == "done"
     # the search fn ran, bound to the web_search_model (not the node model)
     assert searched == [("gpt-5.5", "depin news")]
 
@@ -804,5 +847,5 @@ async def test_agent_without_web_search_has_no_search_tool() -> None:
 
     result = await execute(wf, stream_fn_factory=factory, web_search_fn_factory=_ws_factory)
 
-    assert result.outputs["a"]["r"] == "ok"
+    assert result.runtime["state"]["a"]["r"] == "ok"
     assert searched == []

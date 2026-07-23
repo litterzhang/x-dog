@@ -22,9 +22,9 @@ from flow.codegen_tools import (
 from flow.runtime import RuntimeContext
 
 
-def _ctx(**inputs: str) -> RuntimeContext:
+def _ctx() -> RuntimeContext:
     """A minimal RuntimeContext for calling script functions directly."""
-    return RuntimeContext(inputs=inputs, workflow_name="test", node_id="n")
+    return RuntimeContext(step=0, node_id="n", workflow_name="test")
 
 
 # ---------------------------------------------------------------------------

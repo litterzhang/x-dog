@@ -17,7 +17,7 @@ import string
 from collections import defaultdict
 from collections.abc import Callable
 
-from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef
 
 # A PortExpr resolves a referenced port name to a Python expression string.
 PortExpr = Callable[[str], str]
@@ -54,10 +54,19 @@ def _ESC(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _render_initial_state(wf: WorkflowDef) -> str:
-    # repr() escapes backslashes/quotes/newlines so the emitted literal is faithful.
+def _render_in_seed(wf: WorkflowDef) -> str:
+    """Render the full ``_OUT`` seed dict literal: ``{'$in': {<initial_state>}}``.
+
+    repr() escapes backslashes/quotes/newlines so the emitted literal is faithful.
+    The assignment line is ``_OUT: dict[str, dict[str, str]] = <literal>`` (prefix
+    34 chars); a long initial state can exceed 120, so a whole-line noqa is
+    appended to keep the generated module ruff-clean.
+    """
     pairs = ", ".join(f"{k!r}: {v!r}" for k, v in wf.initial_state)
-    return "{" + pairs + "}"
+    literal = "{" + f"{IN_NODE_ID!r}: {{{pairs}}}" + "}"
+    if 34 + len(literal) > 120:
+        return literal + "  # noqa: E501"
+    return literal
 
 
 def _render_prompt(prompt: str, port_expr: PortExpr) -> str:
@@ -180,13 +189,43 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
     return lines
 
 
+def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
+    """Emit the per-node epilogue: push a trace frame + flush any ``$output`` edges.
+
+    Mirrors the executor's ``_record_frame``: the step is ``len(_STACK)`` (one frame
+    per node run), the frame records this node's assembled ``ins`` and its output
+    ports, and any edge to ``$output`` copies the mapped keys into ``_OUTPUT`` (a
+    ``when`` guard is evaluated against this node's output ports).
+    """
+    ins_expr = "dict(ins)" if node.input_ports else "{}"
+    frame = (
+        f"{{'step': len(_STACK), 'node': {node.id!r}, "
+        f"'in': {ins_expr}, 'out': dict(_OUT[{node.id!r}])}}"
+    )
+    frame_line = f"    _STACK.append({frame})"
+    if len(frame_line) > 120:
+        frame_line += "  # noqa: E501"
+    lines = [frame_line]
+    out_port_expr: PortExpr = lambda port: f"_OUT[{node.id!r}].get({port!r}, '')"  # noqa: E731
+    for edge in wf.edges:
+        if edge.dst != OUT_NODE_ID or edge.src != node.id:
+            continue
+        guard = _condition_to_expr(edge.when, out_port_expr) if edge.when is not None else None
+        for sport, okey in edge.mapping:
+            cond = f"{sport!r} in _OUT[{node.id!r}]"
+            if guard is not None:
+                cond = f"({guard}) and {cond}"
+            lines.append(f"    if {cond}:")
+            lines.append(f"        _OUTPUT[{okey!r}] = _OUT[{node.id!r}][{sport!r}]")
+    return lines
+
+
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
     lines += _render_ins(node, wf)
-    ins_arg = "ins" if node.input_ports else "{}"
     lines.append(
-        f'    _ctx = RuntimeContext(inputs=dict({ins_arg}), workflow_name="{_ESC(wf.name)}", node_id="{_ESC(node.id)}")'
+        f'    _ctx = RuntimeContext(step=len(_STACK), node_id="{_ESC(node.id)}", workflow_name="{_ESC(wf.name)}")'
     )
     call_args = ["_ctx"]
     for p in node.input_ports:
@@ -202,6 +241,7 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     else:
         for p in node.output_ports:
             lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
+    lines += _render_node_tail(node, wf)
     return "\n".join(lines)
 
 
@@ -253,6 +293,7 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     lines.append(f"    _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
         lines.append(f"    _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
+    lines += _render_node_tail(node, wf)
     return "\n".join(lines)
 
 
@@ -268,6 +309,8 @@ def _build_fwd_graph(
     fwd_preds: dict[str, list[str]] = defaultdict(list)
     loop_edges: list[EdgeDef] = []
     for e in wf.edges:
+        if e.dst == OUT_NODE_ID:
+            continue  # the $output sink is flushed in each node's tail, not scheduled
         if e.loop_max is None:
             fwd_from[e.src].append(e)
             if e.src != IN_NODE_ID:
@@ -350,7 +393,7 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
     # Topological order over forward edges (Kahn), stable in declaration order.
     indeg: dict[str, int] = {n.id: 0 for n in wf.nodes}
     for e in wf.edges:
-        if e.loop_max is None and e.src != IN_NODE_ID:
+        if e.loop_max is None and e.src != IN_NODE_ID and e.dst != OUT_NODE_ID:
             indeg[e.dst] = indeg.get(e.dst, 0) + 1
     order: list[str] = []
     queue = [n.id for n in wf.nodes if indeg[n.id] == 0]
@@ -527,7 +570,7 @@ def generate(wf: WorkflowDef) -> str:
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
-        initial_state=_render_initial_state(wf),
+        in_seed=_render_in_seed(wf),
         in_node_id=repr(IN_NODE_ID),
         node_functions=node_functions,
         provider=wf.provider,

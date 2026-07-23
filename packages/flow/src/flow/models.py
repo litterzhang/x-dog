@@ -5,7 +5,8 @@ node declares ``input_ports`` and ``output_ports``; an :class:`EdgeDef` carries 
 explicit ``mapping`` of ``(source_output_port, destination_input_port)`` pairs, so
 ``nodeA.output.x -> nodeB.input.a`` is spelled out rather than implied by shared
 key names.  Initial workflow inputs are exposed as the output ports of a reserved
-synthetic source node whose id is :data:`IN_NODE_ID`.
+synthetic source node whose id is :data:`IN_NODE_ID`.  Workflow outputs are
+collected by edges targeting a reserved synthetic sink node :data:`OUT_NODE_ID`.
 """
 
 from __future__ import annotations
@@ -17,6 +18,12 @@ from typing import Literal
 # workflow's initial ``state`` values.  Chosen to be a non-identifier so it can
 # never collide with a user-authored node id.
 IN_NODE_ID = "$in"
+
+# Reserved id for the synthetic sink node that collects the workflow's outputs.
+# Nodes wire their output ports to it via ordinary edges (``to: "$output"``); the
+# collected mapping is exposed as the run's ``out`` result.  A dst-only mirror of
+# :data:`IN_NODE_ID`; likewise a non-identifier so it can't collide.
+OUT_NODE_ID = "$output"
 
 
 @dataclass(frozen=True)

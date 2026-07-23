@@ -102,9 +102,11 @@ async def test_agent_calculator_dryrun() -> None:
     result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
 
     # script node built the arithmetic problem from typed integer inputs
-    assert result.outputs["make_problem"].get("problem") == "347 + 895"
+    assert result.runtime["state"]["make_problem"].get("problem") == "347 + 895"
     # agent node ran and stored an answer (real content requires a live provider)
-    assert "answer" in result.outputs.get("solve", {})
+    assert "answer" in result.runtime["state"].get("solve", {})
+    # the workflow declares a $output ($in -> solve.answer -> result)
+    assert "result" in result.runtime["out"]
 
 
 async def test_generate_parity() -> None:
@@ -174,11 +176,14 @@ async def test_generate_parity() -> None:
     try:
         exec(compile(src, "<generated_workflow>", "exec"), gen_module.__dict__)  # noqa: S102
         await gen_module.main()  # type: ignore[attr-defined]
-        gen_out: dict[str, dict[str, str]] = gen_module._OUT  # type: ignore[attr-defined]
+        gen_runtime: dict[str, Any] = gen_module._RUNTIME  # type: ignore[attr-defined]
 
         stub_factory = _make_stub_factory(responses={model: stub_text}, default=stub_text)
         interp_result = await execute(wf, stream_fn_factory=stub_factory)
-        assert gen_out == dict(interp_result.outputs)
+        # Deterministic parts of the container agree (stack ORDER is best-effort
+        # under parallelism, so compare state + out, not the trace).
+        assert gen_runtime["state"] == dict(interp_result.runtime["state"])
+        assert gen_runtime["out"] == dict(interp_result.runtime["out"])
     finally:
         _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
         _ai.provider = original_ai_provider  # type: ignore[assignment]

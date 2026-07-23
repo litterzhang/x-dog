@@ -5,7 +5,9 @@ A node declares ``inputs`` / ``outputs`` port lists; an edge declares ``map`` â€
 ``{source_output_port: destination_input_port}``.  The workflow's ``state`` block
 seeds the output ports of the reserved source node :data:`flow.models.IN_NODE_ID`
 (``$in``), which is referenced by edges like any other source but never appears
-in ``wf.nodes``.
+in ``wf.nodes``.  Edges may target the reserved sink :data:`flow.models.OUT_NODE_ID`
+(``$output``) to collect workflow outputs; ``$output`` is a dst-only mirror of
+``$in`` and likewise never appears in ``wf.nodes``.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from flow.errors import WorkflowValidationError
-from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 logger = logging.getLogger(__name__)
 
@@ -210,12 +212,16 @@ def validate_workflow(wf: WorkflowDef) -> None:
             raise WorkflowValidationError("Node id must be non-empty")
         if nid == IN_NODE_ID:
             raise WorkflowValidationError(f"Node id {IN_NODE_ID!r} is reserved for the workflow input source")
+        if nid == OUT_NODE_ID:
+            raise WorkflowValidationError(f"Node id {OUT_NODE_ID!r} is reserved for the workflow output sink")
     if len(node_ids) != len(set(node_ids)):
         raise WorkflowValidationError(f"Duplicate node ids: {node_ids}")
 
-    # $in is index -1 (earliest); real nodes are 0..n-1 in declaration order.
+    # $in is index -1 (earliest); real nodes are 0..n-1 in declaration order;
+    # $output is index n (latest) so edges into it are always forward.
     node_index: dict[str, int] = {nid: i for i, nid in enumerate(node_ids)}
     node_index[IN_NODE_ID] = -1
+    node_index[OUT_NODE_ID] = len(node_ids)
     node_by_id = {n.id: n for n in wf.nodes}
     in_ports = {k for k, _ in wf.initial_state}
 
@@ -263,14 +269,27 @@ def validate_workflow(wf: WorkflowDef) -> None:
     fed: dict[tuple[str, str], int] = {}
     unconditional_fed: dict[tuple[str, str], int] = {}
     for edge in wf.edges:
+        if edge.src == OUT_NODE_ID:
+            raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")
         if edge.src != IN_NODE_ID and edge.src not in node_by_id:
             raise WorkflowValidationError(f"Edge src {edge.src!r} not found in nodes")
-        if edge.dst not in node_by_id:
+        if edge.dst != OUT_NODE_ID and edge.dst not in node_by_id:
             raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
         if edge.dst == IN_NODE_ID:
             raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
 
         src_outputs = _output_port_names(wf, edge.src, in_ports)
+        # $output is a free-form sink: its destination "ports" are arbitrary output
+        # keys, so only the source port must exist (no declared input ports to check,
+        # and it never needs to be "fed").
+        if edge.dst == OUT_NODE_ID:
+            for sport, _dport in edge.mapping:
+                if sport not in src_outputs:
+                    raise WorkflowValidationError(
+                        f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {sport!r}"
+                    )
+            continue
+
         dst_inputs = set(node_by_id[edge.dst].input_names)
         for sport, dport in edge.mapping:
             if sport not in src_outputs:
