@@ -26,7 +26,8 @@
   <div id="hf-load-msg" class="muted"></div>
 </section>
 
-<section id="hf-diagram-section" style="display:none">
+<div class="grid">
+<section id="hf-diagram-section" class="cell -6of12" style="display:none">
   <h3>Diagram: <span id="hf-name"></span></h3>
   <div id="hf-svg" class="diagram"></div>
   <details>
@@ -35,7 +36,7 @@
   </details>
 </section>
 
-<section id="hf-run-section" style="display:none">
+<section id="hf-run-section" class="cell -6of12" style="display:none">
   <h3>Inputs &amp; run</h3>
   <div id="hf-inputs"></div>
   <div class="spacer"></div>
@@ -46,6 +47,7 @@
     <pre id="hf-result-pre"></pre>
   </div>
 </section>
+</div>
 
 <script>
 (function () {

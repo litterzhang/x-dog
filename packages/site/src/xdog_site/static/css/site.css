@@ -17,7 +17,10 @@ body.hack {
 .main {
   grid-area: main;
   width: 100%;
-  min-width: 20rem;
+  /* min-width:0 lets this grid item shrink below the intrinsic width of a wide
+     child (e.g. a long <pre>), so the child scrolls instead of widening the
+     whole page. A grid item's default min-width:auto would blow out the track. */
+  min-width: 0;
 }
 .right { 
   grid-area: right; 
@@ -31,6 +34,8 @@ body.hack {
 .main .content {
   /* Ensure main column occupies at least 80% of viewport height */
   min-height: 60vh;
+  /* allow flex/grid children to shrink so wide <pre> blocks scroll, not widen */
+  min-width: 0;
 }
 
 /* Responsive: stack (mobile: show left, right, main vertically) */
@@ -119,6 +124,15 @@ details[open] > summary {
 }
 .pagination a {
   margin: 0 0.2rem;
+}
+
+/* Keep code/ASCII <pre> blocks inside the content column: they must not wrap
+   (it would break ASCII-diagram and code alignment), but they should scroll
+   horizontally within the column instead of widening the whole page layout. */
+.main .content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
 }
 
 /* flow deep-dive: inline SVG diagram fit. */
