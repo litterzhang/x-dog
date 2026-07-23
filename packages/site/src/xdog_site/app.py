@@ -7,8 +7,9 @@ no i18n, auth, or DB — content is authored in :mod:`xdog_site.content`.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from flask import Flask, render_template
+from flask import Flask, render_template, url_for
 
 from xdog_site.blueprints import init_bp
 
@@ -27,6 +28,21 @@ def create_app() -> Flask:
     if not app.config.get("SECRET_KEY"):
         app.config["SECRET_KEY"] = os.getenv("XDOG_SITE_SECRET") or "dev-insecure-change-me"
     init_bp(app)
+
+    static_dir = Path(app.static_folder) if app.static_folder else None
+
+    @app.template_global()
+    def static_v(filename: str) -> str:
+        """Static URL with a cache-busting ``?v=<mtime>`` so browsers refetch
+        a file the moment its contents change — no manual hard-refresh."""
+        url = url_for("static", filename=filename)
+        if static_dir is not None:
+            fpath = static_dir / filename
+            try:
+                return f"{url}?v={int(fpath.stat().st_mtime)}"
+            except OSError:
+                pass
+        return url
 
     @app.errorhandler(404)
     def not_found(_e: object) -> tuple[str, int]:
