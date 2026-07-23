@@ -31,21 +31,33 @@ _RUN_TIMEOUT = 900.0
 
 # Which stdlib loggers to capture, and the curated message prefixes worth showing
 # as an execution log (the executor logs these at DEBUG).  Bounds the log to the
-# node/loop-level interaction trace rather than the full debug firehose.
+# node/loop-level interaction trace rather than the full debug firehose.  Only
+# executor prefixes: the loader runs before the job starts (on a different thread)
+# and model-sync is background noise, so neither belongs in a run's own log.
 _LOG_LOGGERS = ("flow", "agent", "ai")
-_LOG_PREFIXES = ("Running node", "Running script node", "Loop edge", "Loading workflow", "Synced")
+_LOG_PREFIXES = ("Running node", "Running script node", "Loop edge")
 _LOG_CAP = 500  # keep at most this many lines per job
 
 
 class _JobLogHandler(logging.Handler):
-    """Buffers curated log lines into a job's ``log`` list (thread-scoped to one run)."""
+    """Buffers curated log lines into a job's ``log`` list, scoped to one run.
 
-    def __init__(self, sink: list[str]) -> None:
+    The handler is attached to the process-wide ``flow`` / ``agent`` / ``ai``
+    loggers, so it would otherwise also see records emitted by *other* request
+    threads (e.g. a concurrent ``/load`` logging "Loading workflow …").  Because
+    each job runs its executor on its own dedicated thread, we filter to records
+    emitted on that thread — the only ones that belong to this run.
+    """
+
+    def __init__(self, sink: list[str], thread_id: int) -> None:
         super().__init__(level=logging.DEBUG)
         self._sink = sink
+        self._thread_id = thread_id
         self.setFormatter(logging.Formatter("%(name)s: %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.thread != self._thread_id:
+            return  # a record from another request/worker thread — not this run
         msg = record.getMessage()
         if not msg.startswith(_LOG_PREFIXES):
             return
@@ -123,7 +135,7 @@ class JobRunner:
         base_dir: Path | None,
         web_search_fn_factory: Callable[[str], Any] | None,
     ) -> None:
-        handler = _JobLogHandler(job.log)
+        handler = _JobLogHandler(job.log, threading.get_ident())
         loggers = [logging.getLogger(name) for name in _LOG_LOGGERS]
         saved_levels = [lg.level for lg in loggers]
         for lg in loggers:

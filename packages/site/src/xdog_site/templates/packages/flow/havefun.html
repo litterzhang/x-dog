@@ -12,18 +12,22 @@
 <section>
   <h3>Load a workflow</h3>
   <div class="grid">
-  <div class="cell -5of12">
-    Example:
-    <select id="hf-example">
-      <option value="">— choose an example —</option>
-      {% for stem in example_stems %}<option value="{{ stem }}">{{ stem }}</option>{% endfor %}
-    </select>
-    <button id="hf-load-example" class="btn btn-ghost btn-primary btn-small">Load</button>
+  <div class="cell -8of12">
+    <div class="form-group">
+      <label for="hf-example">Example</label>
+      <select id="hf-example" class="form-control">
+        <option value="">— choose an example —</option>
+        {% for stem in example_stems %}<option value="{{ stem }}">{{ stem }}</option>{% endfor %}
+      </select>
+      <button id="hf-load-example" class="btn btn-primary">Load</button>
+    </div>
   </div>
-  <div class="cell -1of12">Or</div>
-  <div class="cell -5of12">
-    <input type="file" id="hf-file" accept=".json,application/json">
-    <button id="hf-load-file" class="btn btn-ghost btn-default btn-small">Upload</button>
+  <div class="cell -8of12">
+    <div class="form-group">
+      <label for="hf-file">Upload</label>
+      <input type="file" id="hf-file" class="form-control" accept=".json,application/json">
+      <button id="hf-load-file" class="btn btn-default">Load</button>
+    </div>
     <div id="hf-load-msg" class="muted"></div>
   </div>
   </div>
@@ -43,7 +47,7 @@
   <h3>Inputs &amp; run</h3>
   <div id="hf-inputs"></div>
   <div class="spacer"></div>
-  <button id="hf-run" class="btn btn-ghost btn-primary btn-small">Run workflow</button>
+  <button id="hf-run" class="btn btn-primary btn-small">Run workflow</button>
   <span id="hf-run-status" class="muted"></span>
   <div id="hf-log-wrap" style="display:none">
     <h3>Execution log</h3>

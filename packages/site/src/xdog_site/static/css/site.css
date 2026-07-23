@@ -128,11 +128,23 @@ details[open] > summary {
 
 /* Keep code/ASCII <pre> blocks inside the content column: they must not wrap
    (it would break ASCII-diagram and code alignment), but they should scroll
-   horizontally within the column instead of widening the whole page layout. */
+   horizontally within the column instead of widening the whole page layout.
+   hack.css sets a 2rem pre padding, which is too roomy here — tighten to 0.5rem. */
 .main .content pre {
   max-width: 100%;
   overflow-x: auto;
   box-sizing: border-box;
+  padding: 0.5rem;
+}
+
+/* The execution log and result JSON are prose, not alignment-sensitive art, so
+   they should wrap long lines (file paths, long JSON strings) instead of forcing
+   a horizontal scrollbar or overflowing the two-column layout. */
+#hf-log,
+#hf-result-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* flow deep-dive: inline SVG diagram fit. */
