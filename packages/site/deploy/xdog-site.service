@@ -8,6 +8,7 @@ Type=simple
 WorkingDirectory=/home/zhang/workspaces/pyspace/x-dog
 Environment=XDOG_SITE_HOST=127.0.0.1
 Environment=XDOG_SITE_PORT=8080
+Environment=XDOG_SITE_DEV=1
 ExecStart=/home/zhang/workspaces/pyspace/x-dog/.venv/bin/xdog-site
 Restart=always
 RestartSec=10

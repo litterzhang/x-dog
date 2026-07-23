@@ -105,6 +105,11 @@ body.hack {
 .main .content section {
   margin-bottom: 20px;
 }
+/* Cards that wrap onto multiple rows in a .cards grid need vertical spacing —
+   the spacer cells only separate them horizontally. */
+.cards.grid .card {
+  margin-bottom: 20px;
+}
 details > summary {
   cursor: pointer;
   padding: 0.3rem 0;

@@ -14,9 +14,16 @@ from xdog_site.blueprints import init_bp
 
 
 def create_app() -> Flask:
-    """Build and configure the x-dog site Flask app."""
+    """Build and configure the x-dog site Flask app.
+
+    Set ``XDOG_SITE_DEV=1`` to auto-reload templates and stop caching static
+    files, so template/CSS edits take effect on the next request without a
+    restart — without enabling full Flask debug (which is unsafe behind nginx).
+    """
     app = Flask(__name__)
-    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 3600
+    dev = bool(os.getenv("XDOG_SITE_DEV") or os.getenv("XDOG_SITE_DEBUG"))
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0 if dev else 3600
+    app.config["TEMPLATES_AUTO_RELOAD"] = dev
     if not app.config.get("SECRET_KEY"):
         app.config["SECRET_KEY"] = os.getenv("XDOG_SITE_SECRET") or "dev-insecure-change-me"
     init_bp(app)
