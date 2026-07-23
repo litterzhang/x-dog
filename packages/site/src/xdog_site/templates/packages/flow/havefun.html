@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %} — flow / HaveFun{% endblock %}
+{% block ctitle %}/ Packages / flow / HaveFun{% endblock %}
+
+{% block content %}
+<section>
+  <h2>HaveFun</h2>
+  <div>Load a workflow, see its diagrams, fill in its inputs, and run it live.
+    Uploaded workflows are restricted for safety (no inline script code); runs are
+    one-at-a-time and can take a while.</div>
+</section>
+
+<section>
+  <h3>Load a workflow</h3>
+  <div>
+    Example:
+    <select id="hf-example">
+      <option value="">— choose an example —</option>
+      {% for stem in example_stems %}<option value="{{ stem }}">{{ stem }}</option>{% endfor %}
+    </select>
+    <button id="hf-load-example" class="btn btn-ghost btn-primary btn-small">Load</button>
+  </div>
+  <div class="spacer"></div>
+  <div>Or paste a <code>workflow.json</code>:</div>
+  <textarea id="hf-json" class="form-control" rows="6" style="width:100%;font-family:monospace"></textarea>
+  <div class="spacer"></div>
+  <button id="hf-load-json" class="btn btn-ghost btn-default btn-small">Load pasted JSON</button>
+  <div id="hf-load-msg" class="muted"></div>
+</section>
+
+<section id="hf-diagram-section" style="display:none">
+  <h3>Diagram: <span id="hf-name"></span></h3>
+  <div id="hf-svg" class="diagram"></div>
+  <details>
+    <summary>ASCII diagram</summary>
+    <pre id="hf-ascii"></pre>
+  </details>
+</section>
+
+<section id="hf-run-section" style="display:none">
+  <h3>Inputs &amp; run</h3>
+  <div id="hf-inputs"></div>
+  <div class="spacer"></div>
+  <button id="hf-run" class="btn btn-ghost btn-primary btn-small">Run workflow</button>
+  <span id="hf-run-status" class="muted"></span>
+  <div id="hf-result" style="display:none">
+    <h3>Result</h3>
+    <pre id="hf-result-pre"></pre>
+  </div>
+</section>
+
+<script>
+(function () {
+  var state = { source: null };  // {example} or {json}
+  var $ = function (id) { return document.getElementById(id); };
+
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
+  }
+
+  function renderLoaded(d) {
+    $("hf-name").textContent = d.name || "";
+    $("hf-svg").innerHTML = d.svg || "";
+    $("hf-ascii").textContent = d.ascii || "";
+    $("hf-diagram-section").style.display = "";
+    // inputs
+    var box = $("hf-inputs");
+    box.innerHTML = "";
+    if (!d.inputs || !d.inputs.length) {
+      box.innerHTML = '<div class="muted">This workflow declares no inputs.</div>';
+    } else {
+      d.inputs.forEach(function (inp) {
+        var wrap = document.createElement("div");
+        wrap.style.marginBottom = "0.5rem";
+        var label = document.createElement("label");
+        label.textContent = inp.name + ": ";
+        label.style.marginRight = "0.5rem";
+        var field = document.createElement("input");
+        field.className = "form-control";
+        field.setAttribute("data-input", inp.name);
+        field.value = inp.default || "";
+        field.style.width = "100%";
+        wrap.appendChild(label);
+        wrap.appendChild(field);
+        box.appendChild(wrap);
+      });
+    }
+    $("hf-run-section").style.display = "";
+    $("hf-result").style.display = "none";
+    $("hf-run-status").textContent = "";
+  }
+
+  function load(source) {
+    $("hf-load-msg").textContent = "Loading…";
+    post("{{ url_for('main.flow_havefun_load') }}", source).then(function (res) {
+      if (res.status === 200 && res.body.ok) {
+        state.source = source;
+        $("hf-load-msg").textContent = "";
+        renderLoaded(res.body);
+      } else {
+        $("hf-load-msg").textContent = "Error: " + (res.body.error || res.status);
+        $("hf-diagram-section").style.display = "none";
+        $("hf-run-section").style.display = "none";
+      }
+    });
+  }
+
+  $("hf-load-example").addEventListener("click", function () {
+    var stem = $("hf-example").value;
+    if (!stem) { $("hf-load-msg").textContent = "Pick an example first."; return; }
+    load({ example: stem });
+  });
+  $("hf-load-json").addEventListener("click", function () {
+    var text = $("hf-json").value.trim();
+    if (!text) { $("hf-load-msg").textContent = "Paste some JSON first."; return; }
+    load({ json: text });
+  });
+
+  var poll = null;
+  $("hf-run").addEventListener("click", function () {
+    if (!state.source) return;
+    var inputs = {};
+    document.querySelectorAll("[data-input]").forEach(function (f) {
+      inputs[f.getAttribute("data-input")] = f.value;
+    });
+    var body = Object.assign({}, state.source, { inputs: inputs });
+    $("hf-run").disabled = true;
+    $("hf-run-status").textContent = "Starting…";
+    $("hf-result").style.display = "none";
+    post("{{ url_for('main.flow_havefun_run') }}", body).then(function (res) {
+      if (res.status === 429) {
+        $("hf-run-status").textContent = "Busy — a run is already in progress. Try again shortly.";
+        $("hf-run").disabled = false;
+        return;
+      }
+      if (res.status !== 200 || !res.body.ok) {
+        $("hf-run-status").textContent = "Error: " + (res.body.error || res.status);
+        $("hf-run").disabled = false;
+        return;
+      }
+      var jobId = res.body.job_id;
+      $("hf-run-status").textContent = "Running… ⏳";
+      poll = setInterval(function () {
+        fetch("{{ url_for('main.flow_havefun_status', job_id='__ID__') }}".replace("__ID__", jobId))
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (!j.ok) { return; }
+            if (j.state === "running") {
+              $("hf-run-status").textContent = "Running… ⏳ (" + j.elapsed + "s)";
+              return;
+            }
+            clearInterval(poll);
+            $("hf-run").disabled = false;
+            if (j.state === "done") {
+              $("hf-run-status").textContent = "Done in " + j.elapsed + "s.";
+              $("hf-result-pre").textContent = JSON.stringify(j.result, null, 2);
+              $("hf-result").style.display = "";
+            } else {
+              $("hf-run-status").textContent = "Failed: " + (j.error || "unknown error");
+            }
+          });
+      }, 2000);
+    });
+  });
+})();
+</script>
+{% endblock %}
