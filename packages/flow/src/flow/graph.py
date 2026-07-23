@@ -72,111 +72,100 @@ _MASK_GLYPH: dict[int, str] = {
 }
 
 
-def to_ascii_diagram(wf: WorkflowDef) -> str:
-    """Return a boxed ASCII flow diagram with 2-D routed edges.
+def _layers(wf: WorkflowDef) -> tuple[dict[str, int], list[EdgeDef], list[EdgeDef]]:
+    """Longest-path topological layering of *wf*'s real nodes.
 
-    Nodes are drawn top-to-bottom in a left-aligned *spine*.  A plain edge to the
-    very next node is a simple ``│``/``▼`` down-arrow labelled with its ports.
-    Any other real edge (a skip, a branch, or a loop back-edge) is routed through
-    a vertical *lane* on the right: it leaves the source box, travels down (or up,
-    for loops) its own column, and turns into the destination box with a ``◄``
-    arrow, with the ``src→dst [ports]`` label printed alongside.  Lanes are packed
-    so non-overlapping edges share a column.  Edges from the reserved ``$in``
-    source are omitted (they feed nearly every node and only add noise).
-    Deterministic and dependency-free.
+    Returns ``(layer_of_node, forward_edges, loop_edges)``.  ``$in`` edges are
+    ignored; loop back-edges (``loop_max`` set) do not constrain layers and are
+    returned separately for lane routing.
+    """
+    order = {node.id: i for i, node in enumerate(wf.nodes)}
+    forward = [
+        e
+        for e in wf.edges
+        if e.src != IN_NODE_ID and e.src in order and e.dst in order and e.loop_max is None
+    ]
+    loops = [e for e in wf.edges if e.src in order and e.dst in order and e.loop_max is not None]
+    preds: dict[str, list[str]] = {node.id: [] for node in wf.nodes}
+    for e in forward:
+        preds[e.dst].append(e.src)
+
+    layer: dict[str, int] = {}
+
+    def depth_of(nid: str) -> int:
+        if nid in layer:
+            return layer[nid]
+        layer[nid] = 0 if not preds[nid] else 1 + max(depth_of(p) for p in preds[nid])
+        return layer[nid]
+
+    for node in wf.nodes:
+        depth_of(node.id)
+    return layer, forward, loops
+
+
+def to_ascii_diagram(wf: WorkflowDef) -> str:
+    """Return a boxed ASCII flow diagram with a layered, top-down layout.
+
+    Nodes are grouped into topological layers (longest-path); the layers stack
+    vertically and **parallel nodes in the same layer are placed side by side**,
+    so the drawing reflects the graph's real fan-out/fan-in structure.  An edge
+    between adjacent layers is routed inline as a ``│``/``▼`` orthogonal drop
+    labelled with its ports.  A *skip* edge (spanning more than one layer) or a
+    loop back-edge is routed through a vertical *lane* on the right, turning into
+    the destination with a ``◄`` arrow and a ``src→dst [ports]`` (or ``src↺dst``)
+    label.  Edges from the reserved ``$in`` source are omitted.  Deterministic and
+    dependency-free.
     """
     nodes = wf.nodes
     if not nodes:
         return "(empty workflow)"
 
-    order = {node.id: i for i, node in enumerate(nodes)}
-    n = len(nodes)
-    row_h = 5  # rows per node: top, mid, bottom, +2 gap
+    layer, forward, loops = _layers(wf)
+    from collections import defaultdict
 
-    def top(i: int) -> int:
-        return i * row_h
+    by_layer: dict[int, list[str]] = defaultdict(list)
+    for node in nodes:  # declaration order within each layer (deterministic)
+        by_layer[layer[node.id]].append(node.id)
+    depth = max(by_layer) + 1
 
-    def mid(i: int) -> int:
-        return i * row_h + 1
-
-    def bot(i: int) -> int:
-        return i * row_h + 2
-
-    labels: list[str] = []
+    labels: dict[str, str] = {}
     for node in nodes:
         lbl = f" {node.id} [{node.type}]"
         if node.id == wf.entry:
             lbl += " *"
-        labels.append(lbl)
-    box_w = [len(lbl) + 2 for lbl in labels]  # incl. the two vertical borders
-    spine = max(box_w)
+        labels[node.id] = lbl
+    box_w = {nid: len(labels[nid]) + 2 for nid in labels}
 
-    # Classify real (non-$in, in-graph) edges into sequential vs lane-routed.
-    real = [e for e in wf.edges if e.src != IN_NODE_ID and e.src in order and e.dst in order]
-    seq_edges: list[EdgeDef] = []
-    lane_edges: list[EdgeDef] = []
-    for e in real:
-        si, di = order[e.src], order[e.dst]
-        if di == si + 1 and e.when is None and e.loop_max is None:
-            seq_edges.append(e)
-        else:
-            lane_edges.append(e)
+    band = 5  # 3 box rows + 2 routing rows below each layer
+    col_gap = 3
 
-    def row_span(e: EdgeDef) -> tuple[int, int]:
-        a, b = mid(order[e.src]), mid(order[e.dst])
-        return (min(a, b), max(a, b))
+    # Left-aligned side-by-side placement within each layer.
+    x: dict[str, int] = {}
+    max_layer_w = 0
+    for lv in range(depth):
+        cx = 0
+        for nid in by_layer[lv]:
+            x[nid] = cx
+            cx += box_w[nid] + col_gap
+        max_layer_w = max(max_layer_w, cx - col_gap if by_layer[lv] else 0)
+    spine_w = max_layer_w + 2
 
-    # Nested-lane packing: longer spans take inner columns (closer to the spine)
-    # and shorter spans nest outside them.  This keeps the edge turning in on any
-    # given row the right-most thing there, so its ◄ corner and inline label never
-    # sit behind an outer lane.  Longest-first; each edge takes the first column
-    # whose occupied intervals stay disjoint.  Deterministic.
-    def _span_len(e: EdgeDef) -> int:
-        s, t = row_span(e)
-        return t - s
+    # Skip-forward (layer distance > 1) and loop edges route on right-side lanes.
+    lane_edges = [e for e in forward if layer[e.dst] - layer[e.src] > 1] + loops
+    n_lanes = len(lane_edges)
 
-    keyed = sorted(
-        range(len(lane_edges)),
-        key=lambda i: (-_span_len(lane_edges[i]), row_span(lane_edges[i])[0]),
-    )
-    lanes: list[list[tuple[int, int]]] = []
-    lane_col: dict[int, int] = {}
-    for idx in keyed:
-        s, t = row_span(lane_edges[idx])
-        placed = False
-        for j, occupied in enumerate(lanes):
-            if all(t < a or s > b for a, b in occupied):
-                occupied.append((s, t))
-                lane_col[idx] = j
-                placed = True
-                break
-        if not placed:
-            lanes.append([(s, t)])
-            lane_col[idx] = len(lanes) - 1
-    n_lanes = len(lanes)
+    def lane_x(i: int) -> int:
+        return spine_w + 2 + i * 3
 
-    lane_base = spine + 2
+    lane_col = {id(e): lane_x(i) for i, e in enumerate(lane_edges)}
+    label_col = lane_x(n_lanes) + 1 if n_lanes else spine_w + 2
+    width = label_col + 2
+    for e in lane_edges:
+        width = max(width, label_col + len(f"{e.src}→{e.dst}") + len(_port_label(e)) + 6)
+    total_rows = depth * band + 1
 
-    def lane_x(k: int) -> int:
-        return lane_base + k * 3
-
-    def _tag(e: EdgeDef) -> str:
-        lbl = _port_label(e)
-        return f"{e.src}→{e.dst}" + (f" [{lbl}]" if lbl else "")
-
-    # A single label column to the right of every lane.  Each edge's corner is
-    # joined to its label by a horizontal leader, so labels stay aligned and
-    # visibly connected (never floating past an intervening lane).  Edges that
-    # share a destination share a row, so their tags are joined for that row.
-    label_col = lane_x(n_lanes - 1) + 2 if n_lanes else spine + 2
-    row_tags: dict[int, list[str]] = {}
-    for idx, e in enumerate(lane_edges):
-        row_tags.setdefault(mid(order[e.dst]), []).append(_tag(e))
-    row_label = {r: "  ".join(tags) for r, tags in row_tags.items()}
-
-    total_rows = (n - 1) * row_h + 3
-    max_label = max((len(s) for s in row_label.values()), default=0)
-    width = label_col + max_label + 2
+    def y_top(lv: int) -> int:
+        return lv * band
 
     mask = [[0] * width for _ in range(total_rows)]
     text: list[list[str | None]] = [[None] * width for _ in range(total_rows)]
@@ -190,56 +179,84 @@ def to_ascii_diagram(wf: WorkflowDef) -> str:
             if 0 <= r < total_rows and 0 <= c + i < width:
                 text[r][c + i] = ch
 
-    # Boxes.
-    for i, lbl in enumerate(labels):
-        w = box_w[i]
-        t, m, b = top(i), mid(i), bot(i)
-        add(t, 0, _S | _E)
-        for c in range(1, w - 1):
-            add(t, c, _E | _W)
-        add(t, w - 1, _S | _W)
-        add(m, 0, _N | _S)
-        add(m, w - 1, _N | _S)
-        put(m, 1, lbl)
-        add(b, 0, _N | _E)
-        for c in range(1, w - 1):
-            add(b, c, _E | _W)
-        add(b, w - 1, _N | _W)
+    def box_cx(nid: str) -> int:
+        return x[nid] + box_w[nid] // 2
 
-    # Sequential edges: a labelled down-arrow on the spine.
-    spine_c = 2
-    for e in seq_edges:
-        i = order[e.src]
-        add(bot(i), spine_c, _S)
-        add(bot(i) + 1, spine_c, _N | _S)
-        put(bot(i) + 2, spine_c, "▼")
+    def box_bottom(nid: str) -> int:
+        return y_top(layer[nid]) + 2
+
+    def box_top(nid: str) -> int:
+        return y_top(layer[nid])
+
+    def box_mid(nid: str) -> int:
+        return y_top(layer[nid]) + 1
+
+    def box_right(nid: str) -> int:
+        return x[nid] + box_w[nid] - 1
+
+    # Boxes.
+    for nid in labels:
+        left = x[nid]
+        w = box_w[nid]
+        t = box_top(nid)
+        add(t, left, _S | _E)
+        for c in range(left + 1, left + w - 1):
+            add(t, c, _E | _W)
+        add(t, left + w - 1, _S | _W)
+        add(t + 1, left, _N | _S)
+        add(t + 1, left + w - 1, _N | _S)
+        put(t + 1, left + 1, labels[nid])
+        add(t + 2, left, _N | _E)
+        for c in range(left + 1, left + w - 1):
+            add(t + 2, c, _E | _W)
+        add(t + 2, left + w - 1, _N | _W)
+
+    # Adjacent forward edges: orthogonal drop through the routing channel.
+    for e in forward:
+        if layer[e.dst] - layer[e.src] > 1:
+            continue
+        sc, dc = box_cx(e.src), box_cx(e.dst)
+        r0 = box_bottom(e.src)
+        r1 = box_top(e.dst)
+        chan = r1 - 1  # routing row just above the destination band
+        add(r0, sc, _S)
+        for r in range(r0 + 1, chan):
+            add(r, sc, _N | _S)
+        add(chan, sc, _N | (_E if dc > sc else _W if dc < sc else _S))
+        lo, hi = sorted((sc, dc))
+        for c in range(lo + 1, hi):
+            add(chan, c, _E | _W)
+        if dc != sc:
+            add(chan, dc, _S | (_W if dc > sc else _E))
+        else:
+            add(chan, dc, _N | _S)
+        add(r1, dc, _N | _S)
+        put(r1, dc, "▼")
         lbl = _port_label(e)
         if lbl:
-            put(bot(i) + 1, spine_c + 2, lbl)
+            put(r0 + 1, sc + 2, lbl)
 
-    # Lane-routed edges: source right-stub -> vertical lane -> destination ◄.
-    for idx, e in enumerate(lane_edges):
-        col = lane_x(lane_col[idx])
-        si, di = order[e.src], order[e.dst]
-        sr, tr = mid(si), mid(di)
-        down = di > si
-        for c in range(box_w[si], col):
+    # Lane-routed edges: source right side -> vertical lane -> destination ◄,
+    # then a leader east to an aligned label column.
+    for e in lane_edges:
+        col = lane_col[id(e)]
+        sr, tr = box_mid(e.src), box_mid(e.dst)
+        down = layer[e.dst] > layer[e.src]
+        for c in range(box_right(e.src) + 1, col):
             add(sr, c, _E | _W)
-        add(sr, col, _W | _S if down else _W | _N)
+        add(sr, col, _W | (_S if down else _N))
         for r in range(min(sr, tr) + 1, max(sr, tr)):
             add(r, col, _N | _S)
-        add(tr, col, _W | _N if down else _W | _S)
-        for c in range(box_w[di], col):
+        add(tr, col, _W | (_N if down else _S))
+        for c in range(box_right(e.dst) + 1, col):
             add(tr, c, _E | _W)
-        put(tr, box_w[di], "◄")
-        # Leader east from the corner to the aligned label column; the corner
-        # gains an east bit (┘→┴ / ┐→┬) and any lane it crosses becomes ┼.
+        put(tr, box_right(e.dst) + 1, "◄")
         add(tr, col, _E)
         for c in range(col + 1, label_col):
             add(tr, c, _E | _W)
-
-    for label_row, label_text in row_label.items():
-        put(label_row, label_col, label_text)
+        lbl = _port_label(e)
+        arrow = "↺" if e.loop_max is not None else "→"
+        put(tr, label_col, f"{e.src}{arrow}{e.dst}" + (f" [{lbl}]" if lbl else ""))
 
     out: list[str] = []
     for r in range(total_rows):

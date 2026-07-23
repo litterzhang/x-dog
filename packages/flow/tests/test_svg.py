@@ -159,8 +159,9 @@ def test_ascii_diagram_boxes_and_edges() -> None:
     assert "▼" in d
     # the c -> b loop back-edge is routed through a right-hand lane that turns
     # into the destination box with a ◄ arrow, labelled with its condition/loop.
+    # Loop back-edges use the ↺ arrow in the label (c↺b).
     assert "◄" in d
-    assert "c→b" in d
+    assert "c↺b" in d
     assert "REVISE" in d or "contains" in d
     assert "loop" in d
 
@@ -205,3 +206,33 @@ def test_ascii_diagram_empty() -> None:
 
     wf = WorkflowDef(name="e", provider="copilot", entry="", nodes=(), edges=())
     assert to_ascii_diagram(wf) == "(empty workflow)"
+
+
+def test_ascii_diagram_places_same_layer_nodes_side_by_side() -> None:
+    """A fan-out puts both branch nodes in the same layer, on the same rows."""
+    from flow.graph import to_ascii_diagram
+
+    wf = WorkflowDef(
+        name="diamond",
+        provider="copilot",
+        entry="seed",
+        nodes=(
+            NodeDef(id="seed", type="script", run="m:s", output_ports=(Port("v"),)),
+            NodeDef(id="left", type="script", run="m:l", input_ports=(Port("v"),), output_ports=(Port("a"),)),
+            NodeDef(id="right", type="script", run="m:r", input_ports=(Port("v"),), output_ports=(Port("b"),)),
+            NodeDef(id="join", type="script", run="m:j", input_ports=(Port("a"), Port("b"))),
+        ),
+        edges=(
+            EdgeDef(src="seed", dst="left", mapping=(("v", "v"),)),
+            EdgeDef(src="seed", dst="right", mapping=(("v", "v"),)),
+            EdgeDef(src="left", dst="join", mapping=(("a", "a"),)),
+            EdgeDef(src="right", dst="join", mapping=(("b", "b"),)),
+        ),
+    )
+    d = to_ascii_diagram(wf)
+    # left and right are parallel (same layer) -> they must share a text row.
+    line_with_left = next(ln for ln in d.splitlines() if "left" in ln)
+    assert "right" in line_with_left  # side by side on one band
+    # all four nodes present, layered top (seed) to bottom (join)
+    for nid in ("seed", "left", "right", "join"):
+        assert nid in d
