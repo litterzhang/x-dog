@@ -6,7 +6,10 @@
 <section>
   <h2>Examples</h2>
   <div>Real workflows from the flow package, rendered live. Each diagram is generated on request
-    from the same JSON definition the runtime executes.</div>
+    from the same JSON definition the runtime executes. Every example declares a
+    <code>$output</code>, so a run returns a clean result — you can execute any of them yourself on
+    the <a href="{{ url_for('main.flow_havefun') }}">HaveFun</a> page and watch the node-by-node
+    log.</div>
 </section>
 
 {% if not examples %}
@@ -37,8 +40,11 @@
 {% if codegen %}
 <section>
   <h3>Generated Python</h3>
-  <div>flow can compile a workflow to a standalone module. Here is the code generated for
-    <code>{{ codegen.stem }}</code>:</div>
+  <div>flow can compile a workflow to a standalone module — no interpreter needed at run time. The
+    generated code keeps node outputs in the same nested port structure and builds the identical
+    <code>runtime</code> container the interpreter does, so the two forms agree node-for-node, and
+    it passes the same ruff and mypy&nbsp;<code>--strict</code> gate as hand-written code. Here is
+    the module generated for <code>{{ codegen.stem }}</code>:</div>
   <pre><code>{{ codegen.code }}</code></pre>
 </section>
 {% endif %}

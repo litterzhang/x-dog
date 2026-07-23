@@ -11,7 +11,19 @@ from flask import Blueprint, abort, jsonify, render_template, request
 from markupsafe import Markup
 
 from xdog_site.content.faq import FAQS
-from xdog_site.content.flow import DESIGN_SECTIONS, EXAMPLES, FEATURES, GAPS, ROADMAP
+from xdog_site.content.flow import (
+    COMMANDS,
+    CONDITION_ROWS,
+    DESIGN_SECTIONS,
+    EXAMPLES,
+    FEATURES,
+    GAPS,
+    ROADMAP,
+    RUNTIME_ROWS,
+    SCHEMA_BLOCKS,
+    TYPE_ROWS,
+    VALIDATION_RULES,
+)
 from xdog_site.content.packages import LAYERS, PACKAGES, PACKAGES_BY_NAME
 
 bp = Blueprint("main", __name__)
@@ -41,6 +53,20 @@ def flow_design() -> str:
 @bp.route("/packages/flow/features")
 def flow_features() -> str:
     return render_template("packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], features=FEATURES)
+
+
+@bp.route("/packages/flow/reference")
+def flow_reference() -> str:
+    return render_template(
+        "packages/flow/reference.html",
+        pkg=PACKAGES_BY_NAME["flow"],
+        schema_blocks=SCHEMA_BLOCKS,
+        type_rows=TYPE_ROWS,
+        condition_rows=CONDITION_ROWS,
+        runtime_rows=RUNTIME_ROWS,
+        commands=COMMANDS,
+        validation_rules=VALIDATION_RULES,
+    )
 
 
 @bp.route("/packages/flow/examples")

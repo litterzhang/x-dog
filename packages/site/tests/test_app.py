@@ -104,6 +104,7 @@ def test_404_page_is_styled(client: FlaskClient) -> None:
         ("/packages/flow", "flow"),
         ("/packages/flow/design", "flow / Design"),
         ("/packages/flow/features", "flow / Features"),
+        ("/packages/flow/reference", "flow / Reference"),
         ("/packages/flow/examples", "flow / Examples"),
         ("/packages/flow/roadmap", "flow / Roadmap"),
     ],
@@ -116,6 +117,16 @@ def test_flow_subpages_ok_with_breadcrumb(client: FlaskClient, path: str, crumb:
     assert f"Packages / {crumb}" in body
     # the left-nav flow submenu links every sub-page
     assert "/packages/flow/design" in body and "/packages/flow/roadmap" in body
+    assert "/packages/flow/reference" in body
+
+
+def test_flow_reference_documents_schema_and_rules(client: FlaskClient) -> None:
+    body = client.get("/packages/flow/reference").get_data(as_text=True)
+    # the JSON schema, type system, conditions, runtime container, CLI, and validation rules
+    assert "output_schema" in body  # a NodeDef field
+    assert "$output" in body  # the reserved sink
+    assert "xdog-flow" in body  # the CLI section
+    assert "not fed by any edge mapping" in body  # a validation rule
 
 
 def test_flow_examples_renders_live_svg_and_ascii(client: FlaskClient) -> None:
@@ -135,9 +146,22 @@ def test_flow_roadmap_has_gaps_and_phases(client: FlaskClient) -> None:
 
 
 def test_flow_content_module_importable() -> None:
-    from xdog_site.content.flow import DESIGN_SECTIONS, EXAMPLES, FEATURES, GAPS, ROADMAP
+    from xdog_site.content.flow import (
+        COMMANDS,
+        CONDITION_ROWS,
+        DESIGN_SECTIONS,
+        EXAMPLES,
+        FEATURES,
+        GAPS,
+        ROADMAP,
+        RUNTIME_ROWS,
+        SCHEMA_BLOCKS,
+        TYPE_ROWS,
+        VALIDATION_RULES,
+    )
 
     assert DESIGN_SECTIONS and FEATURES and EXAMPLES and GAPS and ROADMAP
+    assert SCHEMA_BLOCKS and TYPE_ROWS and CONDITION_ROWS and RUNTIME_ROWS and COMMANDS and VALIDATION_RULES
 
 
 # --- HaveFun page + async run ------------------------------------------------
