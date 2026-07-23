@@ -560,15 +560,26 @@ async def sync_models(
 
 
 def list_models(ttl: float = _DEFAULT_TTL_SECONDS) -> tuple[Model, ...]:
-    """Return the model list from cache (synchronous).
+    """Return the model list from cache (synchronous, no network).
 
-    If the cache is missing or stale, returns the fallback
-    :data:`pi__FALLBACK_MODELS`.
+    A *fresh* cache (younger than *ttl*) is returned directly.  A *stale* cache
+    is still returned rather than discarded — a stale-but-real model list is far
+    more useful than the tiny hard-coded :data:`_FALLBACK_MODELS`, and freshness
+    is refreshed out-of-band by :func:`sync_models`.  This "stale-while-error"
+    behaviour means a transient sync failure (e.g. the upstream token endpoint
+    returning 502) never collapses a long-running consumer down to the fallback
+    set.  Only a missing or unreadable cache falls back.
     """
     cached = _read_cache()
     if cached is not None:
         models, ts = cached
-        if time.time() - ts < ttl and len(models) > 0:
+        if len(models) > 0:
+            if time.time() - ts >= ttl:
+                logger.debug(
+                    "Copilot model cache is stale (age %.0fs >= ttl %.0fs); using it anyway",
+                    time.time() - ts,
+                    ttl,
+                )
             return models
 
     return _FALLBACK_MODELS

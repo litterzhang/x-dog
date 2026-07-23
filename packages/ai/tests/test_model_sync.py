@@ -102,6 +102,25 @@ def test_list_models_returns_generated_when_no_cache(tmp_path: Path):
     with patch("ai.vendors.copilot._model_sync._CACHE_FILE", tmp_path / "nope.json"):
         assert len(list_models()) > 0
 
+
+def test_list_models_returns_stale_cache_over_fallback(tmp_path: Path):
+    """A stale (past-TTL) cache with real models is preferred over the fallback.
+
+    Guards the stale-while-error behaviour: a transient sync failure must not
+    collapse consumers down to the tiny hard-coded fallback set when a real,
+    if stale, model list is on disk.
+    """
+    cache_file = tmp_path / "c.json"
+    stale_ts = time.time() - (48 * 60 * 60)  # 48h old, well past the 24h TTL
+    models = [_model_to_dict(Model(id=f"copilot/stale-{i}", name=f"S{i}")) for i in range(12)]
+    cache_file.write_text(json.dumps({"timestamp": stale_ts, "models": models}))
+    with patch("ai.vendors.copilot._model_sync._CACHE_FILE", cache_file):
+        result = list_models()
+    ids = {m.id for m in result}
+    assert "copilot/stale-0" in ids  # the stale cache is used
+    assert len(result) == 12
+
+
 def test_get_synced_model():
     assert get_synced_model("copilot/claude-sonnet-4.5") is not None
     assert get_synced_model("copilot/nonexistent") is None
