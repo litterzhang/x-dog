@@ -137,6 +137,17 @@ EXAMPLES: tuple[Example, ...] = (
         "returns the answer (e.g. a=12, b=30 → answer \"42\"). A dry-run only exercises the wiring; a real "
         "run has the agent actually compute via bash.",
     ),
+    Example(
+        stem="refine_loop",
+        title="Generator ↔ Critic (bounded refine loop with web search)",
+        blurb="Two agents in a feedback loop: draft writes a concise answer to a topic; critic fact-checks "
+        "it with the web_search tool and replies APPROVE or REVISE + notes. A bounded loop edge "
+        "(critic→draft, when the feedback contains REVISE, loop≤2) sends the notes back so draft can "
+        "improve the answer.",
+        effect="draft produces an answer, critic web-searches to verify it; if it says REVISE the answer is "
+        "rewritten and re-checked, up to twice, before the loop settles on an APPROVEd answer. This is the "
+        "canonical generate-and-critique multi-agent pattern.",
+    ),
 )
 
 

@@ -1,0 +1,43 @@
+{
+  "name": "refine-loop",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "entry": "draft",
+  "state": {
+    "topic": "What is DePIN (Decentralized Physical Infrastructure Networks)?",
+    "feedback": ""
+  },
+  "nodes": [
+    {
+      "id": "draft",
+      "type": "agent",
+      "inputs": ["topic", "feedback"],
+      "system_prompt": "You are a careful writer. Produce a concise, accurate 2-3 sentence answer to the topic. If reviewer feedback is provided, revise the answer to address every point.",
+      "prompt": "Topic: {{topic}}\n\nReviewer feedback (may be empty on the first pass):\n{{feedback}}\n\nWrite or improve the answer now. Reply with ONLY the answer text.",
+      "outputs": ["answer"]
+    },
+    {
+      "id": "critic",
+      "type": "agent",
+      "web_search": true,
+      "web_search_model": "gpt-5.5",
+      "inputs": ["answer"],
+      "system_prompt": "You are a fact-checking reviewer. Use the web_search tool to verify the claims in the answer before judging.",
+      "prompt": "Fact-check this answer using web_search: {{answer}}\n\nIf it is accurate and well-written, reply with exactly: APPROVE\nOtherwise reply with: REVISE: <specific, actionable notes on what is wrong or missing>",
+      "outputs": ["feedback"]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "draft", "map": {"topic": "topic", "feedback": "feedback"}},
+    {"from": "draft", "to": "critic", "map": {"answer": "answer"}},
+    {
+      "from": "critic",
+      "to": "draft",
+      "map": {"feedback": "feedback"},
+      "when": {"contains": {"value": "{{feedback}}", "text": "REVISE"}},
+      "loop": {"max": 2}
+    }
+  ]
+}

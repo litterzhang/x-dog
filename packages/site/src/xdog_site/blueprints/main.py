@@ -58,7 +58,7 @@ def flow_roadmap() -> str:
 # Curated built-in workflows offered in the HaveFun example picker (also the
 # allowlist for the ``example`` load path).  Kept small: a self-contained agent
 # example that is cheap to run.
-_HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator",)
+_HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator", "refine_loop")
 
 
 @bp.route("/packages/flow/havefun")
@@ -160,7 +160,7 @@ def flow_havefun_status(job_id: str) -> Any:
     job = runner.get(job_id)
     if job is None:
         return jsonify({"ok": False, "error": "Unknown job."}), 404
-    payload: dict[str, Any] = {"ok": True, "state": job.state, "elapsed": job.elapsed}
+    payload: dict[str, Any] = {"ok": True, "state": job.state, "elapsed": job.elapsed, "log": job.log}
     if job.state == "done":
         payload["result"] = job.result
     elif job.state == "error":

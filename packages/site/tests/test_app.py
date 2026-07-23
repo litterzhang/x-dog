@@ -237,3 +237,42 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
     assert final is not None
     assert final.state == "done"
     assert final.result is not None and "make_problem" in final.result
+
+
+def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:
+    """The generator↔critic refine_loop example loads with a topic input."""
+    resp = client.post("/packages/flow/havefun/load", json={"example": "refine_loop"})
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["ok"] is True
+    assert "<svg" in d["svg"]
+    names = {i["name"] for i in d["inputs"]}
+    assert "topic" in names  # the user-facing input is surfaced
+
+
+def test_havefun_status_includes_execution_log() -> None:
+    """A run's status carries the captured execution log (per-node run lines)."""
+    import time
+
+    from flow.cli import _dry_run_stream_fn_factory
+    from flow.loader import load_workflow
+    from xdog_site.blueprints.main import _examples_dir
+    from xdog_site.jobs import runner
+
+    ex_dir = _examples_dir()
+    assert ex_dir is not None
+    wf = load_workflow(ex_dir / "refine_loop.json")
+    job_id = runner.start(
+        wf, {"topic": "t", "feedback": ""}, stream_fn_factory=_dry_run_stream_fn_factory, base_dir=ex_dir
+    )
+    assert job_id is not None
+    for _ in range(50):
+        job = runner.get(job_id)
+        if job and job.state != "running":
+            break
+        time.sleep(0.2)
+    job = runner.get(job_id)
+    assert job is not None and job.state == "done"
+    # the captured log names the agent nodes as they run
+    assert job.log
+    assert any("Running node 'draft'" in line for line in job.log)
