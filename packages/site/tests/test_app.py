@@ -242,7 +242,11 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
 
 
 def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:
-    """The generator↔critic refine_loop example loads with a topic input."""
+    """The generator↔critic refine_loop example loads with a topic input only.
+
+    `feedback` is an internal optional loop-carried port, NOT a workflow input, so
+    it must not surface as a user-facing input box.
+    """
     resp = client.post("/packages/flow/havefun/load", json={"example": "refine_loop"})
     assert resp.status_code == 200
     d = resp.get_json()
@@ -250,6 +254,7 @@ def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:
     assert "<svg" in d["svg"]
     names = {i["name"] for i in d["inputs"]}
     assert "topic" in names  # the user-facing input is surfaced
+    assert "feedback" not in names  # internal loop-carried port is not an input
 
 
 def test_havefun_status_includes_execution_log() -> None:

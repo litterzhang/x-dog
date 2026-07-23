@@ -470,6 +470,81 @@ async def test_loop() -> None:
     assert result.runtime["ctx"] == {"step": 3, "node_id": "review", "workflow_name": "review_loop"}
 
 
+async def test_optional_input_absent_on_first_pass_then_fed_by_loop() -> None:
+    """An optional input port is absent on pass 1 (interpolates to '') and is fed
+    by the loop back-edge on later passes."""
+    review_responses = ["REVISE: more", "APPROVE"]
+    review_call: list[int] = [0]
+
+    def _factory(model: str) -> Any:
+        def _stream_fn(model_id: Any, context: Any, options: Any = None) -> AiEventStream[AssistantMessage]:
+            if model == "draft-model":
+                text = "draft"
+            else:
+                idx = review_call[0]
+                review_call[0] += 1
+                text = review_responses[idx] if idx < len(review_responses) else "APPROVE"
+            msg = AssistantMessage(content=(TextContent(text=text),))
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def _push() -> None:
+                await asyncio.sleep(0)
+                await stream.send(DoneEvent(stop_reason="stop", message=msg))
+                stream.set_result(msg)
+                await stream.close()
+
+            asyncio.ensure_future(_push())
+            return stream
+
+        return _stream_fn
+
+    wf = WorkflowDef(
+        name="opt_loop",
+        provider="fake",
+        entry="draft",
+        default_model="draft-model",
+        initial_state=(("topic", "T"),),
+        nodes=(
+            NodeDef(
+                id="draft",
+                model="draft-model",
+                prompt="topic={{topic}} fb={{feedback}}",
+                input_ports=(Port("topic"), Port("feedback", optional=True)),
+                output_ports=(Port("answer"),),
+            ),
+            NodeDef(
+                id="critic",
+                model="critic-model",
+                prompt="review {{answer}}",
+                input_ports=(Port("answer"),),
+                output_ports=(Port("feedback"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="draft", mapping=(("topic", "topic"),)),
+            EdgeDef(src="draft", dst="critic", mapping=(("answer", "answer"),)),
+            EdgeDef(
+                src="critic",
+                dst="draft",
+                mapping=(("feedback", "feedback"),),
+                when=Condition(op="contains", value="{{feedback}}", text="REVISE"),
+                loop_max=2,
+            ),
+        ),
+    )
+
+    result = await execute(wf, stream_fn_factory=_factory)
+
+    # the loop ran once: draft, critic, draft, critic
+    stack = result.runtime["stack"]
+    assert [f["node"] for f in stack] == ["draft", "critic", "draft", "critic"]
+    # pass 1: draft's optional feedback port is absent from its inputs
+    assert "feedback" not in stack[0]["in"]
+    assert stack[0]["in"] == {"topic": "T"}
+    # pass 2: the loop fed feedback back into draft
+    assert stack[2]["in"].get("feedback") == "REVISE: more"
+
+
 async def test_output_sink_collects_declared_outputs() -> None:
     """Edges targeting $output populate runtime['out']; a looped writer's latest wins."""
     wf = WorkflowDef(

@@ -44,13 +44,19 @@ def _parse_condition(data: Any) -> Condition:
 
 
 def _parse_ports(raw: Any) -> tuple[Port, ...]:
-    """Parse a ``inputs``/``outputs`` list of bare names or ``{name,type}`` objects."""
+    """Parse a ``inputs``/``outputs`` list of bare names or ``{name,type,optional}`` objects."""
     if not raw:
         return ()
     ports: list[Port] = []
     for item in raw:
         if isinstance(item, dict):
-            ports.append(Port(name=str(item["name"]), type=str(item.get("type", "string"))))
+            ports.append(
+                Port(
+                    name=str(item["name"]),
+                    type=str(item.get("type", "string")),
+                    optional=bool(item.get("optional", False)),
+                )
+            )
         else:
             ports.append(Port(name=str(item)))
     return tuple(ports)
@@ -317,12 +323,15 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 f"(ambiguous producer; use conditional edges if mutually exclusive)"
             )
 
-    # Every declared input port must be fed by at least one edge mapping.
+    # Every declared input port must be fed by at least one edge mapping — unless
+    # it is marked optional (e.g. a loop-carried value absent on the first pass).
     for node in wf.nodes:
-        for port in node.input_names:
-            if fed.get((node.id, port), 0) == 0:
+        for p in node.input_ports:
+            if p.optional:
+                continue
+            if fed.get((node.id, p.name), 0) == 0:
                 raise WorkflowValidationError(
-                    f"Node {node.id!r}: input port {port!r} is not fed by any edge mapping"
+                    f"Node {node.id!r}: input port {p.name!r} is not fed by any edge mapping"
                 )
 
 

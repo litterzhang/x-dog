@@ -63,6 +63,50 @@ def test_roundtrip_rich() -> None:
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
+def test_roundtrip_optional_input_port() -> None:
+    """An optional input port survives serialize -> parse (object form, optional:true)."""
+    wf = WorkflowDef(
+        name="opt",
+        provider="copilot",
+        entry="a",
+        default_model="m",
+        initial_state=(("topic", "x"),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="agent",
+                # a plain string optional port must still emit the object form
+                input_ports=(Port("topic"), Port("feedback", optional=True)),
+                prompt="{{topic}} {{feedback}}",
+                output_ports=(Port("answer"),),
+            ),
+            NodeDef(
+                id="b",
+                type="agent",
+                input_ports=(Port("answer"),),
+                prompt="{{answer}}",
+                output_ports=(Port("feedback"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src="$in", dst="a", mapping=(("topic", "topic"),)),
+            EdgeDef(src="a", dst="b", mapping=(("answer", "answer"),)),
+            EdgeDef(
+                src="b",
+                dst="a",
+                mapping=(("feedback", "feedback"),),
+                when=Condition(op="contains", value="{{feedback}}", text="REVISE"),
+                loop_max=2,
+            ),
+        ),
+    )
+    dumped = workflow_to_dict(wf)
+    # the optional flag is emitted in the object form
+    a_inputs = next(n for n in dumped["nodes"] if n["id"] == "a")["inputs"]
+    assert {"name": "feedback", "type": "string", "optional": True} in a_inputs
+    assert parse_workflow(dumped) == wf
+
+
 def test_roundtrip_tool_manifest() -> None:
     wf = WorkflowDef(
         name="tw",

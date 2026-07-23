@@ -6,14 +6,13 @@
   },
   "entry": "draft",
   "state": {
-    "topic": "What is DePIN (Decentralized Physical Infrastructure Networks)?",
-    "feedback": ""
+    "topic": "What is DePIN (Decentralized Physical Infrastructure Networks)?"
   },
   "nodes": [
     {
       "id": "draft",
       "type": "agent",
-      "inputs": ["topic", "feedback"],
+      "inputs": ["topic", {"name": "feedback", "optional": true}],
       "system_prompt": "You are a careful writer. Produce a concise, accurate 2-3 sentence answer to the topic. If reviewer feedback is provided, revise the answer to address every point.",
       "prompt": "Topic: {{topic}}\n\nReviewer feedback (may be empty on the first pass):\n{{feedback}}\n\nWrite or improve the answer now. Reply with ONLY the answer text.",
       "outputs": ["answer"]
@@ -30,7 +29,7 @@
     }
   ],
   "edges": [
-    {"from": "$in", "to": "draft", "map": {"topic": "topic", "feedback": "feedback"}},
+    {"from": "$in", "to": "draft", "map": {"topic": "topic"}},
     {"from": "draft", "to": "critic", "map": {"answer": "answer"}},
     {"from": "draft", "to": "$output", "map": {"answer": "answer"}},
     {"from": "critic", "to": "$output", "map": {"feedback": "verdict"}},

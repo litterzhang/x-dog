@@ -33,10 +33,15 @@ class Port:
     ``type`` is a JSON type name (``string``/``integer``/``number``/``boolean``/
     ``array``/``object``) used to coerce the string-valued wire format to/from the
     Python value a script sees.  Agent ports are almost always ``string``.
+
+    ``optional`` marks an **input** port that need not be fed by any edge — e.g. a
+    loop-carried value that is absent on the first pass (the prompt interpolates it
+    to ``""`` / a script sees the type's zero-value).  Ignored on output ports.
     """
 
     name: str
     type: str = "string"
+    optional: bool = False
 
 
 @dataclass(frozen=True)

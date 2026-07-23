@@ -29,10 +29,17 @@ def _condition_to_dict(cond: Condition) -> dict[str, Any]:
 
 
 def _ports_to_json(ports: tuple[Port, ...]) -> list[Any]:
-    """Emit a port list: ``{name,type}`` when typed, bare name when ``string``."""
+    """Emit a port list: bare name for a plain ``string`` port; the ``{name,type,
+    optional}`` object form when a non-default field (type or optional) is set."""
     out: list[Any] = []
     for p in ports:
-        out.append(p.name if p.type == "string" else {"name": p.name, "type": p.type})
+        if p.type == "string" and not p.optional:
+            out.append(p.name)
+            continue
+        obj: dict[str, Any] = {"name": p.name, "type": p.type}
+        if p.optional:
+            obj["optional"] = True
+        out.append(obj)
     return out
 
 

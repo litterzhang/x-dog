@@ -302,6 +302,57 @@ def test_unreachable_input_inline_raises() -> None:
         validate_workflow(wf)
 
 
+def test_optional_input_port_need_not_be_fed() -> None:
+    """An optional input port fed by NO edge validates OK (unlike a required one)."""
+    data = {
+        "name": "opt-ok",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "inputs": [{"name": "ghost", "optional": True}]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    validate_workflow(wf)  # does not raise
+    assert wf.nodes[0].input_ports[0].optional is True
+
+
+def test_non_optional_unfed_port_still_raises() -> None:
+    """Marking one port optional does not excuse a sibling required port."""
+    data = {
+        "name": "opt-mixed",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "inputs": [{"name": "ok", "optional": True}, "required"]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="'required' is not fed"):
+        validate_workflow(wf)
+
+
+def test_loop_back_edge_into_optional_port_ok() -> None:
+    """A loop back-edge may target an optional port fed only by the loop itself."""
+    data = {
+        "name": "opt-loop",
+        "provider": "copilot",
+        "defaults": {"model": "m"},
+        "entry": "draft",
+        "state": {"topic": "T"},
+        "nodes": [
+            {"id": "draft", "type": "agent", "inputs": ["topic", {"name": "feedback", "optional": True}],
+             "prompt": "{{topic}} {{feedback}}", "outputs": ["answer"]},
+            {"id": "critic", "type": "agent", "inputs": ["answer"], "prompt": "{{answer}}", "outputs": ["feedback"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "draft", "map": {"topic": "topic"}},
+            {"from": "draft", "to": "critic", "map": {"answer": "answer"}},
+            {"from": "critic", "to": "draft", "map": {"feedback": "feedback"},
+             "when": {"contains": {"value": "{{feedback}}", "text": "REVISE"}}, "loop": {"max": 2}},
+        ],
+    }
+    validate_workflow(parse_workflow(data))  # does not raise
+
+
 def test_two_unconditional_edges_into_one_port_raises() -> None:
     """Two producers feeding the same input port unconditionally is ambiguous.
 
