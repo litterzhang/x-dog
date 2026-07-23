@@ -55,29 +55,32 @@ def flow_roadmap() -> str:
 
 # -- HaveFun: load a workflow, view diagrams, fill inputs, run async ----------
 
+# Curated built-in workflows offered in the HaveFun example picker (also the
+# allowlist for the ``example`` load path).  Kept small: a self-contained agent
+# example that is cheap to run.
+_HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator",)
+
 
 @bp.route("/packages/flow/havefun")
 def flow_havefun() -> str:
-    stems = [meta.stem for meta in EXAMPLES]
-    return render_template("packages/flow/havefun.html", pkg=PACKAGES_BY_NAME["flow"], example_stems=stems)
+    return render_template(
+        "packages/flow/havefun.html", pkg=PACKAGES_BY_NAME["flow"], example_stems=list(_HAVEFUN_STEMS)
+    )
 
 
 def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None, str | None]:
     """Resolve the request body to a (workflow, base_dir, error) tuple.
 
-    A built-in ``example`` stem (trusted) or an uploaded ``json`` string
-    (sanitised).  Returns ``(None, None, message)`` on any problem.
+    A built-in ``example`` stem or an uploaded ``json`` string.  Returns
+    ``(None, None, message)`` on any problem.
     """
     from flow.loader import parse_workflow, validate_workflow
     from flow.models import WorkflowDef
 
-    from xdog_site.jobs import WorkflowRejected, sanitise_uploaded
-
     ex_dir = _examples_dir()
     stem = data.get("example")
     if stem:
-        allowed = {m.stem for m in EXAMPLES}
-        if stem not in allowed or ex_dir is None:
+        if stem not in _HAVEFUN_STEMS or ex_dir is None:
             return None, None, f"Unknown example {stem!r}."
         from flow.loader import load_workflow
 
@@ -97,10 +100,6 @@ def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None,
         validate_workflow(wf)
     except Exception as exc:  # noqa: BLE001
         return None, None, f"Invalid workflow: {exc}"
-    try:
-        sanitise_uploaded(wf)
-    except WorkflowRejected as exc:
-        return None, None, str(exc)
     return wf, None, None
 
 

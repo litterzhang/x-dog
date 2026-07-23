@@ -20,38 +20,8 @@ from typing import Any, Callable
 from flow.executor import execute
 from flow.models import WorkflowDef
 
-# ``run: "module:func"`` refs an uploaded workflow may use.  Built-in examples
-# bypass this (they are trusted repo content).
-_ALLOWED_RUN_MODULES = frozenset({"flow.codegen_tools"})
-
 # Per-run wall-clock ceiling (seconds) handed to execute(timeout=...).
 _RUN_TIMEOUT = 900.0
-
-
-class WorkflowRejected(Exception):
-    """An uploaded workflow failed the safety sanitiser."""
-
-
-def sanitise_uploaded(wf: WorkflowDef) -> None:
-    """Raise :class:`WorkflowRejected` if *wf* (an untrusted upload) is unsafe.
-
-    Script nodes execute arbitrary Python, so inline ``code`` is forbidden and a
-    ``run:`` ref must name an allowlisted module.  Agent nodes are allowed.
-    """
-    for node in wf.nodes:
-        if node.type != "script":
-            continue
-        if node.code is not None:
-            raise WorkflowRejected(
-                f"Script node {node.id!r} has inline code, which is not allowed for uploaded workflows."
-            )
-        if node.run is not None:
-            module = node.run.split(":", 1)[0]
-            if module not in _ALLOWED_RUN_MODULES:
-                raise WorkflowRejected(
-                    f"Script node {node.id!r} runs {module!r}, which is not on the allowlist "
-                    f"({', '.join(sorted(_ALLOWED_RUN_MODULES))})."
-                )
 
 
 @dataclass

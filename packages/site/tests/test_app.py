@@ -149,18 +149,19 @@ def test_havefun_page_ok(client: FlaskClient) -> None:
     body = resp.get_data(as_text=True)
     assert "HaveFun" in body
     assert "hf-run" in body  # the run button
-    assert "research_write_review" in body  # an example option
+    assert "hf-file" in body  # the upload file input
+    assert "agent_calculator" in body  # the example option
 
 
 def test_havefun_load_example_returns_diagram_and_inputs(client: FlaskClient) -> None:
-    resp = client.post("/packages/flow/havefun/load", json={"example": "research_write_review"})
+    resp = client.post("/packages/flow/havefun/load", json={"example": "agent_calculator"})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True
     assert "<svg" in d["svg"]
     assert d["ascii"]  # ASCII diagram present
     names = {i["name"] for i in d["inputs"]}
-    assert "topic" in names  # declared input surfaced with default
+    assert {"a", "b"} <= names  # declared inputs surfaced with defaults
 
 
 def test_havefun_load_unknown_example_400(client: FlaskClient) -> None:
@@ -168,20 +169,36 @@ def test_havefun_load_unknown_example_400(client: FlaskClient) -> None:
     assert resp.status_code == 400
 
 
-def test_havefun_rejects_inline_code_upload(client: FlaskClient) -> None:
-    """An uploaded script node with inline code is a RCE surface — rejected."""
+def test_havefun_load_uploaded_json(client: FlaskClient) -> None:
+    """An uploaded workflow JSON loads and returns its diagram + inputs."""
     payload = {
-        "name": "b",
+        "name": "up",
         "provider": "copilot",
         "entry": "x",
-        "nodes": [{"id": "x", "type": "script", "code": "def x(ctx):\n    return '1'", "output": "y"}],
-        "edges": [],
+        "state": {"n": "1"},
+        "nodes": [
+            {
+                "id": "x",
+                "type": "script",
+                "code": "def x(ctx, n):\n    return n",
+                "inputs": ["n"],
+                "output": "y",
+            }
+        ],
+        "edges": [{"from": "$in", "to": "x", "map": {"n": "n"}}],
     }
     import json as _json
 
     resp = client.post("/packages/flow/havefun/load", json={"json": _json.dumps(payload)})
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert d["ok"] is True
+    assert "n" in {i["name"] for i in d["inputs"]}
+
+
+def test_havefun_rejects_invalid_json(client: FlaskClient) -> None:
+    resp = client.post("/packages/flow/havefun/load", json={"json": "{ not valid json"})
     assert resp.status_code == 400
-    assert "inline code" in resp.get_json()["error"]
 
 
 def test_havefun_run_single_slot_then_429_and_status() -> None:

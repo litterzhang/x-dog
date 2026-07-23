@@ -6,8 +6,7 @@
 <section>
   <h2>HaveFun</h2>
   <div>Load a workflow, see its diagrams, fill in its inputs, and run it live.
-    Uploaded workflows are restricted for safety (no inline script code); runs are
-    one-at-a-time and can take a while.</div>
+    Runs are one-at-a-time and can take a while.</div>
 </section>
 
 <section>
@@ -21,10 +20,9 @@
     <button id="hf-load-example" class="btn btn-ghost btn-primary btn-small">Load</button>
   </div>
   <div class="spacer"></div>
-  <div>Or paste a <code>workflow.json</code>:</div>
-  <textarea id="hf-json" class="form-control" rows="6" style="width:100%;font-family:monospace"></textarea>
-  <div class="spacer"></div>
-  <button id="hf-load-json" class="btn btn-ghost btn-default btn-small">Load pasted JSON</button>
+  <div>Or upload a <code>workflow.json</code> file:</div>
+  <input type="file" id="hf-file" accept=".json,application/json">
+  <button id="hf-load-file" class="btn btn-ghost btn-default btn-small">Load file</button>
   <div id="hf-load-msg" class="muted"></div>
 </section>
 
@@ -114,10 +112,13 @@
     if (!stem) { $("hf-load-msg").textContent = "Pick an example first."; return; }
     load({ example: stem });
   });
-  $("hf-load-json").addEventListener("click", function () {
-    var text = $("hf-json").value.trim();
-    if (!text) { $("hf-load-msg").textContent = "Paste some JSON first."; return; }
-    load({ json: text });
+  $("hf-load-file").addEventListener("click", function () {
+    var file = $("hf-file").files[0];
+    if (!file) { $("hf-load-msg").textContent = "Choose a .json file first."; return; }
+    var reader = new FileReader();
+    reader.onload = function () { load({ json: String(reader.result) }); };
+    reader.onerror = function () { $("hf-load-msg").textContent = "Could not read the file."; };
+    reader.readAsText(file);
   });
 
   var poll = null;
