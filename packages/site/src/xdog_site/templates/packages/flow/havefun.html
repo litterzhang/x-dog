@@ -47,7 +47,7 @@
   <h3>Inputs &amp; run</h3>
   <div id="hf-inputs"></div>
   <div class="spacer"></div>
-  <button id="hf-run" class="btn btn-primary btn-small">Run workflow</button>
+  <button id="hf-run" class="btn btn-primary">Run workflow</button>
   <span id="hf-run-status" class="muted"></span>
   <div id="hf-log-wrap" style="display:none">
     <h3>Execution log</h3>
@@ -85,19 +85,19 @@
       box.innerHTML = '<div class="muted">This workflow declares no inputs.</div>';
     } else {
       d.inputs.forEach(function (inp) {
-        var wrap = document.createElement("div");
-        wrap.style.marginBottom = "0.5rem";
+        // Mirror hack.css's .form-group markup (label joined to the .form-control
+        // by the shared underline), the same pattern the static Load section uses.
+        var group = document.createElement("div");
+        group.className = "form-group";
         var label = document.createElement("label");
-        label.textContent = inp.name + ": ";
-        label.style.marginRight = "0.5rem";
+        label.textContent = inp.name;
         var field = document.createElement("input");
         field.className = "form-control";
         field.setAttribute("data-input", inp.name);
         field.value = inp.default || "";
-        field.style.width = "100%";
-        wrap.appendChild(label);
-        wrap.appendChild(field);
-        box.appendChild(wrap);
+        group.appendChild(label);
+        group.appendChild(field);
+        box.appendChild(group);
       });
     }
     $("hf-run-section").style.display = "";
