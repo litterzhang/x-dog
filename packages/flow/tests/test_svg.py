@@ -79,6 +79,22 @@ def test_to_svg_labels_conditional_edge() -> None:
     assert "REVISE" in svg or "contains" in svg
 
 
+def test_to_svg_carries_node_type_and_ports() -> None:
+    """The SVG must carry the same info as the ASCII diagram: node types, the
+    entry marker, edge port mappings, and a bounded loop count."""
+    svg = to_svg(_wf())
+    assert "[agent]" in svg and "[script]" in svg  # node types
+    assert "*" in svg  # entry marker
+    assert "x" in svg and "y" in svg and "z" in svg  # output-port names carried on edges
+    assert "loop" in svg  # bounded loop annotated (loop≤2 / loop_max)
+
+
+def test_fallback_carries_node_type_and_ports() -> None:
+    svg = _to_svg_fallback(_wf())
+    assert "[agent]" in svg and "[script]" in svg
+    assert "*" in svg
+
+
 def test_to_svg_is_deterministic() -> None:
     wf = _wf()
     assert to_svg(wf) == to_svg(wf)

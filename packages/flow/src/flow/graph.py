@@ -277,14 +277,6 @@ _GAP = 40
 _LANE = 80
 
 
-def _edge_label(edge: EdgeDef) -> str | None:
-    if edge.when is not None:
-        return _condition_label(edge.when)
-    if edge.loop_max is not None:
-        return "loop"
-    return None
-
-
 def to_svg(wf: WorkflowDef) -> str:
     """Return an SVG document rendering *wf*.
 
@@ -308,6 +300,7 @@ def to_svg(wf: WorkflowDef) -> str:
             known.add(node.id)
             fillcolor = "#e8f0fe" if node.type == "agent" else "#f5f5f5"
             name = node.id if node.id.isidentifier() else f'"{node.id}"'
+            node_label = f"{node.id}\\n[{node.type}]" + ("  *" if node.id == wf.entry else "")
             graph.add_node(
                 pydot.Node(
                     name,
@@ -316,7 +309,7 @@ def to_svg(wf: WorkflowDef) -> str:
                     fillcolor=fillcolor,
                     color="#333333",
                     penwidth="1",
-                    label=node.id,
+                    label=node_label,
                 )
             )
 
@@ -325,8 +318,8 @@ def to_svg(wf: WorkflowDef) -> str:
                 continue
             src = edge.src if edge.src.isidentifier() else f'"{edge.src}"'
             dst = edge.dst if edge.dst.isidentifier() else f'"{edge.dst}"'
-            label = _edge_label(edge)
-            if label is not None:
+            label = _port_label(edge)
+            if label:
                 graph.add_edge(pydot.Edge(src, dst, label=label))
             else:
                 graph.add_edge(pydot.Edge(src, dst))
@@ -371,9 +364,14 @@ def _to_svg_fallback(wf: WorkflowDef) -> str:
         x, y = positions[node.id]
         cx, cy = centers[node.id]
         parts.append(f'<rect x="{x}" y="{y}" width="{_BOX_W}" height="{_BOX_H}" rx="6" fill="#f5f5f5" stroke="#333"/>')
+        type_label = f"[{node.type}]" + ("  *" if node.id == wf.entry else "")
         parts.append(
-            f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central" '
+            f'<text x="{cx}" y="{cy - 6}" text-anchor="middle" dominant-baseline="central" '
             f'font-family="sans-serif" font-size="14">{escape(node.id)}</text>'
+        )
+        parts.append(
+            f'<text x="{cx}" y="{cy + 12}" text-anchor="middle" dominant-baseline="central" '
+            f'font-family="sans-serif" font-size="10" fill="#666">{escape(type_label)}</text>'
         )
 
     for edge in wf.edges:
@@ -382,7 +380,7 @@ def _to_svg_fallback(wf: WorkflowDef) -> str:
         sx, sy = centers[edge.src]
         dx, dy = centers[edge.dst]
         back = index[edge.dst] <= index[edge.src]
-        label = _edge_label(edge)
+        label = _port_label(edge)
         if back:
             lane_x = _MARGIN + _BOX_W + _LANE / 2
             src_x = positions[edge.src][0] + _BOX_W
@@ -397,7 +395,7 @@ def _to_svg_fallback(wf: WorkflowDef) -> str:
             y2 = positions[edge.dst][1]
             parts.append(f'<line x1="{sx}" y1="{y1}" x2="{dx}" y2="{y2}" stroke="#333" marker-end="url(#arrow)"/>')
             lx, ly = (sx + dx) / 2, (y1 + y2) / 2
-        if label is not None:
+        if label:
             parts.append(
                 f'<text x="{lx}" y="{ly}" text-anchor="middle" '
                 f'font-family="sans-serif" font-size="11" fill="#666">{escape(label)}</text>'
