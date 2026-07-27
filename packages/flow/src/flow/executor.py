@@ -34,6 +34,11 @@ ScriptResolver = Callable[[str], Callable[..., Awaitable[str]]]
 ScriptFn = Callable[..., Any]
 
 
+async def _wrap_sync(value: Any) -> Any:
+    """Wrap a plain (non-awaitable) value in a coroutine for use with asyncio.wait_for."""
+    return value
+
+
 def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
     """Parse 'module:func' and import the callable."""
     module_name, _, func_name = run.partition(":")
@@ -265,14 +270,34 @@ async def execute(
 
             step = await _reserve_step()
 
-            async def _run_script(fn: ScriptFn = fn, step: int = step) -> None:
-                ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
-                kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
-                raw = fn(ctx, **kwargs)
-                value = await raw if inspect.isawaitable(raw) else raw
-                await _store_script_output(node, node_id, value)
-
-            await asyncio.wait_for(_run_script(), timeout=timeout)
+            max_attempts = 1 + (node.retry.max if node.retry else 0)
+            backoff = node.retry.backoff if node.retry else 0.0
+            last_exc: BaseException | None = None
+            for attempt in range(max_attempts):
+                try:
+                    ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
+                    kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
+                    raw = fn(ctx, **kwargs)
+                    value = await asyncio.wait_for(
+                        raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout
+                    )
+                    await _store_script_output(node, node_id, value)
+                    last_exc = None
+                    break
+                except BaseException as exc:
+                    last_exc = exc
+                    remaining = max_attempts - attempt - 1
+                    if remaining > 0:
+                        logger.debug(
+                            "Retrying node %r (attempt %d/%d) after %s",
+                            node_id,
+                            attempt + 1,
+                            max_attempts,
+                            backoff * (attempt + 1),
+                        )
+                        await asyncio.sleep(backoff * (attempt + 1))
+            if last_exc is not None:
+                raise last_exc
             await _record_frame(node_id, ins, step)
             completed.add(node_id)
             return
@@ -325,19 +350,44 @@ async def execute(
 
         logger.debug("Running node %r with model %r", node_id, model)
 
+        agent_max_attempts = 1 + (node.retry.max if node.retry else 0)
+        agent_backoff = node.retry.backoff if node.retry else 0.0
+        agent_last_exc: BaseException | None = None
         accumulated: list[str] = []
 
-        async def _drain() -> None:
-            event_stream = await agent.prompt(user_prompt)
-            async for event in event_stream:
-                if isinstance(event, TurnEndEvent) and event.message is not None:
-                    msg = event.message
-                    if isinstance(msg, AssistantMessage):
-                        for part in msg.content:
-                            if isinstance(part, TextContent):
-                                accumulated.append(part.text)
+        for agent_attempt in range(agent_max_attempts):
+            accumulated = []
+            sink.clear()
 
-        await asyncio.wait_for(_drain(), timeout=timeout)
+            async def _drain() -> None:
+                event_stream = await agent.prompt(user_prompt)
+                async for event in event_stream:
+                    if isinstance(event, TurnEndEvent) and event.message is not None:
+                        msg = event.message
+                        if isinstance(msg, AssistantMessage):
+                            for part in msg.content:
+                                if isinstance(part, TextContent):
+                                    accumulated.append(part.text)
+
+            try:
+                await asyncio.wait_for(_drain(), timeout=timeout)
+                agent_last_exc = None
+                break
+            except BaseException as exc:
+                agent_last_exc = exc
+                remaining = agent_max_attempts - agent_attempt - 1
+                if remaining > 0:
+                    logger.debug(
+                        "Retrying node %r (attempt %d/%d) after %s",
+                        node_id,
+                        agent_attempt + 1,
+                        agent_max_attempts,
+                        agent_backoff * (agent_attempt + 1),
+                    )
+                    await asyncio.sleep(agent_backoff * (agent_attempt + 1))
+
+        if agent_last_exc is not None:
+            raise agent_last_exc
 
         if node.output_schema:
             result_obj = sink.get("result")

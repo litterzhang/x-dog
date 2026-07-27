@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from flow.errors import WorkflowValidationError
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,21 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         output_schema = tuple((str(k), str(v)) for k, v in raw_output_schema.items())
     else:
         output_schema = ()
+    node_id = str(data["id"])
+    retry: RetryPolicy | None = None
+    raw_retry = data.get("retry")
+    if raw_retry is not None:
+        if not isinstance(raw_retry, dict):
+            raise WorkflowValidationError(f"Node {node_id!r}: retry must be an object")
+        raw_max = raw_retry.get("max", 0)
+        if not isinstance(raw_max, int) or raw_max < 0:
+            raise WorkflowValidationError(f"Node {node_id!r}: retry.max must be >= 0")
+        raw_backoff = raw_retry.get("backoff", 0.0)
+        if not isinstance(raw_backoff, (int, float)) or raw_backoff < 0:
+            raise WorkflowValidationError(f"Node {node_id!r}: retry.backoff must be >= 0")
+        retry = RetryPolicy(max=int(raw_max), backoff=float(raw_backoff))
     return NodeDef(
-        id=str(data["id"]),
+        id=node_id,
         type=data.get("type", "agent"),
         model=data.get("model"),
         system_prompt=data.get("system_prompt", ""),
@@ -97,6 +110,7 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         code=data.get("code"),
         web_search=bool(data.get("web_search", False)),
         web_search_model=data.get("web_search_model"),
+        retry=retry,
     )
 
 

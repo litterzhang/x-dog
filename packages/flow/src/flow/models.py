@@ -45,6 +45,14 @@ class Port:
 
 
 @dataclass(frozen=True)
+class RetryPolicy:
+    """How many times to retry a failed node, and the backoff between attempts."""
+
+    max: int = 0  # number of RETRIES after the first attempt (0 = no retry)
+    backoff: float = 0.0  # seconds; the delay before retry k is backoff * k
+
+
+@dataclass(frozen=True)
 class NodeDef:
     id: str
     type: Literal["agent", "script"] = "agent"
@@ -67,6 +75,8 @@ class NodeDef:
     # named here); falls back to the node/default model when None.
     web_search: bool = False
     web_search_model: str | None = None
+    # Per-node retry policy: None means no retries (fail on first error).
+    retry: RetryPolicy | None = None
 
     @property
     def input_names(self) -> tuple[str, ...]:

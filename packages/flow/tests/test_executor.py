@@ -13,12 +13,13 @@ import asyncio
 import json
 from typing import Any
 
+import pytest
 from agent.agent import Agent
 from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
 from ai.utils.event_stream import EventStream as AiEventStream
 from flow.errors import WorkflowExecutionError
 from flow.executor import ExecResult, execute
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -897,6 +898,166 @@ async def test_agent_web_search_tool_enabled() -> None:
     assert result.runtime["state"]["a"]["r"] == "done"
     # the search fn ran, bound to the web_search_model (not the node model)
     assert searched == [("gpt-5.5", "depin news")]
+
+
+# ---------------------------------------------------------------------------
+# Per-node retry policy
+# ---------------------------------------------------------------------------
+
+
+async def test_script_retry_succeeds_after_failures() -> None:
+    """Script node that fails N times then succeeds: with retry.max=N the run succeeds."""
+    call_count: list[int] = [0]
+    n_failures = 2
+
+    async def _flaky(ctx: Any) -> str:
+        call_count[0] += 1
+        if call_count[0] <= n_failures:
+            raise RuntimeError(f"transient failure #{call_count[0]}")
+        return "SUCCESS"
+
+    wf = WorkflowDef(
+        name="retry_test",
+        provider="fake",
+        entry="s1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="s1",
+                type="script",
+                run="dummy:fn",
+                output_ports=(Port("result"),),
+                retry=RetryPolicy(max=n_failures, backoff=0.0),
+            ),
+        ),
+        edges=(),
+    )
+
+    result = await execute(
+        wf,
+        stream_fn_factory=_make_stream_fn({}),
+        script_resolver=lambda _run: _flaky,
+    )
+
+    assert result.runtime["state"]["s1"]["result"] == "SUCCESS"
+    assert call_count[0] == n_failures + 1
+
+
+async def test_script_no_retry_raises_immediately() -> None:
+    """Script node with retry=None raises on the first failure without retrying."""
+    call_count: list[int] = [0]
+
+    async def _always_fails(ctx: Any) -> str:
+        call_count[0] += 1
+        raise RuntimeError("always fails")
+
+    wf = WorkflowDef(
+        name="no_retry_test",
+        provider="fake",
+        entry="s1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="s1",
+                type="script",
+                run="dummy:fn",
+                output_ports=(Port("result"),),
+                retry=None,
+            ),
+        ),
+        edges=(),
+    )
+
+    with pytest.raises(RuntimeError, match="always fails"):
+        await execute(
+            wf,
+            stream_fn_factory=_make_stream_fn({}),
+            script_resolver=lambda _run: _always_fails,
+        )
+
+    assert call_count[0] == 1
+
+
+async def test_script_retry_exhausted_re_raises() -> None:
+    """Script node with retry.max=1 raises after 2 total attempts."""
+    call_count: list[int] = [0]
+
+    async def _always_fails(ctx: Any) -> str:
+        call_count[0] += 1
+        raise RuntimeError("still failing")
+
+    wf = WorkflowDef(
+        name="retry_exhaust",
+        provider="fake",
+        entry="s1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="s1",
+                type="script",
+                run="dummy:fn",
+                output_ports=(Port("result"),),
+                retry=RetryPolicy(max=1, backoff=0.0),
+            ),
+        ),
+        edges=(),
+    )
+
+    with pytest.raises(RuntimeError, match="still failing"):
+        await execute(
+            wf,
+            stream_fn_factory=_make_stream_fn({}),
+            script_resolver=lambda _run: _always_fails,
+        )
+
+    assert call_count[0] == 2  # 1 initial + 1 retry
+
+
+async def test_agent_retry_succeeds_after_failures() -> None:
+    """Agent node whose prompt() raises on the first N calls succeeds with retry.max=N.
+
+    We patch Agent.prompt to raise on the first N invocations so the executor's
+    retry loop sees real exceptions from the agent branch.
+    """
+    import agent.agent as _agent_module
+
+    call_count: list[int] = [0]
+    n_failures = 2
+    original_prompt = _agent_module.Agent.prompt
+
+    async def _flaky_prompt(self: Any, *args: Any, **kwargs: Any) -> Any:
+        call_count[0] += 1
+        if call_count[0] <= n_failures:
+            raise RuntimeError(f"agent transient failure #{call_count[0]}")
+        return await original_prompt(self, *args, **kwargs)
+
+    _agent_module.Agent.prompt = _flaky_prompt  # type: ignore[method-assign]
+    try:
+        factory = _make_stream_fn({"m": "AGENT_OK"})
+        wf = WorkflowDef(
+            name="agent_retry_test",
+            provider="fake",
+            entry="a1",
+            default_model="m",
+            nodes=(
+                NodeDef(
+                    id="a1",
+                    type="agent",
+                    model="m",
+                    prompt="hello",
+                    output_ports=(Port("result"),),
+                    retry=RetryPolicy(max=n_failures, backoff=0.0),
+                ),
+            ),
+            edges=(),
+        )
+
+        result = await execute(wf, stream_fn_factory=factory)
+    finally:
+        _agent_module.Agent.prompt = original_prompt  # type: ignore[method-assign]
+
+    assert result.runtime["state"]["a1"]["result"] == "AGENT_OK"
+    assert call_count[0] == n_failures + 1
 
 
 async def test_agent_without_web_search_has_no_search_tool() -> None:
