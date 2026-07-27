@@ -248,8 +248,6 @@ EXAMPLES: tuple[Example, ...] = (
 GAPS: tuple[Gap, ...] = (
     Gap("Failure isolation", "A fan-out uses asyncio.gather, which is fail-fast: one failing branch cancels "
         "its siblings. There is no per-branch isolation or compensation."),
-    Gap("Observability", "No structured event stream, metrics, or tracing spans — only logging. There is no "
-        "run timeline or per-node token/latency accounting out of the box."),
     Gap("Concurrency limits", "The ready set launches with no semaphore or worker-pool cap, so a very wide "
         "graph can burst well past provider rate limits."),
     Gap("Human-in-the-loop", "No first-class pause/await-signal so a run can stop for approval and resume."),
@@ -276,9 +274,13 @@ ROADMAP: tuple[Phase, ...] = (
         "Also implemented by the tools/autoenrich workflow itself.",
     ), done=True),
     Phase("P3", "Structured event stream", (
-        "Emit NodeStarted / NodeFinished / NodeFailed events with duration and token usage.",
-        "The foundation for observability and live TUI/web progress.",
-    )),
+        "Done: typed NodeStarted / NodeFinished / NodeFailed events carry per-node "
+        "wall-clock duration and (for agent nodes) token usage; the executor "
+        "delivers them via an on_event callback, and the generated module logs the "
+        "same lifecycle to the flow.generated.events logger.",
+        "The foundation for observability and live TUI/web progress. Also "
+        "implemented by the tools/autoenrich workflow itself.",
+    ), done=True),
     Phase("P4", "Durability & human-in-the-loop", (
         "Per-branch failure isolation and compensation.",
         "Concurrency caps (semaphore / worker pool) to respect provider limits.",
