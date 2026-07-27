@@ -250,10 +250,44 @@ def _render_retry_wrapped(call_lines: list[str], node: NodeDef) -> list[str]:
     return out
 
 
+def _transitive_successors_ids(node_id: str, wf: WorkflowDef) -> list[str]:
+    """Compute transitive successors of *node_id* in the forward graph (code-gen time)."""
+    visited: list[str] = []
+    seen: set[str] = set()
+    queue = [node_id]
+    while queue:
+        cur = queue.pop()
+        for e in wf.edges:
+            if e.src != cur or e.loop_max is not None or e.dst == OUT_NODE_ID:
+                continue
+            if e.dst not in seen:
+                seen.add(e.dst)
+                visited.append(e.dst)
+                queue.append(e.dst)
+    return visited
+
+
+def _render_isolation_handler(node_id: str, wf: WorkflowDef) -> list[str]:
+    """Emit the except-block body for an on_error='isolate' node.
+
+    Records the failure in ``_FAILED``, marks the node and its transitive
+    successors in ``_ISOLATED``, and returns without re-raising.
+    """
+    lines: list[str] = []
+    lines.append(f"        _FAILED[{node_id!r}] = f'{{type(_ev_exc).__name__}}: {{_ev_exc}}'")
+    lines.append(f"        _ISOLATED.add({node_id!r})")
+    for succ in _transitive_successors_ids(node_id, wf):
+        lines.append(f"        _ISOLATED.add({succ!r})")
+    lines.append("        return")
+    return lines
+
+
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
     lines.append(f'    if {node.id!r} in _COMPLETED:')
+    lines.append('        return')
+    lines.append(f'    if {node.id!r} in _ISOLATED:')
     lines.append('        return')
     lines += _render_ins(node, wf)
     lines.append(
@@ -297,7 +331,10 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
         f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
     )
     lines.append(_failed_log)
-    lines.append("        raise")
+    if node.on_error == "isolate":
+        lines += _render_isolation_handler(node.id, wf)
+    else:
+        lines.append("        raise")
     return "\n".join(lines)
 
 
@@ -339,6 +376,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     lines = [f"async def {fn_name}(provider: object) -> None:"]
     lines.append(f"    if {node.id!r} in _COMPLETED:")
     lines.append("        return")
+    lines.append(f"    if {node.id!r} in _ISOLATED:")
+    lines.append("        return")
     lines += _render_ins(node, wf)
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
@@ -372,7 +411,10 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
     )
     lines.append(_failed_log)
-    lines.append("        raise")
+    if node.on_error == "isolate":
+        lines += _render_isolation_handler(node.id, wf)
+    else:
+        lines.append("        raise")
     return "\n".join(lines)
 
 

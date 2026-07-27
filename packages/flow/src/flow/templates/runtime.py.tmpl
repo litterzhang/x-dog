@@ -25,6 +25,9 @@ _STACK: list[dict[str, object]] = []
 _OUTPUT: dict[str, str] = {}
 # Completed node ids (used for checkpoint/resume).
 _COMPLETED: set[str] = set()
+# Isolation tracking: nodes whose failure was captured (on_error="isolate").
+_ISOLATED: set[str] = set()
+_FAILED: dict[str, str] = {}
 # The runtime container, populated by main() (see ExecResult.runtime).
 _RUNTIME: dict[str, object] = {}
 
@@ -123,6 +126,7 @@ $main_body
             "state": {_k: _v for _k, _v in _OUT.items() if _k != $in_node_id},
             "in": _OUT[$in_node_id],
             "out": _OUTPUT,
+            "failed": _FAILED,
         }
     )
     print(json.dumps(_RUNTIME["out"] if _RUNTIME["out"] else _RUNTIME, indent=2, ensure_ascii=False))

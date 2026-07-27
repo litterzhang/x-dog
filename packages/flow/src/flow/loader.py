@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from flow.errors import WorkflowValidationError
 from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
@@ -96,6 +96,10 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         if not isinstance(raw_backoff, (int, float)) or raw_backoff < 0:
             raise WorkflowValidationError(f"Node {node_id!r}: retry.backoff must be >= 0")
         retry = RetryPolicy(max=int(raw_max), backoff=float(raw_backoff))
+    raw_on_error = data.get("on_error", "fail")
+    if raw_on_error not in ("fail", "isolate"):
+        raise WorkflowValidationError(f"Node {node_id!r}: on_error must be 'fail' or 'isolate'")
+    on_error: Literal["fail", "isolate"] = raw_on_error
     return NodeDef(
         id=node_id,
         type=data.get("type", "agent"),
@@ -111,6 +115,7 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         web_search=bool(data.get("web_search", False)),
         web_search_model=data.get("web_search_model"),
         retry=retry,
+        on_error=on_error,
     )
 
 

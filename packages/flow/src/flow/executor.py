@@ -587,9 +587,14 @@ async def execute(
         pending = {wf.entry}
     in_flight: set[str] = set()
 
+    # Isolation tracking: nodes whose failure was captured rather than propagated,
+    # plus a dict mapping node_id -> error string for all isolated failures.
+    isolated: set[str] = set()
+    failed: dict[str, str] = {}
+
     while pending or in_flight:
-        # Collect all nodes that are ready right now
-        ready = [n for n in pending if _is_ready(n)]
+        # Collect all nodes that are ready right now (skip isolated nodes)
+        ready = [n for n in pending if _is_ready(n) and n not in isolated]
         if not ready:
             # Nothing is ready yet but something is in-flight — shouldn't
             # happen in a DAG without cycles, but guard against it.
@@ -599,19 +604,42 @@ async def execute(
             pending.discard(n)
             in_flight.add(n)
 
-        # Run all ready nodes concurrently
-        await asyncio.gather(*[_run_node(n) for n in ready])
+        # Run all ready nodes concurrently; return_exceptions so one failure
+        # doesn't cancel siblings.
+        results = await asyncio.gather(*[_run_node(n) for n in ready], return_exceptions=True)
 
         for n in ready:
             in_flight.discard(n)
 
+        # Process results: handle isolated vs fail-fast nodes.
+        first_fail_exc: BaseException | None = None
+        for n, res in zip(ready, results):
+            if not isinstance(res, BaseException):
+                continue
+            node_def = node_map[n]
+            if node_def.on_error == "isolate":
+                failed[n] = f"{type(res).__name__}: {res}"
+                # Mark node + all transitive successors as isolated so they never run.
+                isolated.add(n)
+                isolated.update(_transitive_successors(n))
+            else:
+                # Default fail-fast: remember first exception; re-raise after cleanup.
+                if first_fail_exc is None:
+                    first_fail_exc = res
+
+        if first_fail_exc is not None:
+            raise first_fail_exc
+
+        # Remove any newly-isolated nodes that may have been queued already.
+        pending -= isolated
+
         # Check loop back-edges before discovering normal successors
         _activate_loops(ready, pending)
 
-        # Discover newly unblocked nodes
+        # Discover newly unblocked nodes (skip isolated sub-tree)
         for n in ready:
             for succ in _successors(n):
-                if succ not in completed and succ not in in_flight:
+                if succ not in completed and succ not in in_flight and succ not in isolated:
                     pending.add(succ)
 
     last = stack[-1] if stack else {}
@@ -625,5 +653,6 @@ async def execute(
         "state": {k: v for k, v in outputs.items() if k != IN_NODE_ID},
         "in": outputs[IN_NODE_ID],
         "out": out_live,
+        "failed": failed,
     }
     return ExecResult(runtime=runtime)

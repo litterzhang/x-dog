@@ -77,6 +77,9 @@ class NodeDef:
     web_search_model: str | None = None
     # Per-node retry policy: None means no retries (fail on first error).
     retry: RetryPolicy | None = None
+    # Failure isolation: "fail" = propagate (default/fail-fast); "isolate" = capture
+    # and continue sibling branches.
+    on_error: Literal["fail", "isolate"] = "fail"
 
     @property
     def input_names(self) -> tuple[str, ...]:
