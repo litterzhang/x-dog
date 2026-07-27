@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flow.codegen import generate
 from flow.executor import ExecResult
-from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 
 def _interp_out(result: ExecResult) -> dict[str, dict[str, str]]:
@@ -648,3 +648,109 @@ def test_generate_no_manifest_unchanged_registry_line() -> None:
     src = generate(_make_linear_wf())
     assert "_REGISTRY = default_registry()\n" in src
     assert "coerce_tool" not in src
+
+
+# ---------------------------------------------------------------------------
+# retry policy
+# ---------------------------------------------------------------------------
+
+
+def test_generate_no_retry_source_unchanged() -> None:
+    """A workflow with no retry policy emits the same core-call line as before."""
+    wf = WorkflowDef(
+        name="no-retry",
+        provider="copilot",
+        entry="work",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="work",
+                type="script",
+                code="def work(ctx):\n    return 'done'",
+                output_ports=(Port("out", "string"),),
+            ),
+        ),
+        edges=(),
+    )
+    src = generate(wf)
+    # The core-call line appears verbatim — no retry scaffolding.
+    assert "_val = _script_work(_ctx)" in src
+    assert "_last_exc" not in src
+    assert "_attempt" not in src
+
+
+async def test_generate_retry_script_node_retries_on_failure() -> None:
+    """Generated module retries a failing script node up to retry.max times."""
+    import types
+
+    # The inline script uses a module-level counter to fail on the first N calls.
+    # We embed N=2 (retry.max=2 => max_attempts=3 => fails twice, succeeds on 3rd).
+    script_code = (
+        "_CALL_COUNT = 0\n"
+        "def flaky(ctx):\n"
+        "    global _CALL_COUNT\n"
+        "    _CALL_COUNT += 1\n"
+        "    if _CALL_COUNT < 3:\n"
+        "        raise RuntimeError(f'fail {_CALL_COUNT}')\n"
+        "    return 'ok'\n"
+    )
+    wf = WorkflowDef(
+        name="retry-wf",
+        provider="copilot",
+        entry="flaky",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="flaky",
+                type="script",
+                code=script_code,
+                output_ports=(Port("result", "string"),),
+                retry=RetryPolicy(max=2, backoff=0.0),
+            ),
+        ),
+        edges=(),
+    )
+    src = generate(wf)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
+
+    gen_module = types.ModuleType("_retry_test_module")
+    exec(compile(src, "<retry_test>", "exec"), gen_module.__dict__)  # noqa: S102
+    await gen_module.main()  # type: ignore[attr-defined]
+
+    # The node ran 3 times total (failed twice, succeeded on 3rd).
+    assert gen_module._CALL_COUNT == 3  # type: ignore[attr-defined]
+    assert gen_module._OUT["flaky"]["result"] == "ok"  # type: ignore[attr-defined]
+
+
+async def test_generate_retry_exhausted_raises() -> None:
+    """Generated module propagates the last exception when all attempts fail."""
+    import types
+
+    script_code = "def always_fail(ctx):\n    raise ValueError('boom')\n"
+    wf = WorkflowDef(
+        name="retry-fail-wf",
+        provider="copilot",
+        entry="always_fail",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="always_fail",
+                type="script",
+                code=script_code,
+                output_ports=(Port("result", "string"),),
+                retry=RetryPolicy(max=1, backoff=0.0),
+            ),
+        ),
+        edges=(),
+    )
+    src = generate(wf)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
+
+    gen_module = types.ModuleType("_retry_fail_test_module")
+    exec(compile(src, "<retry_fail_test>", "exec"), gen_module.__dict__)  # noqa: S102
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="boom"):
+        await gen_module.main()  # type: ignore[attr-defined]

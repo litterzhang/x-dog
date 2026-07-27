@@ -220,6 +220,36 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
     return lines
 
 
+def _render_retry_wrapped(call_lines: list[str], node: NodeDef) -> list[str]:
+    """Wrap *call_lines* (the core-work call) in a retry loop when node.retry is set.
+
+    When ``node.retry`` is None or ``max == 0`` the call_lines are returned unchanged.
+    The emitted loop mirrors the interpreter's semantics exactly.
+    """
+    if node.retry is None or node.retry.max == 0:
+        return call_lines
+    max_attempts = 1 + node.retry.max
+    backoff = node.retry.backoff
+    # call_lines each start with 4 spaces of indent (function body level).
+    # We re-indent them to 12 spaces (inside `for` + `try:`).
+    out: list[str] = []
+    out.append("    _last_exc: BaseException | None = None")
+    out.append(f"    for _attempt in range({max_attempts}):")
+    out.append("        try:")
+    for line in call_lines:
+        # strip the leading 4 spaces then add 12
+        out.append("            " + line.lstrip(" "))
+    out.append("            _last_exc = None")
+    out.append("            break")
+    out.append("        except BaseException as _exc:")
+    out.append("            _last_exc = _exc")
+    out.append(f"            if _attempt + 1 < {max_attempts}:")
+    out.append(f"                await asyncio.sleep({backoff} * (_attempt + 1))")
+    out.append("    if _last_exc is not None:")
+    out.append("        raise _last_exc")
+    return out
+
+
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
@@ -234,7 +264,8 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
         lines.append(f'    _in_{p.name} = to_python(ins.get({p.name!r}, ""), "{p.type}")')
         call_args.append(f"{p.name}=_in_{p.name}")
     await_kw = "await " if _script_is_async(node) else ""
-    lines.append(f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})")
+    core_call = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
+    lines += _render_retry_wrapped([core_call], node)
     lines.append(f"    _OUT[{node.id!r}] = {{}}")
     if len(node.output_ports) <= 1:
         if node.output_ports:
@@ -293,9 +324,10 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     if node.tools:
         tool_names = ", ".join(f'"{t}"' for t in node.tools)
         lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
-        lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)')
+        core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)'
     else:
-        lines.append(f'    result = await _run_agent(provider, "{model}", _sys, _usr)')
+        core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr)'
+    lines += _render_retry_wrapped([core_call], node)
     lines.append(f"    _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
         lines.append(f"    _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
