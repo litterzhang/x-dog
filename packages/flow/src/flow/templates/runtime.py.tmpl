@@ -28,6 +28,8 @@ _COMPLETED: set[str] = set()
 # Isolation tracking: nodes whose failure was captured (on_error="isolate").
 _ISOLATED: set[str] = set()
 _FAILED: dict[str, str] = {}
+# Signals delivered to this run (human nodes check against this set).
+$signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
 _RUNTIME: dict[str, object] = {}
 
@@ -117,6 +119,7 @@ async def main() -> None:
     _FLOW_RUN_ID = os.environ.get("FLOW_RUN_ID")
     _FLOW_CHECKPOINT_DIR = os.environ.get("FLOW_CHECKPOINT_DIR")
     _load_checkpoint()
+$signals_main_init
     provider = ai.provider("$provider")
 $main_body
     _last = _STACK[-1] if _STACK else {"step": -1, "node": ""}

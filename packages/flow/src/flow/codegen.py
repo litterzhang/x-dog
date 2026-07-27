@@ -358,6 +358,39 @@ def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     return "\n\n\n".join(blocks)
 
 
+def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
+    """Render a human node's async wrapper: pass if signal delivered, else pause via SystemExit."""
+    lines = [f"async def {fn_name}(provider: object) -> None:"]
+    lines.append(f"    if {node.id!r} in _COMPLETED:")
+    lines.append("        return")
+    lines.append(f"    if {node.id!r} in _ISOLATED:")
+    lines.append("        return")
+    lines += _render_ins(node, wf)
+    lines.append(f"    if {node.signal!r} in _SIGNALS:")
+    lines.append(f"        _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
+    lines.append("        _t0 = time.monotonic()")
+    lines.append(f"        _OUT[{node.id!r}] = {{}}")
+    if node.output_ports:
+        p = node.output_ports[0]
+        lines.append(f"        _OUT[{node.id!r}][{p.name!r}] = 'approved'")
+    for tl in _render_node_tail(node, wf):
+        lines.append("    " + tl)
+    lines.append(f"        _COMPLETED.add({node.id!r})")
+    lines.append("        _save_checkpoint()")
+    _finished_log = (
+        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
+        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
+    )
+    lines.append(_finished_log)
+    lines.append("    else:")
+    lines.append("        _save_checkpoint()")
+    lines.append(
+        f"        print(f'PAUSED: {_ESC(node.id)} awaiting {_ESC(node.signal)}')"
+    )
+    lines.append(f"        raise SystemExit(f'PAUSED: {_ESC(node.id)} awaiting {_ESC(node.signal)}')")
+    return "\n".join(lines)
+
+
 def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     node_map = {n.id: n for n in wf.nodes}
     node = node_map[node_id]
@@ -366,6 +399,9 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
 
     if node.type == "script":
         return _render_script_node(node, fn_name, safe, wf)
+
+    if node.type == "human":
+        return _render_human_node(node, fn_name, wf)
 
     # agent node — prompts are PORT-LOCAL: {{x}} reads ins['x'].
     model = node.model or wf.default_model
@@ -710,6 +746,11 @@ def _render_concurrency_boilerplate(wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def _has_human_nodes(wf: WorkflowDef) -> bool:
+    """True if any node in the workflow is a human node."""
+    return any(n.type == "human" for n in wf.nodes)
+
+
 def generate(wf: WorkflowDef) -> str:
     """Generate a complete Python module string for the given WorkflowDef."""
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
@@ -724,6 +765,18 @@ def generate(wf: WorkflowDef) -> str:
     main_body = _render_main_body(wf, safe_ids)
     concurrency_boilerplate = _render_concurrency_boilerplate(wf)
 
+    if _has_human_nodes(wf):
+        signals_boilerplate = (
+            "\n_SIGNALS: set[str] = set()\n"
+        )
+        signals_main_init = (
+            "    _raw_signals = os.environ.get('FLOW_SIGNALS', '')\n"
+            "    _SIGNALS.update(s.strip() for s in _raw_signals.split(',') if s.strip())"
+        )
+    else:
+        signals_boilerplate = "\n_SIGNALS: set[str] = set()"
+        signals_main_init = ""
+
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
         in_seed=_render_in_seed(wf),
@@ -734,5 +787,7 @@ def generate(wf: WorkflowDef) -> str:
         script_imports=_render_script_imports(wf, safe_ids),
         tool_registration=_render_tool_registration(wf),
         concurrency_boilerplate=concurrency_boilerplate,
+        signals_boilerplate=signals_boilerplate,
+        signals_main_init=signals_main_init,
     )
     return result

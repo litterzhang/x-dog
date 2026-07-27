@@ -55,7 +55,8 @@ class RetryPolicy:
 @dataclass(frozen=True)
 class NodeDef:
     id: str
-    type: Literal["agent", "script"] = "agent"
+    type: Literal["agent", "script", "human"] = "agent"
+    signal: str = ""
     model: str | None = None
     system_prompt: str = ""
     prompt: str = ""

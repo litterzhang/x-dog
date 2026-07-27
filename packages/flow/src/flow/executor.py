@@ -24,7 +24,7 @@ from ai.types import AssistantMessage, TextContent
 from flow.checkpoint import CheckpointStore
 from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
-from flow.errors import WorkflowExecutionError
+from flow.errors import WorkflowExecutionError, WorkflowPaused
 from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.interpolate import interpolate
 from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef
@@ -113,6 +113,7 @@ async def execute(
     run_id: str | None = None,
     on_event: EventCallback | None = None,
     max_concurrency: int | None = None,
+    signals: set[str] | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -185,6 +186,7 @@ async def execute(
         seed.update(inputs)
     outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
+    _signals: set[str] = signals if signals is not None else set()
 
     # Semaphore for concurrency cap (None = unlimited).
     _eff_cap = max_concurrency if max_concurrency is not None else wf.max_concurrency
@@ -317,6 +319,27 @@ async def execute(
 
         async with _state_lock:
             ins = _build_inputs(node_id)
+
+        if node.type == "human":
+            if node.signal in _signals:
+                # Signal present — instant approval pass
+                step = await _reserve_step()
+                _emit(NodeStarted(node_id=node_id, step=step))
+                _t0_human = time.monotonic()
+                approval_val = "approved"
+                async with _state_lock:
+                    outputs.setdefault(node_id, {})
+                    if node.output_ports:
+                        outputs[node_id][node.output_ports[0].name] = approval_val
+                await _record_frame(node_id, ins, step)
+                completed.add(node_id)
+                _save_checkpoint()
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_human, tokens=0))
+            else:
+                # Signal absent — save checkpoint and pause
+                _save_checkpoint()
+                raise WorkflowPaused(node_id, node.signal)
+            return
 
         if node.type == "script":
             logger.debug("Running script node %r", node_id)
@@ -630,6 +653,9 @@ async def execute(
         for n, res in zip(ready, results):
             if not isinstance(res, BaseException):
                 continue
+            # WorkflowPaused is not a node failure — propagate immediately.
+            if isinstance(res, WorkflowPaused):
+                raise res
             node_def = node_map[n]
             if node_def.on_error == "isolate":
                 failed[n] = f"{type(res).__name__}: {res}"

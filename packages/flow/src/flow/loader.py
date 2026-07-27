@@ -100,9 +100,11 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
     if raw_on_error not in ("fail", "isolate"):
         raise WorkflowValidationError(f"Node {node_id!r}: on_error must be 'fail' or 'isolate'")
     on_error: Literal["fail", "isolate"] = raw_on_error
+    signal = str(data.get("signal", ""))
     return NodeDef(
         id=node_id,
         type=data.get("type", "agent"),
+        signal=signal,
         model=data.get("model"),
         system_prompt=data.get("system_prompt", ""),
         prompt=data.get("prompt", ""),
@@ -292,6 +294,19 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+        elif node.type == "human":
+            if not node.signal:
+                raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
+            if node.code is not None:
+                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'code'")
+            if node.run is not None:
+                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'run'")
+            if node.prompt:
+                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'prompt'")
+            if node.tools:
+                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'tools'")
+            if len(node.output_ports) > 1:
+                raise WorkflowValidationError(f"Human node {node.id!r} may declare at most one output port")
 
     # Edges: endpoints exist, ports exist, mappings are well-formed, loops bounded.
     # fed[(dst_node, dst_port)] counts feeding data edges — every input port needs
