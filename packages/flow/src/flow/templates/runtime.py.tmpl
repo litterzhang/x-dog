@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import ai
@@ -13,6 +15,8 @@ from agent.events import TurnEndEvent
 from agent.helpers import stream_fn_from_provider
 from ai.types import AssistantMessage, TextContent
 $script_imports
+_EVENT_LOG = logging.getLogger("flow.generated.events")
+
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
 _OUT: dict[str, dict[str, str]] = $in_seed

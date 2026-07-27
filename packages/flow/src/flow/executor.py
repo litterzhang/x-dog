@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import sys
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from flow.checkpoint import CheckpointStore
 from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowExecutionError
+from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.interpolate import interpolate
 from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef
 from flow.runtime import RuntimeContext
@@ -109,6 +111,7 @@ async def execute(
     web_search_fn_factory: Callable[[str], Callable[[str], Awaitable[str]]] | None = None,
     checkpoint: CheckpointStore | None = None,
     run_id: str | None = None,
+    on_event: EventCallback | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -291,6 +294,15 @@ async def execute(
                     if sport in node_ports:
                         out_live[okey] = node_ports[sport]
 
+    def _emit(ev: FlowEvent) -> None:
+        """Deliver a lifecycle event to the caller's callback (best-effort)."""
+        if on_event is None:
+            return
+        try:
+            on_event(ev)
+        except Exception:
+            pass
+
     async def _run_node(node_id: str) -> None:
         """Execute a single node and store its output ports."""
         # Skip nodes already completed (resume from checkpoint).
@@ -311,6 +323,8 @@ async def execute(
                 fn = _resolve_script_fn(node, base_dir)
 
             step = await _reserve_step()
+            _t0 = time.monotonic()
+            _emit(NodeStarted(node_id=node_id, step=step))
 
             max_attempts = 1 + (node.retry.max if node.retry else 0)
             backoff = node.retry.backoff if node.retry else 0.0
@@ -339,10 +353,16 @@ async def execute(
                         )
                         await asyncio.sleep(backoff * (attempt + 1))
             if last_exc is not None:
+                _emit(NodeFailed(
+                    node_id=node_id, step=step,
+                    duration_s=time.monotonic() - _t0,
+                    error=f"{type(last_exc).__name__}: {last_exc}",
+                ))
                 raise last_exc
             await _record_frame(node_id, ins, step)
             completed.add(node_id)
             _save_checkpoint()
+            _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
             return
 
         # agent node — prompt interpolation is PORT-LOCAL (reads this node's inputs)
@@ -397,12 +417,18 @@ async def execute(
         agent_backoff = node.retry.backoff if node.retry else 0.0
         agent_last_exc: BaseException | None = None
         accumulated: list[str] = []
+        agent_step = await _reserve_step()
+        _t0_agent = time.monotonic()
+        _emit(NodeStarted(node_id=node_id, step=agent_step))
+        total_tokens = 0
 
         for agent_attempt in range(agent_max_attempts):
             accumulated = []
             sink.clear()
+            total_tokens = 0
 
             async def _drain() -> None:
+                nonlocal total_tokens
                 event_stream = await agent.prompt(user_prompt)
                 async for event in event_stream:
                     if isinstance(event, TurnEndEvent) and event.message is not None:
@@ -411,6 +437,7 @@ async def execute(
                             for part in msg.content:
                                 if isinstance(part, TextContent):
                                     accumulated.append(part.text)
+                            total_tokens += msg.usage.total_tokens
 
             try:
                 await asyncio.wait_for(_drain(), timeout=timeout)
@@ -430,6 +457,11 @@ async def execute(
                     await asyncio.sleep(agent_backoff * (agent_attempt + 1))
 
         if agent_last_exc is not None:
+            _emit(NodeFailed(
+                node_id=node_id, step=agent_step,
+                duration_s=time.monotonic() - _t0_agent,
+                error=f"{type(agent_last_exc).__name__}: {agent_last_exc}",
+            ))
             raise agent_last_exc
 
         if node.output_schema:
@@ -445,9 +477,14 @@ async def execute(
             async with _state_lock:
                 outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_text
 
-        await _record_frame(node_id, ins, await _reserve_step())
+        await _record_frame(node_id, ins, agent_step)
         completed.add(node_id)
         _save_checkpoint()
+        _emit(NodeFinished(
+            node_id=node_id, step=agent_step,
+            duration_s=time.monotonic() - _t0_agent,
+            tokens=total_tokens,
+        ))
 
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
         """Coerce a script's return value into the node's output port(s)."""

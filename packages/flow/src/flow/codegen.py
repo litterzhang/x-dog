@@ -265,18 +265,39 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
         call_args.append(f"{p.name}=_in_{p.name}")
     await_kw = "await " if _script_is_async(node) else ""
     core_call = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
-    lines += _render_retry_wrapped([core_call], node)
-    lines.append(f"    _OUT[{node.id!r}] = {{}}")
+    # Emit start event, then wrap the work in try/except for timing.
+    lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
+    lines.append("    _t0 = time.monotonic()")
+    lines.append("    try:")
+    # Wrap core call (and retry loop if any) one extra indent level deeper.
+    for cl in _render_retry_wrapped([core_call], node):
+        lines.append("    " + cl)
+    # Output storage, frame, completed — still inside try.
+    lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if len(node.output_ports) <= 1:
         if node.output_ports:
             p = node.output_ports[0]
-            lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val, "{p.type}")')
+            lines.append(f'        _OUT[{node.id!r}][{p.name!r}] = to_state(_val, "{p.type}")')
     else:
         for p in node.output_ports:
-            lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
-    lines += _render_node_tail(node, wf)
-    lines.append(f'    _COMPLETED.add({node.id!r})')
-    lines.append('    _save_checkpoint()')
+            lines.append(f'        _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
+    for tl in _render_node_tail(node, wf):
+        lines.append("    " + tl)
+    lines.append(f'        _COMPLETED.add({node.id!r})')
+    lines.append('        _save_checkpoint()')
+    _finished_log = (
+        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
+        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
+    )
+    lines.append(_finished_log)
+    lines.append("    except BaseException as _ev_exc:")
+    _failed_log = (
+        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
+        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
+        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
+    )
+    lines.append(_failed_log)
+    lines.append("        raise")
     return "\n".join(lines)
 
 
@@ -327,13 +348,31 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)'
     else:
         core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr)'
-    lines += _render_retry_wrapped([core_call], node)
-    lines.append(f"    _OUT[{node.id!r}] = {{}}")
+    lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
+    lines.append("    _t0 = time.monotonic()")
+    lines.append("    try:")
+    for cl in _render_retry_wrapped([core_call], node):
+        lines.append("    " + cl)
+    lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
-        lines.append(f"    _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
-    lines += _render_node_tail(node, wf)
-    lines.append(f"    _COMPLETED.add({node.id!r})")
-    lines.append("    _save_checkpoint()")
+        lines.append(f"        _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
+    for tl in _render_node_tail(node, wf):
+        lines.append("    " + tl)
+    lines.append(f"        _COMPLETED.add({node.id!r})")
+    lines.append("        _save_checkpoint()")
+    _finished_log = (
+        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
+        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
+    )
+    lines.append(_finished_log)
+    lines.append("    except BaseException as _ev_exc:")
+    _failed_log = (
+        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
+        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
+        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
+    )
+    lines.append(_failed_log)
+    lines.append("        raise")
     return "\n".join(lines)
 
 
