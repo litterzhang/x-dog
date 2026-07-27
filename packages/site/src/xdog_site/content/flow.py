@@ -51,6 +51,7 @@ class Phase:
     tag: str
     title: str
     items: tuple[str, ...]
+    done: bool = False
 
 
 @dataclass(frozen=True)
@@ -245,8 +246,6 @@ EXAMPLES: tuple[Example, ...] = (
 # --- Gaps vs production-grade + roadmap --------------------------------------
 
 GAPS: tuple[Gap, ...] = (
-    Gap("Retry & backoff", "No built-in per-node retry or exponential backoff — a node failure fails the "
-        "run. Resilience is currently added around the engine (e.g. re-running a whole cycle)."),
     Gap("Checkpoint & resume", "State is an in-memory dict; there is no checkpointing or durable store, so "
         "a crash mid-run loses progress and cannot resume from the last completed node."),
     Gap("Failure isolation", "A fan-out uses asyncio.gather, which is fail-fast: one failing branch cancels "
@@ -262,10 +261,13 @@ GAPS: tuple[Gap, ...] = (
 
 ROADMAP: tuple[Phase, ...] = (
     Phase("P1", "Per-node retry & timeout policy", (
-        "A RetryPolicy(max, backoff) on NodeDef, applied by the executor.",
-        "Directly removes the 'one LLM hiccup fails the whole run' failure mode.",
-        "Smallest, lowest-risk increment — same style as the web_search / custom-tool additions.",
-    )),
+        "Done: NodeDef carries a RetryPolicy(max, backoff); the executor retries a "
+        "failed node (script or agent) up to max times with a per-attempt backoff, "
+        "then re-raises — preserving fail-fast when retries are exhausted.",
+        "Removes the 'one LLM hiccup fails the whole run' failure mode.",
+        "Notably, this was implemented by flow itself: the tools/autoenrich workflow "
+        "(build → gate → validate, with a bounded fix loop) wrote and self-reviewed it.",
+    ), done=True),
     Phase("P2", "Checkpoint & resume", (
         "Serialise the nested outputs store to a pluggable backend keyed by a run id.",
         "Resume from the last completed node after a crash.",

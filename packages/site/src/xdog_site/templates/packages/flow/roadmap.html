@@ -23,7 +23,10 @@
   <div class="cards grid">
     {% for phase in roadmap %}
       <div class="card -5of12 cell">
-        <header class="card-header">{{ phase.tag }} &nbsp;|&nbsp; {{ phase.title }}</header>
+        <header class="card-header">
+          {{ phase.tag }} &nbsp;|&nbsp; {{ phase.title }}
+          {% if phase.done %}<span class="state state-success">✓ Done</span>{% endif %}
+        </header>
         <div class="card-content">
           <div class="inner">
             <ul>
