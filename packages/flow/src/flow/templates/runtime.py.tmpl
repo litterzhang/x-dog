@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import tempfile
+from pathlib import Path
 
 import ai
 from agent import Agent
@@ -16,10 +19,69 @@ _OUT: dict[str, dict[str, str]] = $in_seed
 # Per-node execution trace (delta frames) and the collected workflow output.
 _STACK: list[dict[str, object]] = []
 _OUTPUT: dict[str, str] = {}
+# Completed node ids (used for checkpoint/resume).
+_COMPLETED: set[str] = set()
 # The runtime container, populated by main() (see ExecResult.runtime).
 _RUNTIME: dict[str, object] = {}
 
 _REGISTRY = default_registry()$tool_registration
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers — active only when FLOW_RUN_ID + FLOW_CHECKPOINT_DIR set.
+# ---------------------------------------------------------------------------
+_FLOW_RUN_ID: str | None = None
+_FLOW_CHECKPOINT_DIR: str | None = None
+
+
+def _checkpoint_path() -> Path | None:
+    if _FLOW_RUN_ID and _FLOW_CHECKPOINT_DIR:
+        return Path(_FLOW_CHECKPOINT_DIR) / f"{_FLOW_RUN_ID}.json"
+    return None
+
+
+def _load_checkpoint() -> None:
+    p = _checkpoint_path()
+    if p is None or not p.exists():
+        return
+    with p.open(encoding="utf-8") as _fh:
+        _snap: dict[str, object] = json.load(_fh)
+    _out = _snap.get("outputs")
+    if isinstance(_out, dict):
+        _OUT.clear()
+        _OUT.update(_out)  # type: ignore[arg-type]
+    _done = _snap.get("completed")
+    if isinstance(_done, list):
+        _COMPLETED.update(_done)  # type: ignore[arg-type]
+    _stk = _snap.get("stack")
+    if isinstance(_stk, list):
+        _STACK.extend(_stk)  # type: ignore[arg-type]
+    _outp = _snap.get("out_live")
+    if isinstance(_outp, dict):
+        _OUTPUT.update(_outp)  # type: ignore[arg-type]
+
+
+def _save_checkpoint() -> None:
+    p = _checkpoint_path()
+    if p is None:
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _snap = {
+        "outputs": _OUT,
+        "completed": list(_COMPLETED),
+        "stack": _STACK,
+        "out_live": _OUTPUT,
+    }
+    _fd, _tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+    try:
+        with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+            json.dump(_snap, _fh, ensure_ascii=False)
+        os.replace(_tmp, p)
+    except Exception:
+        try:
+            os.unlink(_tmp)
+        except OSError:
+            pass
+        raise
 
 
 async def _run_agent(
@@ -43,6 +105,10 @@ $node_functions
 
 
 async def main() -> None:
+    global _FLOW_RUN_ID, _FLOW_CHECKPOINT_DIR
+    _FLOW_RUN_ID = os.environ.get("FLOW_RUN_ID")
+    _FLOW_CHECKPOINT_DIR = os.environ.get("FLOW_CHECKPOINT_DIR")
+    _load_checkpoint()
     provider = ai.provider("$provider")
 $main_body
     _last = _STACK[-1] if _STACK else {"step": -1, "node": ""}

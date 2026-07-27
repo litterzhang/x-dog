@@ -223,6 +223,8 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
+    lines.append(f'    if {node.id!r} in _COMPLETED:')
+    lines.append('        return')
     lines += _render_ins(node, wf)
     lines.append(
         f'    _ctx = RuntimeContext(step=len(_STACK), node_id="{_ESC(node.id)}", workflow_name="{_ESC(wf.name)}")'
@@ -242,6 +244,8 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
         for p in node.output_ports:
             lines.append(f'    _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
     lines += _render_node_tail(node, wf)
+    lines.append(f'    _COMPLETED.add({node.id!r})')
+    lines.append('    _save_checkpoint()')
     return "\n".join(lines)
 
 
@@ -281,6 +285,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     user_prompt = _render_prompt(node.prompt, ins_expr)
 
     lines = [f"async def {fn_name}(provider: object) -> None:"]
+    lines.append(f"    if {node.id!r} in _COMPLETED:")
+    lines.append("        return")
     lines += _render_ins(node, wf)
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
@@ -294,6 +300,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     if node.output_ports:
         lines.append(f"    _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
     lines += _render_node_tail(node, wf)
+    lines.append(f"    _COMPLETED.add({node.id!r})")
+    lines.append("    _save_checkpoint()")
     return "\n".join(lines)
 
 
@@ -428,10 +436,14 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
 
         gate = _node_run_gate(node_id, wf, fwd_preds, safe_ids)
         if gate == "True":
+            if loop_depth > 0:
+                lines.append(f"{ind()}_COMPLETED.discard({node_id!r})")
             lines.append(f"{ind()}await node_{safe_ids[node_id]}(provider)")
             lines.append(f"{ind()}_ran.add('{_ESC(node_id)}')")
         else:
             lines.append(f"{ind()}if {gate}:")
+            if loop_depth > 0:
+                lines.append(f"{ind()}    _COMPLETED.discard({node_id!r})")
             lines.append(f"{ind()}    await node_{safe_ids[node_id]}(provider)")
             lines.append(f"{ind()}    _ran.add('{_ESC(node_id)}')")
 
@@ -473,8 +485,13 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
                 break
 
         if len(ready) == 1:
+            if loop_depth > 0:
+                lines.append(f"{ind()}_COMPLETED.discard({ready[0]!r})")
             lines.append(f"{ind()}await node_{safe_ids[ready[0]]}(provider)")
         else:
+            for n in ready:
+                if loop_depth > 0:
+                    lines.append(f"{ind()}_COMPLETED.discard({n!r})")
             calls = [f"node_{safe_ids[n]}(provider)" for n in ready]
             lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
 

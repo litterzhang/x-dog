@@ -20,6 +20,7 @@ from agent.core import AgentConfig, AgentTool, StreamFn
 from agent.events import TurnEndEvent
 from ai.types import AssistantMessage, TextContent
 
+from flow.checkpoint import CheckpointStore
 from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowExecutionError
@@ -106,6 +107,8 @@ async def execute(
     base_dir: Path | None = None,
     inputs: Mapping[str, str] | None = None,
     web_search_fn_factory: Callable[[str], Callable[[str], Awaitable[str]]] | None = None,
+    checkpoint: CheckpointStore | None = None,
+    run_id: str | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -223,6 +226,42 @@ async def execute(
     # Per-edge loop fire counter (loop_max edges only)
     loop_counters: dict[EdgeDef, int] = {}
 
+    # -----------------------------------------------------------------------
+    # Checkpoint restore — only when both checkpoint store and run_id given.
+    # -----------------------------------------------------------------------
+    _ckpt_active = checkpoint is not None and run_id is not None
+
+    if _ckpt_active:
+        assert checkpoint is not None and run_id is not None  # narrow types
+        snap = checkpoint.load(run_id)
+        if snap is not None:
+            outputs = snap["outputs"]
+            completed = set(snap["completed"])
+            # Rebuild EdgeDef→int from "src->dst" string keys
+            lc_raw: dict[str, int] = snap.get("loop_counters", {})
+            for edge in wf.edges:
+                key = f"{edge.src}->{edge.dst}"
+                if key in lc_raw:
+                    loop_counters[edge] = lc_raw[key]
+            stack = snap.get("stack", [])
+            out_live = snap.get("out_live", {})
+            step_counter = len(stack)
+
+    def _save_checkpoint() -> None:
+        """Persist a snapshot of the current run state (called inside _state_lock)."""
+        if not _ckpt_active:
+            return
+        assert checkpoint is not None and run_id is not None
+        lc_serial = {f"{e.src}->{e.dst}": cnt for e, cnt in loop_counters.items()}
+        snap: dict[str, Any] = {
+            "outputs": outputs,
+            "completed": list(completed),
+            "loop_counters": lc_serial,
+            "stack": stack,
+            "out_live": out_live,
+        }
+        checkpoint.save(run_id, snap)
+
     async def _reserve_step() -> int:
         """Reserve the next monotonic step number (under the state lock)."""
         nonlocal step_counter
@@ -254,6 +293,9 @@ async def execute(
 
     async def _run_node(node_id: str) -> None:
         """Execute a single node and store its output ports."""
+        # Skip nodes already completed (resume from checkpoint).
+        if node_id in completed:
+            return
         node = node_map[node_id]
 
         async with _state_lock:
@@ -300,6 +342,7 @@ async def execute(
                 raise last_exc
             await _record_frame(node_id, ins, step)
             completed.add(node_id)
+            _save_checkpoint()
             return
 
         # agent node — prompt interpolation is PORT-LOCAL (reads this node's inputs)
@@ -404,6 +447,7 @@ async def execute(
 
         await _record_frame(node_id, ins, await _reserve_step())
         completed.add(node_id)
+        _save_checkpoint()
 
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
         """Coerce a script's return value into the node's output port(s)."""
@@ -493,8 +537,17 @@ async def execute(
 
     # --- Scheduler loop ---
     # pending: nodes whose predecessors are all done but haven't started yet.
-    # We seed with the entry node.
-    pending: set[str] = {wf.entry}
+    # When restoring from a checkpoint, seed pending with the not-yet-completed
+    # frontier instead of always starting at the entry node.
+    if _ckpt_active and completed:
+        pending: set[str] = set()
+        for node in wf.nodes:
+            if node.id not in completed and _is_ready(node.id):
+                pending.add(node.id)
+        if not pending and wf.entry not in completed:
+            pending = {wf.entry}
+    else:
+        pending = {wf.entry}
     in_flight: set[str] = set()
 
     while pending or in_flight:
