@@ -246,8 +246,6 @@ EXAMPLES: tuple[Example, ...] = (
 # --- Gaps vs production-grade + roadmap --------------------------------------
 
 GAPS: tuple[Gap, ...] = (
-    Gap("Checkpoint & resume", "State is an in-memory dict; there is no checkpointing or durable store, so "
-        "a crash mid-run loses progress and cannot resume from the last completed node."),
     Gap("Failure isolation", "A fan-out uses asyncio.gather, which is fail-fast: one failing branch cancels "
         "its siblings. There is no per-branch isolation or compensation."),
     Gap("Observability", "No structured event stream, metrics, or tracing spans — only logging. There is no "
@@ -269,10 +267,14 @@ ROADMAP: tuple[Phase, ...] = (
         "(build → gate → validate, with a bounded fix loop) wrote and self-reviewed it.",
     ), done=True),
     Phase("P2", "Checkpoint & resume", (
-        "Serialise the nested outputs store to a pluggable backend keyed by a run id.",
-        "Resume from the last completed node after a crash.",
-        "Turns long agent runs from all-or-nothing into recoverable.",
-    )),
+        "Done: a CheckpointStore protocol (with a JSONFileCheckpointStore) persists "
+        "a run's progress snapshot keyed by a run id; the executor saves after each "
+        "node and, on restart with the same run id, restores and skips already-"
+        "completed nodes instead of re-running them.",
+        "Turns long agent runs from all-or-nothing into recoverable. Codegen honours "
+        "it too via FLOW_RUN_ID / FLOW_CHECKPOINT_DIR, so both run paths agree.",
+        "Also implemented by the tools/autoenrich workflow itself.",
+    ), done=True),
     Phase("P3", "Structured event stream", (
         "Emit NodeStarted / NodeFinished / NodeFailed events with duration and token usage.",
         "The foundation for observability and live TUI/web progress.",
