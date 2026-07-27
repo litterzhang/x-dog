@@ -37,17 +37,22 @@ def _untracked(repo: str) -> list[str]:
 
 
 def scope(ctx: Any, repo: str, allow_paths: str) -> str:
-    """Collect the BUILD agent's in-scope diff; revert out-of-scope tracked edits.
+    """Collect the BUILD agent's in-scope diff. READ-ONLY — reverts NOTHING.
 
     ``allow_paths`` is a whitespace/comma-separated list of path prefixes the task
-    is permitted to touch (e.g. ``packages/flow/``).  Out-of-scope *tracked* edits
-    are ``git checkout``-reverted (safe — recoverable from git).  Out-of-scope
-    *untracked* files are simply IGNORED (never deleted), so this node can never
-    destroy un-committed work.  ``uv run`` rewrites ``uv.lock`` as a side-effect,
-    so restricting to the allow-list also keeps that noise out of the result.
+    is permitted to touch (e.g. ``packages/flow/``).  This node only *inspects* the
+    working tree: it reports the diff and changed paths restricted to the
+    allow-list, and simply IGNORES anything out of scope.  It never runs
+    ``git checkout`` / ``git clean`` and never deletes files, so it can never
+    destroy un-committed work — including edits to this scaffold itself or the
+    caller's own unrelated changes.  (``uv run`` rewrites ``uv.lock`` as a
+    side-effect; restricting to the allow-list keeps that noise out of the result.)
 
-    Returns a JSON string ``{allow, changed, summary, diff}`` where ``changed`` and
-    ``diff`` cover only in-scope paths.
+    Enforcement of "only touch allowed paths" is delegated to the driver, which
+    commits ONLY the allow-listed paths — so out-of-scope edits never get staged.
+
+    Returns a JSON string ``{allow, changed, summary, diff}`` covering in-scope
+    paths only.
     """
     repo_p = Path(repo)
     allow = [p for p in allow_paths.replace(",", " ").split() if p]
@@ -55,12 +60,8 @@ def scope(ctx: Any, repo: str, allow_paths: str) -> str:
     def _ok(p: str) -> bool:
         return any(p == a or p.startswith(a) for a in allow)
 
-    # Revert out-of-scope TRACKED edits only (recoverable). Never touch untracked.
-    oos_mod = [p for p in _changed_paths(repo) if not _ok(p)]
-    if oos_mod:
-        _run(["git", "-C", repo, "checkout", "--", *oos_mod], repo, 120)
-
     # Assemble the in-scope diff (tracked edits + new-file bodies), allow-list only.
+    # No mutation of the working tree happens here.
     diff = _run(["git", "-C", repo, "diff", "--", *allow], repo, 120).stdout if allow else ""
     for p in _untracked(repo):
         if _ok(p) and (repo_p / p).is_file():
