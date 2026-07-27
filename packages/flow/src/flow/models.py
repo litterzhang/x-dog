@@ -123,3 +123,4 @@ class WorkflowDef:
     # at run/generate time (like a script node's ``run``) and registered into the
     # tool registry under ``tool_name``, so agent nodes can name it in ``tools``.
     tool_refs: tuple[tuple[str, str], ...] = field(default=())
+    max_concurrency: int = 0  # 0 (or negative) = unlimited (current behaviour)

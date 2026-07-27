@@ -32,6 +32,7 @@ _FAILED: dict[str, str] = {}
 _RUNTIME: dict[str, object] = {}
 
 _REGISTRY = default_registry()$tool_registration
+$concurrency_boilerplate
 
 # ---------------------------------------------------------------------------
 # Checkpoint helpers — active only when FLOW_RUN_ID + FLOW_CHECKPOINT_DIR set.

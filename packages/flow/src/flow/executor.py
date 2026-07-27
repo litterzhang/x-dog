@@ -112,6 +112,7 @@ async def execute(
     checkpoint: CheckpointStore | None = None,
     run_id: str | None = None,
     on_event: EventCallback | None = None,
+    max_concurrency: int | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -184,6 +185,10 @@ async def execute(
         seed.update(inputs)
     outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
+
+    # Semaphore for concurrency cap (None = unlimited).
+    _eff_cap = max_concurrency if max_concurrency is not None else wf.max_concurrency
+    _sem: asyncio.Semaphore | None = asyncio.Semaphore(_eff_cap) if _eff_cap > 0 else None
 
     # Per-node execution trace (delta frames) and a monotonic step counter.  Both
     # are only touched while holding _state_lock (as each node records its frame).
@@ -606,7 +611,16 @@ async def execute(
 
         # Run all ready nodes concurrently; return_exceptions so one failure
         # doesn't cancel siblings.
-        results = await asyncio.gather(*[_run_node(n) for n in ready], return_exceptions=True)
+        if _sem is not None:
+            _cap_sem = _sem
+
+            async def _run_capped(node_id: str) -> None:
+                async with _cap_sem:
+                    await _run_node(node_id)
+
+            results = await asyncio.gather(*[_run_capped(n) for n in ready], return_exceptions=True)
+        else:
+            results = await asyncio.gather(*[_run_node(n) for n in ready], return_exceptions=True)
 
         for n in ready:
             in_flight.discard(n)

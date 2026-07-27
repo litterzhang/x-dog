@@ -487,7 +487,7 @@ def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Body of ``async def main()`` — conditional-aware when forward guards exist."""
     if _has_forward_conditional(wf):
         return _render_main_body_conditional(wf, safe_ids)
-    return _render_main_body_waves(wf, safe_ids)
+    return _render_main_body_waves(wf, safe_ids, use_capped=wf.max_concurrency > 0)
 
 
 def _loop_maps(
@@ -570,7 +570,7 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
     return "\n".join(lines)
 
 
-def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_capped: bool = False) -> str:
     """BFS-wave body: gather for parallel fan-out, for-range for bounded loops."""
     fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
     loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
@@ -605,7 +605,10 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             for n in ready:
                 if loop_depth > 0:
                     lines.append(f"{ind()}_COMPLETED.discard({n!r})")
-            calls = [f"node_{safe_ids[n]}(provider)" for n in ready]
+            if use_capped:
+                calls = [f"_capped(node_{safe_ids[n]}(provider))" for n in ready]
+            else:
+                calls = [f"node_{safe_ids[n]}(provider)" for n in ready]
             lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
 
         for n in ready:
@@ -685,6 +688,28 @@ def _render_tool_registration(wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def _render_concurrency_boilerplate(wf: WorkflowDef) -> str:
+    """Emit _SEM + _capped helper when max_concurrency > 0, else empty string."""
+    if wf.max_concurrency <= 0:
+        return ""
+    cap = wf.max_concurrency
+    lines = [
+        "",
+        "from collections.abc import Awaitable as _Awaitable",
+        "",
+        f"_SEM: asyncio.Semaphore | None = asyncio.Semaphore({cap})",
+        "",
+        "",
+        "async def _capped(coro: \"_Awaitable[None]\") -> None:",
+        "    if _SEM is None:",
+        "        await coro",
+        "    else:",
+        "        async with _SEM:",
+        "            await coro",
+    ]
+    return "\n".join(lines)
+
+
 def generate(wf: WorkflowDef) -> str:
     """Generate a complete Python module string for the given WorkflowDef."""
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
@@ -697,6 +722,7 @@ def generate(wf: WorkflowDef) -> str:
     if inline_scripts:
         node_functions = inline_scripts + "\n\n\n" + node_functions
     main_body = _render_main_body(wf, safe_ids)
+    concurrency_boilerplate = _render_concurrency_boilerplate(wf)
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
@@ -707,5 +733,6 @@ def generate(wf: WorkflowDef) -> str:
         main_body=main_body,
         script_imports=_render_script_imports(wf, safe_ids),
         tool_registration=_render_tool_registration(wf),
+        concurrency_boilerplate=concurrency_boilerplate,
     )
     return result
