@@ -85,7 +85,7 @@ def _green(text: str) -> str:
 async def _cmd_login() -> None:
     """Login to the AI provider."""
     import ai
-    token = await ai.login()
+    await ai.login()
     print("Login successful.", file=sys.stderr)
 
 

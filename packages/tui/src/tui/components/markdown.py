@@ -720,7 +720,8 @@ class Markdown(Component):
             lines.extend(table_lines)
 
         elif token.type == "blockquote":
-            quote_style = lambda t: self._theme.quote(self._theme.italic(t))
+            def quote_style(t: str) -> str:
+                return self._theme.quote(self._theme.italic(t))
             quote_prefix = self._get_style_prefix(quote_style)
 
             quote_content_width = max(1, width - 2)

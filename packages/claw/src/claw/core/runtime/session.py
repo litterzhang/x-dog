@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -414,8 +415,6 @@ _ARG_DEFAULT_MAX = 40
 _MAX_RESULT_DISPLAY = 200
 
 # Lines that are just progress noise (pytest dots, etc.)
-import re
-
 _NOISE_LINE_RE = re.compile(r'^[\s.Fsx\-=\[\]%\d/]+$')
 
 

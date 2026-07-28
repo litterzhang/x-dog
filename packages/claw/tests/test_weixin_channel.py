@@ -150,7 +150,7 @@ async def test_connect_disconnect(tmp_path):
         token="test-token",
     )
 
-    with patch("claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock) as mock_monitor:
+    with patch("claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
         await ch.connect()
         assert ch._monitor_task is not None
 

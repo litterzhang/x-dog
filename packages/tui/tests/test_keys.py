@@ -1,4 +1,9 @@
-from tui.keys import parse_key_events
+from tui.keys import (
+    KeyEventType,
+    is_key_release,
+    is_key_repeat,
+    parse_key_events,
+)
 
 
 def test_escape():
@@ -40,12 +45,6 @@ def test_backtab_csi_z():
     assert events[0].matches("shift+tab")
 
 # ---------- Kitty keyboard protocol tests ----------
-
-from tui.keys import (
-    KeyEventType,
-    is_key_release,
-    is_key_repeat,
-)
 
 
 def test_kitty_simple_letter():

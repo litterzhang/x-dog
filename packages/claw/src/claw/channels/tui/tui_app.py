@@ -140,7 +140,8 @@ theme_fg = _fg(PALETTE["text"])
 theme_dim = _fg(PALETTE["dim"])
 theme_accent = _fg(PALETTE["accent"])
 theme_accent_soft = _fg(PALETTE["accentSoft"])
-theme_header = lambda t: _bold(_fg(PALETTE["accent"])(t))
+def theme_header(t: str) -> str:
+    return _bold(_fg(PALETTE["accent"])(t))
 theme_system = _fg(PALETTE["systemText"])
 theme_user_bg = _bg(PALETTE["userBg"])
 theme_user_text = _fg(PALETTE["userText"])
@@ -449,7 +450,6 @@ class _SelectList:
             is_sel = i == self._selected
 
             if is_sel:
-                prefix = theme_accent("→ ")
                 display = value
                 if desc and width > 40:
                     max_val_w = min(30, width - 6)
@@ -464,7 +464,6 @@ class _SelectList:
                 else:
                     line = theme_accent(f"→ {display[:width - 6]}")
             else:
-                prefix = "  "
                 display = value
                 if desc and width > 40:
                     max_val_w = min(30, width - 6)

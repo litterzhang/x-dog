@@ -16,7 +16,6 @@ from tui.keys import KeyEvent
 from tui.kill_ring import KillRing
 from tui.tui import Component
 from tui.undo_stack import UndoStack
-from tui.utils import visible_width
 
 
 @dataclass(frozen=True)
@@ -94,8 +93,6 @@ class Input(Component):
 
     def render(self, width: int) -> list[str]:
         prompt = self._prompt
-        prompt_w = visible_width(prompt)
-        available = max(1, width - prompt_w - 1)
 
         if not self._value and self._placeholder and not self.focused:
             line = prompt + f"\x1b[2m{self._placeholder}\x1b[0m"

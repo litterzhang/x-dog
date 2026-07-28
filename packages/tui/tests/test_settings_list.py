@@ -64,7 +64,7 @@ def test_settings_list_search():
     """Fuzzy search filters items."""
     sl, _ = _make_list(enable_search=True)
     lines = sl.render(60)
-    text = "\n".join(strip_ansi(l) for l in lines)
+    text = "\n".join(strip_ansi(line) for line in lines)
     assert "Search:" in text
 
     # Type "fon" to filter

@@ -221,7 +221,6 @@ class Editor(Component):
         result: list[str] = []
         opts = self._options
         pad = opts.padding_x
-        content_width = max(1, width - pad * 2)
 
         # Top border
         if opts.show_border:

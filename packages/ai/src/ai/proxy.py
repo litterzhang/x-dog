@@ -266,7 +266,6 @@ async def stream_to_sse(
     """
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     block_index = -1
-    input_tokens = 0
 
     async for event in event_stream:
         etype = event.type
@@ -381,8 +380,9 @@ async def stream_to_sse(
             })
 
         elif etype == "usage":
-            # Track input tokens for the final message_delta
-            input_tokens = event.usage.input if event.usage else 0
+            # Anthropic sends input_tokens in message_start, not message_delta,
+            # so the usage event carries nothing this proxy needs to forward here.
+            pass
 
         elif etype == "done":
             assert isinstance(event, DoneEvent)

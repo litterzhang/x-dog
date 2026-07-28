@@ -40,7 +40,7 @@ def test_session_manager_crud(tmp_path: Path):
 def test_session_manager_most_recent(tmp_path: Path):
     manager = SessionManager(sessions_dir=tmp_path)
 
-    s1 = manager.create_session(summary="old")
+    manager.create_session(summary="old")
     time.sleep(0.01)
     s2 = manager.create_session(summary="new")
 

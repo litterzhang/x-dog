@@ -2,21 +2,20 @@
 
 import pytest
 from agent import AgentConfig
-from ai.types import AssistantMessage as _AM
-from ai.utils.event_stream import EventStream as _ES
-
-
-def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
-
 from agent.agent import Agent
 from ai.types import (
     AssistantMessage,
     TextContent,
     UserMessage,
 )
+from ai.types import AssistantMessage as _AM
+from ai.utils.event_stream import EventStream as _ES
 from coding.core.agent_session import AgentSession
 from coding.core.session_manager import SessionManager
 from coding.core.settings_manager import SettingsManager
+
+
+def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
 
 
 @pytest.fixture

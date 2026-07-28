@@ -27,20 +27,6 @@ from ai.types import (
 from ai.utils.event_stream import EventStream as AiEventStream
 
 
-def create_model():
-    return Model(
-        id="mock",
-        name="mock",
-        api="openai-completions",
-        provider="copilot",
-        base_url="https://example.invalid",
-        reasoning=False,
-        input=("text",),
-        cost={"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0},
-        context_window=8192,
-        max_tokens=2048,
-    )
-
 def create_assistant_message(content, stop_reason="stop"):
     if isinstance(content, list):
         content = tuple(content)
@@ -179,7 +165,7 @@ async def test_run_agent_loop_cancellation():
     async def emit(event: AgentEvent) -> None:
         events.append(event)
 
-    messages = await run_agent_loop(
+    await run_agent_loop(
         [UserMessage(content="Go")], context, config, emit,
         stream_fn=slow_fn, model="mock/test-model", options=StreamOptions(), cancel=cancel,
     )

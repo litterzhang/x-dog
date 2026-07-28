@@ -4,14 +4,13 @@ import pytest
 from agent import AgentConfig
 from ai.types import AssistantMessage as _AM
 from ai.utils.event_stream import EventStream as _ES
-
-
-def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
-
 from coding.core.slash_commands import (
     execute_command,
     parse_slash_command,
 )
+
+
+def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
 
 
 def test_parse_slash_command():

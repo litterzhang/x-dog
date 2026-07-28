@@ -13,7 +13,6 @@ from tui.terminal_image import (
 def _make_png(width: int = 100, height: int = 200) -> bytes:
     """Create minimal PNG header bytes."""
     header = b"\x89PNG\r\n\x1a\n"
-    ihdr = b"IHDR" + b"\x00" * 4
     # Pad to offset 16 for width/height
     padding = b"\x00" * (16 - len(header))
     dims = struct.pack(">II", width, height)

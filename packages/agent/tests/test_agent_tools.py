@@ -42,7 +42,7 @@ async def test_filesystem_edit(tmp_path):
     fpath.write_text("hello world\nfoo bar\n")
 
     tool = create_filesystem_tool()
-    result = await tool.execute("c1", {
+    await tool.execute("c1", {
         "action": "edit", "path": str(fpath),
         "old_string": "hello world", "new_string": "hello universe",
     })
@@ -55,7 +55,7 @@ async def test_filesystem_edit_multi_edit(tmp_path):
     fpath.write_text("alpha\nbeta\ngamma\n")
 
     tool = create_filesystem_tool()
-    result = await tool.execute("c1", {
+    await tool.execute("c1", {
         "action": "edit", "path": str(fpath),
         "edits": [
             {"old_string": "alpha", "new_string": "ALPHA"},

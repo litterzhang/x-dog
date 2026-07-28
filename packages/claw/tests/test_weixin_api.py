@@ -127,11 +127,9 @@ async def test_send_message_with_mocked_httpx(httpx_mock):
 @pytest.fixture
 def httpx_mock():
     """Simple httpx mock using respx or manual mock."""
-    try:
-        from pytest_httpx import HTTPXMock
-        # If pytest_httpx is available, it provides the fixture automatically
-        raise ImportError("Use autouse")
-    except ImportError:
+    import importlib.util
+    if importlib.util.find_spec("pytest_httpx") is not None:
+        # If pytest_httpx is available, it provides the fixture automatically.
         pass
 
     # Fallback: inline mock
