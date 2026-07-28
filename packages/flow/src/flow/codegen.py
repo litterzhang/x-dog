@@ -292,34 +292,67 @@ def _render_isolation_handler(node_id: str, wf: WorkflowDef) -> list[str]:
     return lines
 
 
+def _entry_guards(node_id: str) -> list[str]:
+    """The two early-return guards every node wrapper opens with (already-done / isolated)."""
+    return [
+        f"    if {node_id!r} in _COMPLETED:",
+        "        return",
+        f"    if {node_id!r} in _ISOLATED:",
+        "        return",
+    ]
+
+
+def _memo_hit_block(node: NodeDef) -> list[str]:
+    """Emit the deterministic memo-hit fast path (empty for non-deterministic nodes).
+
+    Computes ``_mk`` (the memo key) and, on a hit, replays the cached output as a
+    completed node — pushing a trace frame, checkpointing, and returning early. The
+    ``_mk`` binding is left in scope for the miss path to store into ``_MEMO``.
+    """
+    if not node.deterministic:
+        return []
+    ins_expr = "dict(ins)" if node.input_ports else "{}"
+    return [
+        f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
+        f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501',
+        "    if _mk in _MEMO:",
+        f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))',
+        "        _t0_memo = time.monotonic()",
+        f"        _OUT[{node.id!r}] = dict(_MEMO[_mk])",
+        f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
+        f' "in": {ins_expr}, "out": dict(_OUT[{node.id!r}])}})',
+        f"        _COMPLETED.add({node.id!r})",
+        "        _save_checkpoint()",
+        f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
+        f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501',
+        "        return",
+    ]
+
+
+def _node_epilogue(node: NodeDef, wf: WorkflowDef) -> list[str]:
+    """The shared try-body tail + except handler for script/agent nodes.
+
+    Emits (at try-body indent) the NodeFinished log, then the ``except BaseException``
+    clause with the NodeFailed log and either the isolation handler or a bare re-raise.
+    Assumes ``_t0`` holds the node start time and the try block is open.
+    """
+    return [
+        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
+        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501",
+        "    except BaseException as _ev_exc:",
+        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
+        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
+        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501",
+        *(_render_isolation_handler(node.id, wf) if node.on_error == "isolate" else ["        raise"]),
+    ]
+
+
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
-    lines.append(f'    if {node.id!r} in _COMPLETED:')
-    lines.append('        return')
-    lines.append(f'    if {node.id!r} in _ISOLATED:')
-    lines.append('        return')
+    lines += _entry_guards(node.id)
     lines += _render_ins(node, wf)
-    # Determinism memo hit guard — emitted only for deterministic nodes.
-    if node.deterministic:
-        ins_expr3 = "dict(ins)" if node.input_ports else "{}"
-        lines.append(
-            f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
-            f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501'
-        )
-        lines.append('    if _mk in _MEMO:')
-        lines.append(f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))')
-        lines.append('        _t0_memo = time.monotonic()')
-        lines.append(f'        _OUT[{node.id!r}] = dict(_MEMO[_mk])')
-        lines.append(f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
-                     f' "in": {ins_expr3}, "out": dict(_OUT[{node.id!r}])}})')
-        lines.append(f'        _COMPLETED.add({node.id!r})')
-        lines.append('        _save_checkpoint()')
-        lines.append(
-            f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
-            f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501'
-        )
-        lines.append('        return')
+    lines += _memo_hit_block(node)
     lines.append(
         f'    _ctx = RuntimeContext(step=len(_STACK), node_id="{_ESC(node.id)}", workflow_name="{_ESC(wf.name)}")'
     )
@@ -351,22 +384,7 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     if node.deterministic:
         lines.append(f'        _MEMO[_mk] = dict(_OUT[{node.id!r}])')
     lines.append('        _save_checkpoint()')
-    _finished_log = (
-        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
-        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
-    )
-    lines.append(_finished_log)
-    lines.append("    except BaseException as _ev_exc:")
-    _failed_log = (
-        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
-        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
-        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
-    )
-    lines.append(_failed_log)
-    if node.on_error == "isolate":
-        lines += _render_isolation_handler(node.id, wf)
-    else:
-        lines.append("        raise")
+    lines += _node_epilogue(node, wf)
     return "\n".join(lines)
 
 
@@ -393,10 +411,7 @@ def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
 def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     """Render a human node's async wrapper: pass if signal delivered, else pause via SystemExit."""
     lines = [f"async def {fn_name}(provider: object) -> None:"]
-    lines.append(f"    if {node.id!r} in _COMPLETED:")
-    lines.append("        return")
-    lines.append(f"    if {node.id!r} in _ISOLATED:")
-    lines.append("        return")
+    lines += _entry_guards(node.id)
     lines += _render_ins(node, wf)
     lines.append(f"    if {node.signal!r} in _SIGNALS:")
     lines.append(f"        _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
@@ -442,31 +457,9 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     user_prompt = _render_prompt(node.prompt, ins_expr)
 
     lines = [f"async def {fn_name}(provider: object) -> None:"]
-    lines.append(f"    if {node.id!r} in _COMPLETED:")
-    lines.append("        return")
-    lines.append(f"    if {node.id!r} in _ISOLATED:")
-    lines.append("        return")
+    lines += _entry_guards(node.id)
     lines += _render_ins(node, wf)
-    # Determinism memo hit guard — emitted only for deterministic nodes.
-    if node.deterministic:
-        ins_expr3 = "dict(ins)" if node.input_ports else "{}"
-        lines.append(
-            f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
-            f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501'
-        )
-        lines.append("    if _mk in _MEMO:")
-        lines.append(f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))')
-        lines.append("        _t0_memo = time.monotonic()")
-        lines.append(f"        _OUT[{node.id!r}] = dict(_MEMO[_mk])")
-        lines.append(f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
-                     f' "in": {ins_expr3}, "out": dict(_OUT[{node.id!r}])}})')
-        lines.append(f"        _COMPLETED.add({node.id!r})")
-        lines.append("        _save_checkpoint()")
-        lines.append(
-            f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
-            f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501'
-        )
-        lines.append("        return")
+    lines += _memo_hit_block(node)
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
     _call_args = [f'provider, "{model}", _sys, _usr']
@@ -502,22 +495,7 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     if node.deterministic:
         lines.append(f"        _MEMO[_mk] = dict(_OUT[{node.id!r}])")
     lines.append("        _save_checkpoint()")
-    _finished_log = (
-        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
-        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
-    )
-    lines.append(_finished_log)
-    lines.append("    except BaseException as _ev_exc:")
-    _failed_log = (
-        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
-        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
-        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501"
-    )
-    lines.append(_failed_log)
-    if node.on_error == "isolate":
-        lines += _render_isolation_handler(node.id, wf)
-    else:
-        lines.append("        raise")
+    lines += _node_epilogue(node, wf)
     return "\n".join(lines)
 
 
