@@ -317,6 +317,14 @@ NON_GOALS: tuple[Gap, ...] = (
     Gap("Built-in scheduling", "Not a goal. Cron/interval/event triggers are wired around flow by the "
         "host (e.g. a systemd timer driving a cycle), not baked into the engine — the same separation a "
         "library keeps from its scheduler."),
+    Gap("Compensation / rollback", "Not a goal (as an engine feature). Saga-style compensation earns its "
+        "keep in distributed, long-running, cross-service flows — which flow deliberately isn't. For the "
+        "engine to undo a side-effect it would have to track side-effects and their inverses, colliding "
+        "with the node = pure input-ports → output-ports model and the interpret==compile guarantee. "
+        "Failure cleanup is instead expressible with existing primitives — an on_error:isolate node "
+        "collects failures into runtime.failed, and a downstream cleanup node reads it — or handled in "
+        "the host/driver layer, exactly as the auto-enrich driver rolls back with `git checkout` outside "
+        "the engine."),
 )
 
 GAPS: tuple[Gap, ...] = (
@@ -326,9 +334,6 @@ GAPS: tuple[Gap, ...] = (
     Gap("Cost budgets & quotas", "Token usage is reported per node (P3) but there is no enforced per-run "
         "cost ceiling that aborts a run before it overspends. A real, in-kernel gap — a small execute() "
         "guard, no distribution required."),
-    Gap("Compensation / rollback", "P4.1 isolates a failed branch, but there is no saga-style "
-        "compensation to undo the side-effects of branches that already committed before the failure. A "
-        "real gap that lives entirely within the single-machine model."),
 )
 
 ROADMAP: tuple[Phase, ...] = (
