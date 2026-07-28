@@ -19,7 +19,6 @@ from tui.keys import KeyEvent
 from tui.kill_ring import KillRing
 from tui.tui import Component
 from tui.undo_stack import UndoStack
-from tui.utils import visible_width
 
 
 @dataclass(frozen=True)

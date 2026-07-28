@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 SYSTEM_PROMPT_HEADER = """\
 You are an interactive coding agent. You help the user with software engineering \
 tasks by reading, writing, and editing files, executing commands, and searching \

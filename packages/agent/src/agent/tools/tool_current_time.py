@@ -1,6 +1,8 @@
 """current_time tool — returns the current date, time, and timezone."""
 from __future__ import annotations
+
 from datetime import datetime, timezone
+
 from agent.tool_def import ToolDef
 
 

@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-
-from ai.vendors.copilot._model_sync import _model_from_dict, _model_to_dict, _parse_api_model
+from ai.core import AuthResult
 from ai.types import (
     EmbeddingObject,
     EmbeddingRequest,
@@ -17,7 +16,7 @@ from ai.types import (
     ModelCost,
     Usage,
 )
-from ai.core import AuthResult
+from ai.vendors.copilot._model_sync import _model_from_dict, _model_to_dict, _parse_api_model
 
 
 def _make_embedding_api_model(**overrides: Any) -> dict[str, Any]:

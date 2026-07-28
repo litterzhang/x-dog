@@ -1,18 +1,10 @@
-import pytest
 from tui.utils import (
-    strip_ansi,
-    string_width,
-    char_width,
-    truncate_to_width,
-    wrap_text,
-    pad_right,
-    pad_center,
-    visible_chars,
-    slice_by_column,
-    slice_with_width,
     extract_segments,
-    Segment,
+    slice_by_column,
+    string_width,
+    wrap_text,
 )
+
 
 def test_string_width():
     assert string_width("hello") == 5

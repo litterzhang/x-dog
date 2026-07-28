@@ -1,8 +1,10 @@
 """Tests for message queue."""
 import asyncio
+
 import pytest
 from claw.core.queue import MessageQueue
-from claw.core.types import UserInput, QueueMode
+from claw.core.types import QueueMode, UserInput
+
 
 @pytest.fixture
 def queue():

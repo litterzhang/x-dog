@@ -3,6 +3,7 @@
 from tui.components.cancellable_loader import CancellableLoader
 from tui.keys import KeyEvent
 
+
 def _make_loader() -> CancellableLoader:
     return CancellableLoader(
         tui=None,

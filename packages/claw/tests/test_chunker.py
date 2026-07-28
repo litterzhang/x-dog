@@ -1,6 +1,6 @@
 """Tests for block chunker."""
-import pytest
 from claw.core.chunker import BlockChunker
+
 
 def test_splits_at_paragraph_boundary():
     text = "Paragraph one.\n\nParagraph two.\n\nParagraph three."

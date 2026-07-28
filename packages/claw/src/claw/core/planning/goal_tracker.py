@@ -10,12 +10,20 @@ import json
 import logging
 import os
 import time
-from dataclasses import asdict, fields as dc_fields, replace
+from dataclasses import asdict, replace
+from dataclasses import fields as dc_fields
 from pathlib import Path
 
 from claw.core.types import (
-    Goal, GoalNotification, GoalStatus, GoalTask, TaskStatus,
-    Verification, VerificationMethod, VerificationResult, VerificationRun,
+    Goal,
+    GoalNotification,
+    GoalStatus,
+    GoalTask,
+    TaskStatus,
+    Verification,
+    VerificationMethod,
+    VerificationResult,
+    VerificationRun,
 )
 
 logger = logging.getLogger(__name__)

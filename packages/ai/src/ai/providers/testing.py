@@ -15,7 +15,6 @@ from ai.types import (
 )
 from ai.utils.event_stream import EventStream
 
-
 _TEST_API = "test"
 _TEST_PROVIDER = "test"
 

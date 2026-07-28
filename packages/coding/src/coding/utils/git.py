@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from coding.core.exec_utils import ExecResult, run_sync
+from coding.core.exec_utils import run_sync
 
 
 @dataclass(frozen=True)

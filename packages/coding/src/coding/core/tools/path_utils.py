@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 # Directories that should never be written to
 _BLOCKED_DIRS = frozenset({
     "/bin", "/sbin", "/usr/bin", "/usr/sbin",

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent.agent import Agent
 from agent import AgentTool as CoreAgentTool
+from agent.agent import Agent
 
 from coding.config import (
     GlobalConfig,
@@ -133,8 +133,8 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
     agent_tools: list[CoreAgentTool] = get_default_tools(wd)
 
     # Create Agent with explicit stream_fn from provider
-    from agent.helpers import stream_fn_from_provider
     from agent import AgentConfig
+    from agent.helpers import stream_fn_from_provider
     from ai.types import StreamOptions
 
     agent = Agent(

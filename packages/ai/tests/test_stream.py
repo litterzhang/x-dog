@@ -1,13 +1,14 @@
 import asyncio
+
 import pytest
+from ai.providers.testing import make_test_model, register_test_protocol
 from ai.types import Context, UserMessage
-from ai.providers.testing import register_test_protocol, make_test_model
 
 pytestmark = pytest.mark.asyncio
 
 
 def mock_stream_fn(model, context, options):
-    from ai.types import TextDeltaEvent, TextDoneEvent, DoneEvent
+    from ai.types import DoneEvent, TextDeltaEvent, TextDoneEvent
     from ai.utils.event_stream import EventStream
 
     async def generate():

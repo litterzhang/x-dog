@@ -1,13 +1,10 @@
 """Tests for interactive mode components."""
 
-import pytest
 
 from coding.modes.interactive.theme import (
-    Theme,
     create_default_theme,
-    format_tokens,
-    PALETTE,
 )
+
 
 class TestFooterComponent:
     """Tests for the footer component."""

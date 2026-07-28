@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date
 from typing import Any
 
-from coding.config import PlatformInfo, RuntimeConfig
+from coding.config import RuntimeConfig
 from coding.core.prompt_templates import (
     CUSTOM_INSTRUCTIONS_SECTION,
     ENVIRONMENT_SECTION,

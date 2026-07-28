@@ -9,10 +9,13 @@ calls the tracker/manager directly during planning.
 """
 from __future__ import annotations
 
-from agent.tool_def import ToolDef, Param, action
+from agent.tool_def import Param, ToolDef, action
+
 from claw.core.types import (
-    GoalStatus, TaskStatus,
-    Verification, VerificationMethod, VerificationResult,
+    GoalStatus,
+    TaskStatus,
+    Verification,
+    VerificationMethod,
 )
 
 _TASK_STATUS_MAP = {
@@ -27,6 +30,7 @@ def _tracker(ctx: dict):
     if manager is not None:
         return manager.tracker
     from pathlib import Path
+
     from claw.core.planning.goal_tracker import get_tracker
     goals_file = Path(ctx["data_dir"]) / "groups" / ctx["group_id"] / "goals.json"
     return get_tracker(goals_file)

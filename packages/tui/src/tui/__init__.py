@@ -59,6 +59,7 @@ from tui.terminal_image import (
 )
 from tui.tui import (
     CURSOR_MARKER,
+    TUI,
     Component,
     Container,
     Focusable,
@@ -67,7 +68,6 @@ from tui.tui import (
     OverlayMargin,
     OverlayOptions,
     SizeValue,
-    TUI,
     is_focusable,
 )
 from tui.undo_stack import UndoStack

@@ -38,24 +38,15 @@ from ai.types import (
     DoneEvent,
     ErrorEvent,
     ImageContent,
-    StartEvent,
     StreamOptions,
     TextContent,
-    TextDeltaEvent,
     TextDoneEvent,
-    TextStartEvent,
     ThinkingBudgets,
     ThinkingContent,
-    ThinkingDeltaEvent,
     ThinkingDoneEvent,
-    ThinkingStartEvent,
     Tool,
     ToolCall,
-    ToolCallDeltaEvent,
-    ToolCallDoneEvent,
-    ToolCallStartEvent,
     ToolResultMessage,
-    UsageEvent,
     UserMessage,
 )
 
@@ -823,7 +814,7 @@ async def start_proxy(
     print(f"Anthropic API proxy listening on http://{addr[0]}:{addr[1]}")
     print(f"Providers: {', '.join(active)}")
     print(f"Auth: {'API key required' if api_key else 'none (open)'}")
-    print(f"Endpoints:")
+    print("Endpoints:")
     print(f"  POST http://{addr[0]}:{addr[1]}/v1/messages")
     print(f"  GET  http://{addr[0]}:{addr[1]}/v1/models")
 

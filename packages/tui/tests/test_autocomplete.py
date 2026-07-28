@@ -1,22 +1,18 @@
-import os
-import shutil
-import tempfile
-from pathlib import Path
 
-import pytest
 from tui.autocomplete import (
     AutocompleteEngine,
+    CallbackCompletionProvider,
     CompletionItem,
     StaticCompletionProvider,
-    CallbackCompletionProvider,
 )
+
 
 def test_callback_provider_get_completions():
     def my_callback(prefix: str):
         return [CompletionItem(text=f"{prefix}_result")]
-    
+
     provider = CallbackCompletionProvider(callback=my_callback)
-    
+
     res = provider.get_completions("test")
     assert len(res) == 1
     assert res[0].text == "test_result"

@@ -29,7 +29,6 @@ from ai.types import (
 )
 from ai.utils.event_stream import EventStream as AiEventStream
 
-
 # ---------------------------------------------------------------------------
 # Agent messages
 # ---------------------------------------------------------------------------

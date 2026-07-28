@@ -17,8 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from claw.core.types import (
-    Goal, GoalTask, TaskStatus,
-    Verification, VerificationMethod, VerificationRun, VerificationResult,
+    Goal,
+    GoalTask,
+    TaskStatus,
+    Verification,
+    VerificationMethod,
 )
 
 logger = logging.getLogger(__name__)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-
 # Extra mappings beyond the stdlib defaults
 _EXTRA_TYPES: dict[str, str] = {
     ".ts": "text/typescript",

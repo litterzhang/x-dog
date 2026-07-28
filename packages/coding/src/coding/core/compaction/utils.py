@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from agent import AgentMessage
 from ai.types import (
     AssistantMessage,
     TextContent,
     ToolResultMessage,
     UserMessage,
 )
-from agent import AgentMessage
 
 
 def estimate_tokens(text: str) -> int:

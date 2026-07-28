@@ -1,5 +1,5 @@
-import pytest
 from tui.stdin_buffer import is_complete_sequence
+
 
 def test_complete_csi_sequence():
     """CSI sequence with final byte is complete."""

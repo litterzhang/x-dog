@@ -1,17 +1,11 @@
 """Tests for the resource loader module."""
 
-import pytest
-from pathlib import Path
 
 from coding.core.resource_loader import (
-    ContextFile,
-    ProjectResources,
     discover_context_files,
-    get_package_resource_dir,
     load_project_resources,
-    load_text_resource,
-    load_prompt_fragment,
 )
+
 
 def test_discover_context_files_claude_md(tmp_path):
     """Discovers CLAUDE.md in working directory."""

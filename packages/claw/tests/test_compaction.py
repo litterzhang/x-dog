@@ -1,12 +1,10 @@
 """Tests for compaction engine."""
-import pytest
-from pathlib import Path
 from claw.core.compaction import (
-    estimate_tokens,
     compact_transcript,
-    archive_transcript,
+    estimate_tokens,
 )
-from claw.core.compaction.transcript import find_cut_point, extract_file_ops
+from claw.core.compaction.transcript import extract_file_ops, find_cut_point
+
 
 def test_estimate_tokens_includes_tool_calls():
     """Tool call arguments should be counted in token estimate."""

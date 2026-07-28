@@ -1,7 +1,6 @@
 """Tests for workspace management."""
-import pytest
-from pathlib import Path
-from claw.core.prompt import init_workspace, build_system_prompt, run_bootstrap, workspace_path
+from claw.core.prompt import init_workspace, run_bootstrap
+
 
 def test_init_workspace_does_not_overwrite_existing(tmp_path):
     ws = tmp_path / "workspace"

@@ -1,9 +1,5 @@
 """Tests for RPC mode."""
 
-import json
-import pytest
-from io import StringIO
-from unittest.mock import patch
 
 def test_rpc_status_command():
     """Test that status command returns session info."""

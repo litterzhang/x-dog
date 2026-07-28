@@ -11,7 +11,6 @@ hybrid vector + BM25 pipeline from :mod:`claw.memory.indexer` and
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from claw.core.memory.types import MemoryChunk
 

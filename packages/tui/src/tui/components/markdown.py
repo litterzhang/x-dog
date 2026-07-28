@@ -18,7 +18,6 @@ from tui.utils import (
     wrap_text_with_ansi,
 )
 
-
 # ---------------------------------------------------------------------------
 # Theme / style interfaces (matching TypeScript MarkdownTheme)
 # ---------------------------------------------------------------------------

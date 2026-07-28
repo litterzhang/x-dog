@@ -10,7 +10,7 @@ from typing import Callable, Generic, TypeVar
 
 from tui.keys import KeyEvent
 from tui.tui import Component
-from tui.utils import truncate_to_width, visible_width, clamp
+from tui.utils import clamp, truncate_to_width
 
 T = TypeVar("T")
 

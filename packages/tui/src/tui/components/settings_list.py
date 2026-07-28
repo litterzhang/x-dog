@@ -6,7 +6,7 @@ value cycling, submenu support, and optional fuzzy search.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 from tui.fuzzy import fuzzy_filter

@@ -16,10 +16,10 @@ from agent import AgentConfig, AgentTool, StreamFn
 
 from claw.core.compaction.flush_runner import FlushRunner
 from claw.core.compaction.summarizer import Summarizer
-from claw.core.planning.goal_manager import GoalManager
 from claw.core.memory.manager import MemoryManager
 from claw.core.persistence.transcript_store import TranscriptStore
-from claw.core.prompt import build_system_prompt, init_workspace, workspace_path, run_bootstrap
+from claw.core.planning.goal_manager import GoalManager
+from claw.core.prompt import build_system_prompt, init_workspace, workspace_path
 from claw.core.skills.skill_manager import SkillManager
 from claw.core.tools import create_tools
 from claw.core.types import Group
@@ -148,8 +148,8 @@ class GroupRuntime:
         embed_fn = None
         if resolved_model:
             try:
-                from agent.helpers import embed_fn_from_provider
                 import ai
+                from agent.helpers import embed_fn_from_provider
                 provider = ai.load()
                 if provider.active_providers():
                     embed_fn = embed_fn_from_provider(provider, resolved_model)

@@ -1,19 +1,11 @@
 """Tests for MemoryIndexer with real embedding and sqlite-vec support."""
-import asyncio
-import struct
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 
 import pytest
-
 from claw.core.memory.indexer import (
     EmbeddingModel,
-    MemoryChunk,
     MemoryIndexer,
-    _cosine_similarity,
-    _floats_to_blob,
-    _blob_to_floats,
-    get_embedding_model,
 )
 
 # ---------------------------------------------------------------------------

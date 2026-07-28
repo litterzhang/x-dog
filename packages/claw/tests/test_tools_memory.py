@@ -2,6 +2,7 @@
 import pytest
 from claw.core.tools.tool_memory import create_memory_tool
 
+
 @pytest.mark.asyncio
 async def test_memory_get_path_traversal(tmp_path):
     """Path traversal with ../  should be denied."""

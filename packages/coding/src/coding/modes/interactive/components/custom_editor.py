@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
-from tui.tui import Component
 from tui.keys import KeyEvent
+from tui.tui import Component
 
-from coding.modes.interactive.theme import Theme
 from coding.core.slash_commands import BUILTIN_COMMANDS
+from coding.modes.interactive.theme import Theme
 
 
 class SlashSelectList:

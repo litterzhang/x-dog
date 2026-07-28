@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 
-from tui.tui import Container, Component
-from tui.components.text import Text
 from tui.components.diff import Diff
+from tui.components.text import Text
+from tui.tui import Container
 
 from coding.modes.interactive.theme import Theme
 

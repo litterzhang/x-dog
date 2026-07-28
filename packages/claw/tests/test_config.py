@@ -1,7 +1,8 @@
 """Tests for claw YAML configuration loading."""
+
 import pytest
-from pathlib import Path
 from claw.config import ClawConfig, GroupDef, load_config, save_config
+
 
 def test_default_config():
     config = ClawConfig()

@@ -24,7 +24,6 @@ from typing import Any
 import httpx
 
 from ai.core import AuthResult, BaseProtocol
-from ai.utils.cost import usage_with_cost
 from ai.protocols._message_builder import MessageBuilder
 from ai.types import (
     AssistantMessage,
@@ -53,9 +52,10 @@ from ai.types import (
     ToolCallStartEvent,
     ToolResultMessage,
     Usage,
-    UserMessage,
     UsageEvent,
+    UserMessage,
 )
+from ai.utils.cost import usage_with_cost
 from ai.utils.event_stream import EventStream
 from ai.utils.json_parse import parse_partial_json
 from ai.utils.sanitize_unicode import sanitize_unicode

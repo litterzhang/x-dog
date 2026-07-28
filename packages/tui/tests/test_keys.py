@@ -1,5 +1,5 @@
-import pytest
 from tui.keys import parse_key_events
+
 
 def test_escape():
     events = parse_key_events(b'\x1b')
@@ -10,7 +10,7 @@ def test_arrows():
     events = parse_key_events(b'\x1b[A')
     assert len(events) == 1
     assert events[0].matches("up")
-    
+
     events = parse_key_events(b'\x1b[B')
     assert len(events) == 1
     assert events[0].matches("down")
@@ -21,12 +21,12 @@ def test_multiple_keys():
     assert events[0].matches("a")
     assert events[1].matches("b")
     assert events[2].matches("ctrl+c")
-    
+
 def test_tilde_sequences():
     events = parse_key_events(b'\x1b[15~')
     assert len(events) == 1
     assert events[0].matches("f5")
-    
+
     events = parse_key_events(b'\x1b[1;2A')
     assert len(events) == 1
     assert events[0].matches("shift+up")
@@ -43,10 +43,10 @@ def test_backtab_csi_z():
 
 from tui.keys import (
     KeyEventType,
-    decode_kitty_printable,
     is_key_release,
     is_key_repeat,
 )
+
 
 def test_kitty_simple_letter():
     """CSI 97 u  →  'a' key press (Kitty protocol)."""

@@ -1,6 +1,5 @@
-import pytest
-from ai.types import Context, UserMessage, Model
-from ai.utils.overflow import is_context_overflow, estimate_context_tokens
+from ai.types import Context, Model, UserMessage
+from ai.utils.overflow import estimate_context_tokens, is_context_overflow
 
 
 def test_context_overflow_detection():

@@ -1,6 +1,6 @@
 
-from pathlib import Path
 from claw.core.memory.long_term import LongTermMemory
+
 
 def test_append_adds_to_existing(tmp_path):
     ltm = LongTermMemory(tmp_path)

@@ -1,6 +1,6 @@
-import pytest
 from ai.types import Model, ModelCost, Usage
-from ai.utils.cost import calculate_cost, usage_with_cost
+from ai.utils.cost import calculate_cost
+
 
 def test_calculate_cost():
     model = Model(

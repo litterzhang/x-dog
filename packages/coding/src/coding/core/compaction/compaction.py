@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.agent import Agent
 from agent import AgentMessage
+from agent.agent import Agent
 from ai.types import AssistantMessage, TextContent, UserMessage
 
 from coding.core.compaction.utils import split_messages
 from coding.core.defaults import COMPACTION_TARGET_RATIO, MAX_CONTEXT_TOKENS
 from coding.core.prompt_templates import COMPACTION_SUMMARY_TEMPLATE
-
 
 SUMMARIZE_SYSTEM_PROMPT = """\
 You are a conversation summarizer. You will receive a portion of a conversation \
@@ -84,7 +83,8 @@ def _extract_text(msg: Any) -> str:
 async def _summarize(conversation_text: str, agent: Agent) -> str:
     """Use the agent's model to summarize conversation text."""
     import ai
-    from ai.types import Context, UserMessage as AiUserMessage
+    from ai.types import Context
+    from ai.types import UserMessage as AiUserMessage
 
     model = agent.state.model
     if not model:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
+from ai.protocols._transform_messages import (
+    context_to_openai,
+    transform_messages,
+)
 from ai.types import (
     AssistantMessage,
     Context,
@@ -15,11 +17,6 @@ from ai.types import (
     ToolCall,
     ToolResultMessage,
     UserMessage,
-)
-from ai.protocols._transform_messages import (
-    context_to_openai,
-    default_normalize_tool_call_id,
-    transform_messages,
 )
 
 _COPILOT_MODEL = Model(

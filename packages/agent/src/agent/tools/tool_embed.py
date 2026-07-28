@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from ai.types import TextContent
+
 from agent.core import AgentTool, AgentToolResult
+
 
 def create_embed_tool_from_fn(embed_fn: Callable[[str], Awaitable[list[float]]]) -> AgentTool:
     """Create an embed tool backed by an injected embed function.

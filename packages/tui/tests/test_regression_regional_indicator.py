@@ -1,5 +1,5 @@
-import pytest
-from tui.utils import string_width, char_width
+from tui.utils import string_width
+
 
 def test_regional_indicator_width():
     partial_flag = "🇨"

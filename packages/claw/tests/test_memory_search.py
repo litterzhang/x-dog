@@ -1,17 +1,15 @@
 """Tests for hybrid memory search, RRF, and temporal decay."""
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from claw.core.memory.types import MemoryChunk
 from claw.core.memory.indexer import EmbeddingModel
 from claw.core.memory.search import (
     HybridMemorySearch,
     reciprocal_rank_fusion,
     temporal_decay,
 )
+from claw.core.memory.types import MemoryChunk
 
 
 def test_temporal_decay_boosts_recent():

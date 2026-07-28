@@ -4,6 +4,7 @@ from tui.components.settings_list import SettingItem, SettingsList, SettingsList
 from tui.keys import KeyEvent
 from tui.utils import strip_ansi
 
+
 def _make_items() -> list[SettingItem]:
     return [
         SettingItem(id="theme", label="Theme", current_value="dark", values=["dark", "light", "auto"]),

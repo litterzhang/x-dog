@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from agent import AgentMessage
 from ai.types import (
     AssistantMessage,
     TextContent,
@@ -15,7 +16,6 @@ from ai.types import (
     ToolResultMessage,
     UserMessage,
 )
-from agent import AgentMessage
 
 
 def transcript_to_messages(transcript: list[dict]) -> list[AgentMessage]:

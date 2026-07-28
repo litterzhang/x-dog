@@ -122,7 +122,7 @@ def onboard(config_path: str | None) -> None:
             click.echo("  Logging in to GitHub Copilot...")
             try:
                 token = asyncio.run(ai.login("copilot"))
-                click.echo(f"  Logged in successfully.")
+                click.echo("  Logged in successfully.")
                 # Reload runtime with new provider
                 runtime = ai.load()
                 active = runtime.active_providers()
@@ -179,7 +179,7 @@ def onboard(config_path: str | None) -> None:
     click.echo("Step 4: Save Configuration")
     click.echo("-" * 30)
 
-    from claw.config import ClawConfig, save_config, GroupDef
+    from claw.config import ClawConfig, GroupDef, save_config
     config = ClawConfig(
         model=primary_model,
         groups=(GroupDef(id="main", name=agent_name, is_main=True),),
@@ -405,9 +405,15 @@ def login(config_path: str | None, use_weixin: bool, base_url: str) -> None:
     config = _resolve_config(config_path)
 
     from claw.channels.weixin.auth import (
-        DEFAULT_BASE_URL, QrStartResult, QrWaitResult, WeixinAccountData,
-        normalize_account_id, register_account_id, save_account,
-        start_qr_login, wait_qr_login,
+        DEFAULT_BASE_URL,
+        QrStartResult,
+        QrWaitResult,
+        WeixinAccountData,
+        normalize_account_id,
+        register_account_id,
+        save_account,
+        start_qr_login,
+        wait_qr_login,
     )
 
     api_base = base_url or config.weixin_base_url or DEFAULT_BASE_URL

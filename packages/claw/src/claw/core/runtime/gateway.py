@@ -15,12 +15,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from agent import AgentConfig
+from ai.types import StreamOptions
+
 from claw.config import ClawConfig
 from claw.core.runtime.orchestrator import Orchestrator
 from claw.core.types import Group, UserInput
-
-from agent import AgentConfig
-from ai.types import StreamOptions
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,9 @@ def _build_model_and_options(config: ClawConfig):
 
     Returns ``(model_name, stream_fn)``.
     """
-    from claw.core.runtime.group import resolve_model_name
     from agent.helpers import stream_fn_from_provider
+
+    from claw.core.runtime.group import resolve_model_name
 
     model_name = resolve_model_name(config.model)
 

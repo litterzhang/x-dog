@@ -1,5 +1,6 @@
 """Memory types — shared across memory subsystem."""
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 

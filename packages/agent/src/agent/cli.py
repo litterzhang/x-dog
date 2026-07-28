@@ -29,14 +29,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from agent.agent import Agent
-from agent.core import AgentConfig, AgentTool, AgentToolResult
-from agent.events import (
-    MessageUpdateEvent,
-    ToolExecutionEndEvent,
-    ToolExecutionStartEvent,
-    TurnEndEvent,
-)
 from ai.types import (
     AssistantMessage,
     ImageContent,
@@ -44,6 +36,14 @@ from ai.types import (
     TextContent,
 )
 
+from agent.agent import Agent
+from agent.core import AgentConfig, AgentToolResult
+from agent.events import (
+    MessageUpdateEvent,
+    ToolExecutionEndEvent,
+    ToolExecutionStartEvent,
+    TurnEndEvent,
+)
 
 # ---------------------------------------------------------------------------
 # ANSI helpers
@@ -131,6 +131,7 @@ async def _cmd_chat(
 ) -> None:
     """Run an interactive agent chat session."""
     import ai
+
     from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
     from agent.tools.registry import get_registered_tools
 
@@ -368,8 +369,8 @@ class _Session:
         tool_count = len(self.agent.state.tools)
 
         # Estimate token usage from context
-        from ai.utils.overflow import estimate_context_tokens
         from ai.types import Context
+        from ai.utils.overflow import estimate_context_tokens
         ctx = Context(
             system_prompt=self.agent.state.system_prompt,
             messages=tuple(m for m in self.agent.state.messages if hasattr(m, "role")),

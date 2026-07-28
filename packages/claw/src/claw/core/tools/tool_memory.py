@@ -5,10 +5,12 @@ Delegates storage to ``DailyLog`` and ``LongTermMemory`` via the
 Falls back to inline file I/O when the search function is unavailable.
 """
 from __future__ import annotations
-from pathlib import Path
-from agent.tool_def import ToolDef, Param, action
-from claw.core.memory.types import MemoryChunk
 
+from pathlib import Path
+
+from agent.tool_def import Param, ToolDef, action
+
+from claw.core.memory.types import MemoryChunk
 
 MEMORY_MAX_CHARS = 2200
 

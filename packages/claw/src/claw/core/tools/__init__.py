@@ -4,8 +4,9 @@ Agent built-in tools and claw-specific tools without a domain register
 here. Domain tools register in their own ``__init__.py`` and are loaded
 by ``core/__init__.py``.
 """
-from agent.tools import create_current_time_tool, create_bash_tool, create_filesystem_tool
-from claw.core.tools.registry import register, create_tools, registered_names
+from agent.tools import create_bash_tool, create_current_time_tool, create_filesystem_tool
+
+from claw.core.tools.registry import create_tools, register, registered_names
 from claw.core.tools.tool_todo import create_todo_tool
 
 register("current_time", create_current_time_tool)

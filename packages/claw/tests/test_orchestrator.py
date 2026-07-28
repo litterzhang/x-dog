@@ -1,13 +1,13 @@
 """Tests for orchestrator."""
 import asyncio
+
 import pytest
-from pathlib import Path
 from ai.types import AssistantMessage, DoneEvent, Model, ModelCost, StartEvent, TextContent
 from ai.utils.event_stream import EventStream
-from claw.core.runtime.orchestrator import Orchestrator
-from claw.config import ClawConfig
 from claw.channels.tui.channel import TuiChannel
-from claw.core.types import Group, GroupConfig, UserInput, QueueMode
+from claw.config import ClawConfig
+from claw.core.runtime.orchestrator import Orchestrator
+from claw.core.types import Group, GroupConfig, QueueMode, UserInput
 
 _TEST_MODEL = Model(
     id="test/dummy", name="dummy", api="openai-completions",

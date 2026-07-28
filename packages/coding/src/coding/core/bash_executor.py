@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from coding.core.exec_utils import ExecResult, run_async, run_sync

@@ -1,11 +1,9 @@
-import pytest
-from tui.components.text import Text
-from tui.utils import strip_ansi
 
 # ---------- Editor kill ring & undo tests ----------
 
 from tui.components.editor import Editor
 from tui.keys import KeyEvent
+
 
 def test_editor_kill_to_eol():
     """Ctrl+K kills text from cursor to end of line."""
@@ -47,4 +45,3 @@ def test_editor_yank():
 
 # ---------- Image component tests ----------
 
-from tui.components.image import Image

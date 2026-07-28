@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from tui.tui import Component, Container
 from tui.components.text import Text
+from tui.tui import Component, Container
 
-from coding.modes.interactive.theme import Theme
 from coding.modes.interactive.components.assistant_message import AssistantMessageComponent
-from coding.modes.interactive.components.user_message import UserMessageComponent
 from coding.modes.interactive.components.tool_execution import ToolExecutionComponent
+from coding.modes.interactive.components.user_message import UserMessageComponent
+from coding.modes.interactive.theme import Theme
 
 
 class ChatLog(Container):

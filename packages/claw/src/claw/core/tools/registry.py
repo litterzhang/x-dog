@@ -7,7 +7,9 @@ Usage::
     tools = create_tools()              # called by GroupRuntime
 """
 from __future__ import annotations
+
 from typing import Callable
+
 from agent import AgentTool
 
 ToolFactory = Callable[[], AgentTool]

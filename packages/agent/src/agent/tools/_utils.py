@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
-import asyncio
 from pathlib import Path
 
 _MAX_OUTPUT_CHARS = 30_000

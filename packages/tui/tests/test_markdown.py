@@ -1,6 +1,5 @@
-import pytest
 from tui.components.markdown import Markdown
-from tui.utils import strip_ansi
+
 
 def test_markdown_caching():
     md = Markdown(padding_x=0, padding_y=0)

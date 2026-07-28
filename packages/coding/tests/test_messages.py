@@ -8,9 +8,8 @@ from ai.types import (
     ToolResultMessage,
     UserMessage,
 )
-from coding.core.messages import (
-    messages_to_dicts, dicts_to_messages
-)
+from coding.core.messages import dicts_to_messages, messages_to_dicts
+
 
 def test_message_serialization():
     original = [

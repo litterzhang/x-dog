@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any, get_type_hints
 
 from ai.types import TextContent
+
 from agent.core import AgentTool, AgentToolResult
 
 logger = logging.getLogger(__name__)

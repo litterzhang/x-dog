@@ -1,24 +1,14 @@
 """Tests for tui.terminal_image — image dimension parsing and encoding."""
 
 import struct
-from unittest.mock import patch
 
 from tui.terminal_image import (
-    CellDimensions,
-    ImageDimensions,
-    TerminalCapabilities,
-    calculate_image_rows,
-    detect_capabilities,
     encode_iterm2,
     encode_kitty,
     get_gif_dimensions,
-    get_image_dimensions,
-    get_jpeg_dimensions,
     get_png_dimensions,
-    get_webp_dimensions,
-    image_fallback,
-    reset_capabilities_cache,
 )
+
 
 def _make_png(width: int = 100, height: int = 200) -> bytes:
     """Create minimal PNG header bytes."""

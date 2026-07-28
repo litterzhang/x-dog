@@ -14,7 +14,6 @@ from typing import Awaitable, Callable
 
 from claw.channels.weixin.api import WeixinApiClient
 from claw.channels.weixin.types import (
-    MessageItemType,
     MessageType,
     WeixinMessage,
 )

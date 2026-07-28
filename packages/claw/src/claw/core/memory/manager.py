@@ -11,8 +11,8 @@ from claw.core.memory.simple_search import SimpleMemorySearch
 
 # Optional: hybrid search with real embeddings
 try:
-    from claw.core.memory.search import HybridMemorySearch
     from claw.core.memory.indexer import get_embedding_model
+    from claw.core.memory.search import HybridMemorySearch
 
     _HAS_HYBRID_SEARCH = True
 except ImportError:

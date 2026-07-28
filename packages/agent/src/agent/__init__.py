@@ -18,6 +18,16 @@ Quick start::
 """
 
 # -- Core -------------------------------------------------------------------
+# -- Agent class ------------------------------------------------------------
+from agent.agent import Agent, EventListener
+
+# -- Agent loop functions ---------------------------------------------------
+from agent.agent_loop import (
+    agent_loop,
+    agent_loop_continue,
+    run_agent_loop,
+    run_agent_loop_continue,
+)
 from agent.core import (
     AgentConfig,
     AgentContext,
@@ -34,6 +44,9 @@ from agent.core import (
     WebSearchFn,
 )
 
+# -- Event stream -----------------------------------------------------------
+from agent.event_stream import AgentEventStream
+
 # -- Events -----------------------------------------------------------------
 from agent.events import (
     AgentEndEvent,
@@ -49,6 +62,33 @@ from agent.events import (
     TurnStartEvent,
 )
 
+# -- Helpers ------------------------------------------------
+from agent.helpers import (
+    embed_fn_from_provider,
+    stream_fn_from_provider,
+    web_search_fn_from_provider,
+)
+
+# -- ToolDef framework -----------------------------------------------------
+from agent.tool_def import Param, ToolDef, action
+
+# -- Built-in tools ---------------------------------------------------------
+from agent.tools import (
+    create_bash_tool,
+    create_current_time_tool,
+    create_embed_tool_from_fn,
+    create_filesystem_tool,
+    create_web_search_tool_from_fn,
+)
+
+# -- Tool SPI ---------------------------------------------------------------
+from agent.tools.registry import (
+    get_registered_tools,
+    register_tool,
+    registered_tool_names,
+    unregister_tool,
+)
+
 # -- Types (hooks, callbacks, loop config) ----------------------------------
 from agent.types import (
     AfterToolCallContext,
@@ -62,47 +102,6 @@ from agent.types import (
     ConvertToLlmFn,
     GetMessagesFn,
     TransformContextFn,
-)
-
-# -- Agent class ------------------------------------------------------------
-from agent.agent import Agent, EventListener
-
-# -- Agent loop functions ---------------------------------------------------
-from agent.agent_loop import (
-    agent_loop,
-    agent_loop_continue,
-    run_agent_loop,
-    run_agent_loop_continue,
-)
-
-# -- Event stream -----------------------------------------------------------
-from agent.event_stream import AgentEventStream
-
-# -- Helpers ------------------------------------------------
-from agent.helpers import (
-    stream_fn_from_provider,
-    web_search_fn_from_provider,
-    embed_fn_from_provider,
-)
-
-# -- ToolDef framework -----------------------------------------------------
-from agent.tool_def import ToolDef, Param, action
-
-# -- Built-in tools ---------------------------------------------------------
-from agent.tools import (
-    create_bash_tool,
-    create_current_time_tool,
-    create_embed_tool_from_fn,
-    create_filesystem_tool,
-    create_web_search_tool_from_fn,
-)
-
-# -- Tool SPI ---------------------------------------------------------------
-from agent.tools.registry import (
-    register_tool,
-    unregister_tool,
-    get_registered_tools,
-    registered_tool_names,
 )
 
 __all__ = [

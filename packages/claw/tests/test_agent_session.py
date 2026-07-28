@@ -1,29 +1,20 @@
 """Tests for AgentSession — agent turn execution, persistence, tools."""
 import asyncio
+
 import pytest
-from pathlib import Path
+from agent.tools import create_filesystem_tool
 from ai.types import (
-    AssistantMessage, Context, DoneEvent, StartEvent,
-    TextContent, ToolCall, ToolCallDoneEvent, UserMessage,
+    AssistantMessage,
+    DoneEvent,
+    StartEvent,
+    TextContent,
+    ToolCall,
 )
 from ai.utils.event_stream import EventStream
-from agent import (
-    MessageStartEvent, MessageUpdateEvent, MessageEndEvent,
-)
-from claw.core.runtime.session import (
-    AgentSession, TurnResult,
-)
-from claw.core.persistence.transcript_convert import (
-    extract_final_text,
-)
-from claw.core.compaction.transcript import (
-    extract_previous_summary as _extract_previous_summary,
-)
 from claw.core.persistence.transcript_store import TranscriptStore
-from claw.core.runtime.group import GroupRuntime
 from claw.core.prompt import init_workspace
+from claw.core.runtime.group import GroupRuntime
 from claw.core.types import Group, UserInput
-from agent.tools import create_filesystem_tool
 
 # ---------------------------------------------------------------------------
 # Mock stream_fn helpers

@@ -521,7 +521,7 @@ async def sync_models(
 
     # Fetch from API
     try:
-        from ai.vendors.copilot import _get_token_manager, COPILOT_HEADERS
+        from ai.vendors.copilot import COPILOT_HEADERS, _get_token_manager
 
         manager = _get_token_manager()
         jwt, base_url = await manager.get_token()

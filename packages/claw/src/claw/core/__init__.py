@@ -9,8 +9,8 @@ with the tool registry. The boot order is:
 4. ``memory/``   — registers memory tool
 5. ``skills/``   — registers skill tool
 """
-import claw.core.tools      # noqa: F401 — agent builtins
-import claw.core.runtime    # noqa: F401 — group_message
-import claw.core.planning   # noqa: F401 — goal + task
-import claw.core.memory     # noqa: F401 — memory
-import claw.core.skills     # noqa: F401 — skills
+import claw.core.memory  # noqa: F401 — memory
+import claw.core.planning  # noqa: F401 — goal + task
+import claw.core.runtime  # noqa: F401 — group_message
+import claw.core.skills  # noqa: F401 — skills
+import claw.core.tools  # noqa: F401 — agent builtins

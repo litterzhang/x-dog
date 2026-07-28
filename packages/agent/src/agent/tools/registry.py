@@ -14,7 +14,7 @@ External packages can register tools too::
 """
 from __future__ import annotations
 
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from agent.core import AgentTool
@@ -37,7 +37,6 @@ def unregister_tool(name: str) -> None:
 
 def get_registered_tools(config: Any = None) -> list[AgentTool]:
     """Instantiate all registered tools. Skips factories that return None."""
-    from agent.core import AgentTool  # avoid circular import
 
     tools: list[AgentTool] = []
     for factory in _registry.values():

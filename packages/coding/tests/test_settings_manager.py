@@ -1,6 +1,6 @@
-import pytest
-from pathlib import Path
 import json
+from pathlib import Path
+
 from coding.core.settings_manager import SettingsManager
 
 

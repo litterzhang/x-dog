@@ -22,6 +22,7 @@ from typing import Any
 
 from ai.types import SystemPromptBlock
 
+from claw.core.prompt.environment import environment_section
 from claw.core.prompt.sections import (
     action_safety_section,
     identity_section,
@@ -32,12 +33,11 @@ from claw.core.prompt.sections import (
     tone_section,
     tool_usage_section,
 )
-from claw.core.prompt.environment import environment_section
+from claw.core.prompt.templates import GOALS_HEADER
 from claw.core.prompt.workspace import (
     load_memory_section,
     load_workspace_overrides,
 )
-from claw.core.prompt.templates import GOALS_HEADER
 
 
 def build_system_prompt(

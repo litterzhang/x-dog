@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent import AgentTool
 from agent.tools import (
     create_bash_tool,
     create_current_time_tool,
     create_filesystem_tool,
 )
-from agent import AgentTool
 
 
 def get_default_tools(working_dir: Path) -> list[AgentTool]:

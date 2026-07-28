@@ -2,6 +2,7 @@
 import re
 from pathlib import Path
 
+
 class LongTermMemory:
     def __init__(self, workspace_dir: Path):
         self.file_path = workspace_dir / "MEMORY.md"

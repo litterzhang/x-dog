@@ -23,37 +23,30 @@ import random
 import re
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from agent import (
-    AgentEndEvent,
     AgentEvent,
-    AgentStartEvent,
-    MessageEndEvent,
     MessageUpdateEvent,
-    ToolExecutionStartEvent,
     ToolExecutionEndEvent,
+    ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
-    TurnEndEvent,
 )
 from ai.types import (
     AssistantMessage,
     TextContent,
-    ToolCall,
     UserMessage,
 )
-from tui.tui import TUI, Container
 from tui.components.loader import Loader
-from tui.components.spacer import Spacer
 from tui.components.text import Text
+from tui.tui import TUI, Container
 
 from coding.core.agent_session import AgentSession
 from coding.core.slash_commands import execute_command, parse_slash_command
 from coding.modes.interactive.components.chat_log import ChatLog
 from coding.modes.interactive.components.custom_editor import CustomEditorComponent
 from coding.modes.interactive.components.footer import FooterComponent
-from coding.modes.interactive.theme import Theme, create_default_theme
+from coding.modes.interactive.theme import create_default_theme
 
 logger = logging.getLogger(__name__)
 

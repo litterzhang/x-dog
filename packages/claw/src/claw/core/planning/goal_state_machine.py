@@ -11,8 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from claw.core.types import Goal, GoalTask, GoalStatus, TaskStatus, VerificationResult
-
+from claw.core.types import Goal, GoalStatus, GoalTask, TaskStatus
 
 # ---------------------------------------------------------------------------
 # Event types (inputs to the state machine)

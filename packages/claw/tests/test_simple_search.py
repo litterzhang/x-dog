@@ -2,6 +2,7 @@
 import pytest
 from claw.core.memory.simple_search import SimpleMemorySearch
 
+
 @pytest.fixture
 def workspace(tmp_path):
     """Create a workspace with MEMORY.md and daily log files."""

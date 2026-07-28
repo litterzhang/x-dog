@@ -1,20 +1,18 @@
 """Tests for slash commands module."""
 
 import pytest
-
 from agent import AgentConfig
 from ai.types import AssistantMessage as _AM
 from ai.utils.event_stream import EventStream as _ES
 
+
 def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
 
 from coding.core.slash_commands import (
-    CommandResult,
-    BUILTIN_COMMANDS,
     execute_command,
-    list_commands,
     parse_slash_command,
 )
+
 
 def test_parse_slash_command():
     assert parse_slash_command("/help") == ("help", "")

@@ -1,24 +1,26 @@
 """Abstract channel interface."""
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Awaitable
+from typing import Awaitable, Callable
+
 from claw.core.types import GroupInput
 
 OnMessageCallback = Callable[[GroupInput], Awaitable[None]]
 
 class Channel(ABC):
     """Abstract base for messaging channels."""
-    
+
     @property
     @abstractmethod
     def name(self) -> str: ...
-    
+
     @abstractmethod
     async def connect(self) -> None: ...
-    
+
     @abstractmethod
     async def disconnect(self) -> None: ...
-    
+
     @abstractmethod
     async def send_message(self, group_id: str, text: str) -> None: ...
 

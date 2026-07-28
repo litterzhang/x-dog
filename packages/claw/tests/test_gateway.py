@@ -3,17 +3,13 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
-import pytest_asyncio
-
 from ai.types import AssistantMessage, DoneEvent, StartEvent, TextContent
 from ai.utils.event_stream import EventStream
 from claw.config import ClawConfig, GroupDef
-from claw.core.runtime.gateway import GatewayServer, read_pid, _groups_from_config
-
-
+from claw.core.runtime.gateway import GatewayServer, _groups_from_config, read_pid
 
 
 def _make_test_stream_fn(text="test response"):

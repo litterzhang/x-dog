@@ -36,13 +36,22 @@ from ai.types import StreamOptions, TextContent, UserMessage
 
 from claw.core.planning.goal_planner import GoalPlanner, _noop_emit
 from claw.core.planning.goal_state_machine import (
-    GoalActionKind, GoalEvent, GoalEventKind, GoalStateMachine,
+    GoalActionKind,
+    GoalEvent,
+    GoalEventKind,
+    GoalStateMachine,
 )
 from claw.core.planning.goal_tracker import GoalTracker
 from claw.core.planning.goal_workspace import GoalWorkspace
 from claw.core.types import (
-    Goal, GoalNotification, GoalStatus, SystemInput, SystemInputKind, TaskStatus,
-    Verification, VerificationMethod, VerificationResult, VerificationRun,
+    Goal,
+    GoalNotification,
+    GoalStatus,
+    SystemInput,
+    SystemInputKind,
+    TaskStatus,
+    VerificationResult,
+    VerificationRun,
 )
 
 logger = logging.getLogger(__name__)
@@ -563,7 +572,7 @@ class GoalManager:
             else:
                 run = VerificationRun(
                     result=VerificationResult.PASSED,
-                    output=f"Script: PASSED\nConditions: PASSED",
+                    output="Script: PASSED\nConditions: PASSED",
                     timestamp=time.time(),
                 )
         elif script_result:

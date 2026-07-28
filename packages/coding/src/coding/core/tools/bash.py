@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from coding.core.bash_executor import BashExecutor
-from coding.core.defaults import DEFAULT_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS
+from coding.core.defaults import MAX_BASH_TIMEOUT_MS
 from coding.core.tools import AgentTool
 from coding.core.tools.truncate import truncate_output
 

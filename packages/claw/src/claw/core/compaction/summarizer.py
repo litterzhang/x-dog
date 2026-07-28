@@ -16,7 +16,7 @@ from ai.types import (
     UserMessage,
 )
 
-from claw.core.compaction.prompts import build_summary_prompt, SUMMARIZER_SYSTEM_PROMPT
+from claw.core.compaction.prompts import SUMMARIZER_SYSTEM_PROMPT, build_summary_prompt
 
 logger = logging.getLogger(__name__)
 

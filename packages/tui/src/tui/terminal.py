@@ -9,11 +9,10 @@ from __future__ import annotations
 import os
 import signal
 import sys
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TextIO
 
 from tui.utils import char_width
-
 
 # ---------------------------------------------------------------------------
 # Style

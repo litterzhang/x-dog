@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent import AgentMessage, CustomAgentMessage
 from ai.types import (
     AssistantMessage,
     ImageContent,
-    Message,
     TextContent,
     ThinkingContent,
     ToolCall,
@@ -20,8 +20,6 @@ from ai.types import (
     UserContentPart,
     UserMessage,
 )
-from agent import AgentMessage, CustomAgentMessage
-
 
 # ---------------------------------------------------------------------------
 # Serialize agent messages -> dicts (for JSON persistence)

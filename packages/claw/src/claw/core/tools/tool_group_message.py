@@ -4,7 +4,8 @@ This is a runtime-domain tool: the runtime owns the ``send_fn`` callback
 and registers this tool with the tool registry.
 """
 from __future__ import annotations
-from agent.tool_def import ToolDef, Param, action
+
+from agent.tool_def import Param, ToolDef, action
 
 
 class GroupMessageTool(ToolDef):

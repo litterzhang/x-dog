@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Callable
 
 from tui.terminal_image import (
-    ImageDimensions,
     ImageRenderOptions,
     get_capabilities,
     get_image_dimensions,

@@ -8,7 +8,6 @@ import secrets
 import time
 from dataclasses import dataclass
 
-
 # ---------------------------------------------------------------------------
 # PKCE
 # ---------------------------------------------------------------------------
@@ -54,6 +53,7 @@ async def device_code_flow(
     """
     import asyncio
     import sys
+
     import httpx
 
     # Step 1: Start device flow

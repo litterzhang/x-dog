@@ -1,11 +1,9 @@
 """Tests for GoalTracker."""
-import json
-import time
 
 import pytest
-
 from claw.core.planning.goal_tracker import GoalTracker
-from claw.core.types import Goal, GoalStatus, GoalTask, TaskStatus
+from claw.core.types import GoalStatus, TaskStatus
+
 
 @pytest.fixture
 def tracker(tmp_path):

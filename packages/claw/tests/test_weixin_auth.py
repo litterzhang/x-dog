@@ -1,22 +1,16 @@
 """Tests for WeChat auth (account storage + QR login)."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from claw.channels.weixin.auth import (
     WeixinAccountData,
-    list_account_ids,
-    load_account,
-    normalize_account_id,
-    register_account_id,
     save_account,
     start_qr_login,
     wait_qr_login,
 )
+
 
 def test_save_account_permissions(tmp_path):
     """Saved account file should have restricted permissions."""

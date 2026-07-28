@@ -1,6 +1,7 @@
 """Todo tool — ephemeral progress checklist. Uses ToolDef framework."""
 from __future__ import annotations
-from agent.tool_def import ToolDef, Param, action
+
+from agent.tool_def import Param, ToolDef, action
 
 _VALID_STATUSES = frozenset({"pending", "in_progress", "completed"})
 

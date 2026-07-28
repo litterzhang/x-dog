@@ -5,22 +5,20 @@ import json
 
 import httpx
 import pytest
-
 from claw.channels.weixin.api import (
-    build_headers,
     get_updates,
     send_message,
 )
 from claw.channels.weixin.types import (
-    GetUpdatesResp,
+    MessageItem,
     MessageItemType,
     MessageState,
     MessageType,
     SendMessageReq,
     TextItem,
-    MessageItem,
     WeixinMessage,
 )
+
 
 @pytest.mark.asyncio
 async def test_get_updates_with_mocked_response(httpx_mock):

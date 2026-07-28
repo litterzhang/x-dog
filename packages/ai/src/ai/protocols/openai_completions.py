@@ -30,7 +30,8 @@ from typing import Any
 import httpx
 
 from ai.core import AuthResult, BaseProtocol
-from ai.utils.cost import usage_with_cost
+from ai.protocols._message_builder import MessageBuilder
+from ai.protocols._transform_messages import context_to_openai
 from ai.types import (
     AssistantMessage,
     AssistantMessageEvent,
@@ -58,8 +59,7 @@ from ai.types import (
     Usage,
     UsageEvent,
 )
-from ai.protocols._message_builder import MessageBuilder
-from ai.protocols._transform_messages import context_to_openai
+from ai.utils.cost import usage_with_cost
 from ai.utils.event_stream import EventStream
 from ai.utils.json_parse import parse_partial_json
 

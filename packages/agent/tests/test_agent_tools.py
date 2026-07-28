@@ -1,14 +1,13 @@
 """Tests for agent built-in tools (current_time, bash, filesystem with grep/find)."""
 
-import pytest
-from pathlib import Path
 
+import pytest
 from agent.tools import (
     create_bash_tool,
-    create_current_time_tool,
     create_filesystem_tool,
 )
 from ai.types import TextContent
+
 
 def _text(result) -> str:
     """Extract plain text from an AgentToolResult."""

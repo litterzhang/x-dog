@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from tui.tui import Container
 from tui.components.markdown import Markdown
 from tui.components.spacer import Spacer
+from tui.tui import Container
 
 from coding.modes.interactive.theme import Theme
 

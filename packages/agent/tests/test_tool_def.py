@@ -1,9 +1,8 @@
 """Tests for ToolDef — declarative tool definitions with schema generation."""
 
-import pytest
-from typing import Any
 
-from agent.tool_def import ToolDef, Param, action, _infer_params
+import pytest
+from agent.tool_def import Param, ToolDef, action
 
 # ---------------------------------------------------------------------------
 # Type annotation inference

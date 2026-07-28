@@ -4,10 +4,9 @@ Updated to use the new agent_loop(prompts, context, config, stream_fn=...) API.
 """
 
 import asyncio
-import pytest
 from typing import Any
 
-from agent.agent_loop import agent_loop
+import pytest
 from agent import (
     AfterToolCallContext,
     AfterToolCallResult,
@@ -22,6 +21,7 @@ from agent import (
     BeforeToolCallResult,
     ToolExecutionEndEvent,
 )
+from agent.agent_loop import agent_loop
 from ai import (
     AssistantMessage,
     CostBreakdown,
@@ -33,6 +33,7 @@ from ai import (
 )
 from ai.types import DoneEvent, StreamOptions, ToolResultMessage
 from ai.utils.event_stream import EventStream as AiEventStream
+
 
 def create_assistant_message(
     content: tuple | list,

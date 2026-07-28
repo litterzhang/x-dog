@@ -7,22 +7,34 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from agent.tool_def import ToolDef, Param, action
-from agent.core import AgentToolResult
 from ai.types import ImageContent, TextContent
-from agent.tools._utils import (
-    validate_path, truncate, human_size, shell_quote,
-    _MAX_LINE_LENGTH, _DEFAULT_READ_LIMIT,
-    _IMAGE_EXTENSIONS, _IMAGE_MAX_SIZE,
-    _DEFAULT_GREP_MATCH_LIMIT, _GREP_LINE_MAX_CHARS,
-    _DEFAULT_FIND_LIMIT, _DEFAULT_LS_LIMIT,
-)
-from agent.tools._edit_utils import (
-    detect_line_ending, normalize_to_lf, restore_line_endings,
-    strip_bom, apply_edits, generate_diff_string,
-    normalize_for_fuzzy, count_occurrences,
-)
 
+from agent.core import AgentToolResult
+from agent.tool_def import Param, ToolDef, action
+from agent.tools._edit_utils import (
+    apply_edits,
+    count_occurrences,
+    detect_line_ending,
+    generate_diff_string,
+    normalize_for_fuzzy,
+    normalize_to_lf,
+    restore_line_endings,
+    strip_bom,
+)
+from agent.tools._utils import (
+    _DEFAULT_FIND_LIMIT,
+    _DEFAULT_GREP_MATCH_LIMIT,
+    _DEFAULT_LS_LIMIT,
+    _DEFAULT_READ_LIMIT,
+    _GREP_LINE_MAX_CHARS,
+    _IMAGE_EXTENSIONS,
+    _IMAGE_MAX_SIZE,
+    _MAX_LINE_LENGTH,
+    human_size,
+    shell_quote,
+    truncate,
+    validate_path,
+)
 
 # Per-file lock to serialize concurrent edits
 _file_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)

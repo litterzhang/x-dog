@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 
 from claw.channels.base import Channel
 from claw.core.types import UserInput

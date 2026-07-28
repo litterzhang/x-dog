@@ -7,7 +7,7 @@ import json
 import sys
 from typing import Any
 
-from agent import AgentEvent, MessageEndEvent, MessageUpdateEvent
+from agent import MessageEndEvent, MessageUpdateEvent
 from ai.types import AssistantMessage, TextContent, ToolCall
 
 from coding.core.agent_session import AgentSession

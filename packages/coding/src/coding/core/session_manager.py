@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent import AgentMessage
+
 from coding.config import get_sessions_dir
 from coding.core.defaults import SESSION_FILE_PREFIX, SESSION_FILE_SUFFIX
-from agent import AgentMessage
 from coding.core.messages import dicts_to_messages, messages_to_dicts
 
 

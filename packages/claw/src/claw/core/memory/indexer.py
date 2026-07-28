@@ -7,14 +7,14 @@ vector search inside SQLite.
 """
 from __future__ import annotations
 
+import logging
 import struct
 import time
 from pathlib import Path
 from typing import Any
 
-import logging
-
 from agent.core import EmbedFn
+
 from claw.core.memory.types import MemoryChunk
 
 logger = logging.getLogger(__name__)

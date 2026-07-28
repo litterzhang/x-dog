@@ -1,12 +1,11 @@
 """Core types for claw orchestration layer. Uses frozen dataclasses for immutability."""
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
 from agent import AgentConfig
-from ai.types import StreamOptions
-
 
 # ---------------------------------------------------------------------------
 # Queue mode

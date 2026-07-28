@@ -10,10 +10,9 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Any
 
-from claw.core.memory.types import MemoryChunk
 from claw.core.memory.indexer import EmbeddingModel, MemoryIndexer
+from claw.core.memory.types import MemoryChunk
 
 logger = logging.getLogger(__name__)
 

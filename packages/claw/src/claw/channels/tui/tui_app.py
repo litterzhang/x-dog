@@ -29,22 +29,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import queue
 import random
-import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from tui.tui import TUI, Component, Container
-from tui.components.text import Text
-from tui.components.spacer import Spacer
 from tui.components.loader import Loader
-from tui.components.markdown import Markdown, MarkdownTheme, DefaultTextStyle
+from tui.components.markdown import DefaultTextStyle, Markdown, MarkdownTheme
+from tui.components.spacer import Spacer
+from tui.components.text import Text
 from tui.keys import KeyEvent
-from tui.utils import visible_width
+from tui.tui import TUI, Component, Container
 
 logger = logging.getLogger(__name__)
 

@@ -2,6 +2,7 @@
 import datetime
 from pathlib import Path
 
+
 class DailyLog:
     def __init__(self, memory_dir: Path):
         self.memory_dir = memory_dir

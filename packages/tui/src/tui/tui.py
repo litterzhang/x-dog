@@ -32,7 +32,6 @@ from typing import Callable, Literal
 from tui.keys import KeyEvent, is_key_release, parse_key_events
 from tui.stdin_buffer import StdinBuffer
 
-
 # ---------------------------------------------------------------------------
 # Focusable protocol and cursor marker
 # ---------------------------------------------------------------------------

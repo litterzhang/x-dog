@@ -5,22 +5,17 @@ from agent import AgentConfig
 from ai.types import AssistantMessage as _AM
 from ai.utils.event_stream import EventStream as _ES
 
+
 def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))
-from pathlib import Path
-from unittest.mock import MagicMock
 
 from agent.agent import Agent
-from agent import AgentTool as CoreAgentTool, AgentToolResult
 from ai.types import (
     AssistantMessage,
-    Model,
     TextContent,
     UserMessage,
 )
-
 from coding.core.agent_session import AgentSession
-from coding.core.messages import messages_to_dicts, dicts_to_messages
-from coding.core.session_manager import SessionData, SessionManager
+from coding.core.session_manager import SessionManager
 from coding.core.settings_manager import SettingsManager
 
 

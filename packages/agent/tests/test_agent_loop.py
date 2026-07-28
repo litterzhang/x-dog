@@ -13,34 +13,28 @@ Covers:
 """
 
 import asyncio
-import pytest
 from typing import Any
 
-from agent.agent_loop import agent_loop, agent_loop_continue
+import pytest
 from agent import (
     AgentContext,
-    AgentEndEvent,
     AgentEvent,
     AgentLoopConfig,
     AgentMessage,
-    AgentStartEvent,
     AgentTool,
     AgentToolResult,
     MessageEndEvent,
     MessageStartEvent,
-    MessageUpdateEvent,
     StreamFn,
     ToolExecutionEndEvent,
-    ToolExecutionStartEvent,
-    TurnEndEvent,
-    TurnStartEvent,
 )
+from agent.agent_loop import agent_loop, agent_loop_continue
 from ai.types import (
-    StreamOptions,
     AssistantMessage,
     CostBreakdown,
     DoneEvent,
     Message,
+    StreamOptions,
     TextContent,
     ToolCall,
     ToolResultMessage,

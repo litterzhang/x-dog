@@ -1,34 +1,27 @@
 """Tests for WeChat channel."""
 from __future__ import annotations
 
-import asyncio
-import json
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from claw.channels.weixin.channel import (
     WeixinChannel,
     _body_from_item_list,
-    _weixin_user_id_to_group_id,
 )
 from claw.channels.weixin.context_tokens import (
     _token_store,
     get_context_token,
-    set_context_token,
 )
 from claw.channels.weixin.types import (
     MessageItem,
     MessageItemType,
-    MessageState,
     MessageType,
     RefMessage,
     TextItem,
-    VoiceItem,
     WeixinMessage,
 )
 from claw.core.types import UserInput
+
 
 def test_body_from_item_list_with_quoted_text():
     items = (

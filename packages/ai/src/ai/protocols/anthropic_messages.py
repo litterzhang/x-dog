@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 
 from ai.core import AuthResult, BaseProtocol
-from ai.utils.cost import usage_with_cost
+from ai.protocols._message_builder import MessageBuilder
 from ai.types import (
     AssistantMessage,
     AssistantMessageEvent,
@@ -43,17 +43,17 @@ from ai.types import (
     ThinkingDeltaEvent,
     ThinkingDoneEvent,
     ThinkingStartEvent,
+    Tool,
     ToolCall,
     ToolCallDeltaEvent,
     ToolCallDoneEvent,
     ToolCallStartEvent,
     ToolResultMessage,
-    Tool,
     Usage,
-    UserMessage,
     UsageEvent,
+    UserMessage,
 )
-from ai.protocols._message_builder import MessageBuilder
+from ai.utils.cost import usage_with_cost
 from ai.utils.event_stream import EventStream
 from ai.utils.sanitize_unicode import sanitize_unicode
 
@@ -98,7 +98,6 @@ def context_to_anthropic(
     - A list of ``{"type": "text", "text": ..., "cache_control": ...}``
       blocks when ``SystemPromptBlock`` tuples are used
     """
-    from ai.types import SystemPromptBlock
 
     system: Any = None
     if context.system_prompt:

@@ -6,22 +6,20 @@ import json
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
+from ai.types import Model, ModelCost, OpenAICompletionsCompat, ThinkingBudgetRange
 from ai.vendors.copilot._model_sync import (
     _model_from_dict,
     _model_to_dict,
-    _parse_api_model,
-    _parse_api_response,
     _read_cache,
     _write_cache,
     get_synced_model,
     list_models,
     sync_models,
 )
-from ai.types import Model, ModelCost, OpenAICompletionsCompat, ThinkingBudgetRange
+
 
 def _make_api_model(model_id="claude-sonnet-4.6", vendor="Anthropic",
                     context_window=200_000, max_output=32_000,

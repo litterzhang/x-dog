@@ -9,17 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from ai.types import (
-    AssistantMessage,
-    TextContent,
-    TextDeltaEvent,
-)
-from agent import Agent, AgentConfig
 from agent import (
     AfterToolCallContext,
     AfterToolCallResult,
+    Agent,
+    AgentConfig,
     BeforeToolCallContext,
     BeforeToolCallResult,
     MessageEndEvent,
@@ -27,16 +23,23 @@ from agent import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
+from ai.types import (
+    AssistantMessage,
+    TextContent,
+    TextDeltaEvent,
+)
 
-from claw.core.compaction import should_compact, run_compaction, estimate_tokens
-from claw.core.types import GroupInput, SessionMeta, SystemInput, UserInput
-from claw.core.prompt.workspace import run_bootstrap
+from claw.core.compaction import estimate_tokens, run_compaction, should_compact
 from claw.core.persistence.transcript_convert import (
-    transcript_to_messages,
-    messages_to_transcript,
-    extract_final_text,
     estimate_turn_usage as _estimate_turn_usage,
 )
+from claw.core.persistence.transcript_convert import (
+    extract_final_text,
+    messages_to_transcript,
+    transcript_to_messages,
+)
+from claw.core.prompt.workspace import run_bootstrap
+from claw.core.types import GroupInput, SessionMeta, SystemInput, UserInput
 
 if TYPE_CHECKING:
     from claw.core.runtime.group import GroupRuntime
@@ -82,8 +85,8 @@ class AgentSession:
         # Create the long-lived Agent
         effective_stream_fn = runtime.stream_fn
         if effective_stream_fn is None:
-            from agent.helpers import stream_fn_from_provider
             import ai
+            from agent.helpers import stream_fn_from_provider
             effective_stream_fn = stream_fn_from_provider(ai.load())
 
         self._agent = Agent(
@@ -412,6 +415,7 @@ _MAX_RESULT_DISPLAY = 200
 
 # Lines that are just progress noise (pytest dots, etc.)
 import re
+
 _NOISE_LINE_RE = re.compile(r'^[\s.Fsx\-=\[\]%\d/]+$')
 
 

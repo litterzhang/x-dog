@@ -8,22 +8,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.agent import Agent
 from agent import (
+    AgentEndEvent,
     AgentEvent,
     AgentMessage,
-    AgentStartEvent,
-    AgentEndEvent,
-    AgentTool,
     MessageEndEvent,
-    MessageUpdateEvent,
-    TurnEndEvent,
 )
+from agent.agent import Agent
 from ai.types import (
     AssistantMessage,
-    Model,
     TextContent,
-    ThinkingLevel,
     UserMessage,
 )
 
@@ -235,7 +229,7 @@ class AgentSession:
 
     def _rebuild_system_prompt(self) -> None:
         """Rebuild and set the system prompt from config and tools."""
-        from coding.config import RuntimeConfig, PlatformInfo
+        from coding.config import PlatformInfo, RuntimeConfig
 
         # Get tool definitions from the agent's current tools
         tool_defs = [

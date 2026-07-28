@@ -1,7 +1,6 @@
 
-import datetime
-from pathlib import Path
 from claw.core.memory.daily_log import DailyLog
+
 
 def test_append_adds_timestamped_entry(tmp_path):
     log = DailyLog(tmp_path)

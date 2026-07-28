@@ -1,8 +1,7 @@
 """Tests for transcript store (formerly SessionManager)."""
-import json
 import pytest
-from pathlib import Path
 from claw.core.persistence.transcript_store import TranscriptStore
+
 
 @pytest.fixture
 def store(tmp_path):

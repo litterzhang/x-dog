@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from coding.core.session_manager import SessionMeta, SessionManager
+from coding.core.session_manager import SessionManager, SessionMeta
 
 
 def _format_session(meta: SessionMeta, idx: int) -> str:

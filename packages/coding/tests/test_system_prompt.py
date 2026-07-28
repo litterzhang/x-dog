@@ -1,13 +1,13 @@
-from coding.config import RuntimeConfig, PlatformInfo
+from pathlib import Path
+
+from coding.config import PlatformInfo, RuntimeConfig
 from coding.core.system_prompt import (
+    build_environment_section,
     build_system_prompt,
     build_tool_section,
-    build_environment_section,
-    build_file_context_section,
-    _format_parameters
 )
-from pathlib import Path
-    
+
+
 def test_build_tool_section():
     tools = [{
         "name": "my_tool",
@@ -56,17 +56,17 @@ def test_build_system_prompt():
             home_dir=Path("/home/user")
         )
     )
-    
+
     tools = [{"name": "tool1"}]
     file_entries = [{"type": "file_content", "path": "x.txt", "content": "content x"}]
-    
+
     prompt = build_system_prompt(
         config,
         tools,
         file_entries=file_entries,
         extra_context="Extra text here."
     )
-    
+
     assert "interactive coding agent" in prompt
     assert "Environment" in prompt
     assert "Available Tools" in prompt

@@ -26,7 +26,18 @@ import inspect
 import logging
 from typing import Any
 
-from agent.event_stream import AgentEventStream
+from ai.types import (
+    AssistantMessage,
+    Context,
+    Message,
+    StreamOptions,
+    TextContent,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+)
+from ai.utils.validation import validate_tool_arguments
+
 from agent.core import (
     AgentContext,
     AgentMessage,
@@ -34,6 +45,7 @@ from agent.core import (
     AgentToolResult,
     StreamFn,
 )
+from agent.event_stream import AgentEventStream
 from agent.events import (
     AgentEndEvent,
     AgentEvent,
@@ -53,17 +65,6 @@ from agent.types import (
     AgentLoopConfig,
     BeforeToolCallContext,
 )
-from ai.types import (
-    AssistantMessage,
-    Context,
-    Message,
-    StreamOptions,
-    TextContent,
-    Tool,
-    ToolCall,
-    ToolResultMessage,
-)
-from ai.utils.validation import validate_tool_arguments
 
 logger = logging.getLogger(__name__)
 

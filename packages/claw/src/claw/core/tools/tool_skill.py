@@ -1,6 +1,7 @@
 """Skill tool — create, patch, remove, list, load skills (procedural memory)."""
 from __future__ import annotations
-from agent.tool_def import ToolDef, Param, action
+
+from agent.tool_def import Param, ToolDef, action
 
 
 class SkillTool(ToolDef):

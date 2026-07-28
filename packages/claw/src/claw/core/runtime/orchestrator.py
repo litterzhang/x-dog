@@ -5,16 +5,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from claw.core.runtime.session import TurnResult
-from claw.config import ClawConfig
-from claw.core.runtime.group import GroupRuntime
-from claw.core.queue import MessageQueue
-from claw.core.planning.task_scheduler import TaskScheduler
 from claw.channels.base import Channel
+from claw.config import ClawConfig
 from claw.core.chunker import BlockChunker
+from claw.core.planning.task_scheduler import TaskScheduler
+from claw.core.queue import MessageQueue
+from claw.core.runtime.group import GroupRuntime
+from claw.core.runtime.session import TurnResult
 from claw.core.types import (
-    Group, GroupInput, QueueMode,
-    ScheduledTask, SystemInput, SystemInputKind, UserInput,
+    Group,
+    GroupInput,
+    QueueMode,
+    ScheduledTask,
+    SystemInput,
+    SystemInputKind,
+    UserInput,
 )
 
 logger = logging.getLogger(__name__)

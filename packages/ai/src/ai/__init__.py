@@ -11,19 +11,39 @@ Usage::
     runtime.provider("copilot").stream(...)
 """
 
-from ai.api import provider, load, login
-from ai.core import BaseProvider, AuthResult
-from ai.utils.event_stream import EventStream
+from ai.api import load, login, provider
+from ai.core import AuthResult, BaseProvider
 from ai.types import (
-    Model, ModelCost, Context, Usage,
-    ThinkingLevel, ProviderType, StreamOptions,
-    UserMessage, AssistantMessage, ToolResultMessage, Message,
-    TextContent, ImageContent, ThinkingContent, ToolCall,
-    StartEvent, DoneEvent, ErrorEvent, TextDeltaEvent, AssistantMessageEvent,
-    EmbeddingObject, EmbeddingRequest, EmbeddingResponse,
-    CostBreakdown, Tool,
-    SystemPromptBlock, SystemPrompt, system_prompt_text,
+    AssistantMessage,
+    AssistantMessageEvent,
+    Context,
+    CostBreakdown,
+    DoneEvent,
+    EmbeddingObject,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    ErrorEvent,
+    ImageContent,
+    Message,
+    Model,
+    ModelCost,
+    ProviderType,
+    StartEvent,
+    StreamOptions,
+    SystemPrompt,
+    SystemPromptBlock,
+    TextContent,
+    TextDeltaEvent,
+    ThinkingContent,
+    ThinkingLevel,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage,
+    system_prompt_text,
 )
+from ai.utils.event_stream import EventStream
 
 __all__ = [
     # API

@@ -11,7 +11,6 @@ from typing import Callable
 from tui.components.text import Text
 
 
-
 class Loader(Text):
     """Loader component that updates with spinning animation.
 

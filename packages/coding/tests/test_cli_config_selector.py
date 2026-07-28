@@ -1,9 +1,7 @@
 """Tests for the config selector."""
 
-import pytest
-from pathlib import Path
 
-from coding.cli.config_selector import config_selector, _prompt_provider, _prompt_api_key
+from coding.cli.config_selector import _prompt_api_key, _prompt_provider, config_selector
 
 
 def test_prompt_provider(monkeypatch):

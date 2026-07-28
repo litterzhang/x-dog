@@ -24,8 +24,16 @@ import logging
 from dataclasses import replace
 from typing import Any, Callable
 
+from ai.types import (
+    AssistantMessage,
+    ImageContent,
+    Message,
+    StreamOptions,
+    TextContent,
+    UserMessage,
+)
+
 from agent.agent_loop import run_agent_loop, run_agent_loop_continue
-from agent.event_stream import AgentEventStream
 from agent.core import (
     AgentConfig,
     AgentContext,
@@ -38,6 +46,7 @@ from agent.core import (
     ToolExecutionMode,
     WebSearchFn,
 )
+from agent.event_stream import AgentEventStream
 from agent.events import (
     AgentEndEvent,
     AgentEvent,
@@ -54,14 +63,6 @@ from agent.types import (
     BeforeToolCallFn,
     ConvertToLlmFn,
     TransformContextFn,
-)
-from ai.types import (
-    AssistantMessage,
-    ImageContent,
-    Message,
-    StreamOptions,
-    TextContent,
-    UserMessage,
 )
 
 logger = logging.getLogger(__name__)

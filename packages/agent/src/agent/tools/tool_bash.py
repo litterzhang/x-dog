@@ -7,11 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from ai.types import TextContent
+
 from agent.core import AgentTool, AgentToolResult
 from agent.tools._utils import (
-    truncate, try_update_cwd, kill_process_tree,
-    _BASH_TEMP_THRESHOLD, _DEFAULT_BASH_TIMEOUT_MS, _MAX_BASH_TIMEOUT_MS,
+    _BASH_TEMP_THRESHOLD,
+    _DEFAULT_BASH_TIMEOUT_MS,
+    _MAX_BASH_TIMEOUT_MS,
+    kill_process_tree,
+    truncate,
+    try_update_cwd,
 )
+
 
 def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
     """Create a tool that executes bash commands with stateful CWD tracking.

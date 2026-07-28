@@ -1,13 +1,13 @@
 """Tests for the Agent class — constructor, integration with prompt/continue/steering."""
 
 import asyncio
-import pytest
 from typing import Any
 
+import pytest
+from agent import AgentConfig
 from agent.agent import Agent
-from agent import AgentConfig, AgentEvent
-from ai import UserMessage, TextContent, AssistantMessage, Usage, CostBreakdown
-from ai.types import DoneEvent, StartEvent, StreamOptions
+from ai import AssistantMessage, CostBreakdown, TextContent, Usage, UserMessage
+from ai.types import DoneEvent, StartEvent
 from ai.utils.event_stream import EventStream as AiEventStream
 
 # ---------------------------------------------------------------------------
