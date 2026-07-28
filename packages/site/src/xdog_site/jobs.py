@@ -6,16 +6,17 @@ unbounded LLM work.  Uploaded workflows are NOT sanitised — script nodes execu
 arbitrary code, so this endpoint trusts its caller; the single-slot guard is the
 only throttle.  Built-in examples ship in the repo and are trusted.
 
-Each run's node/loop-level interaction is captured into ``Job.log`` by attaching
-a scoped logging handler to the ``flow`` / ``agent`` / ``ai`` loggers for the
-duration of the run (the executor has no event hook), so the UI can show the
-back-and-forth, not just the final outputs.
+Each run's node-level interaction is captured into ``Job.log`` via flow's own
+structured event stream (P3): ``execute(on_event=...)`` delivers typed
+NodeStarted / NodeFinished / NodeFailed events — carrying per-node duration and
+(for agent nodes) token usage — which we format into human-readable log lines.
+No stdlib-logging scraping or thread filtering needed: the callback fires on the
+run's own event loop and only for this run's nodes.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import secrets
 import threading
 import time
@@ -23,46 +24,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from flow.events import FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.executor import execute
 from flow.models import WorkflowDef
 
 # Per-run wall-clock ceiling (seconds) handed to execute(timeout=...).
 _RUN_TIMEOUT = 900.0
 
-# Which stdlib loggers to capture, and the curated message prefixes worth showing
-# as an execution log (the executor logs these at DEBUG).  Bounds the log to the
-# node/loop-level interaction trace rather than the full debug firehose.  Only
-# executor prefixes: the loader runs before the job starts (on a different thread)
-# and model-sync is background noise, so neither belongs in a run's own log.
-_LOG_LOGGERS = ("flow", "agent", "ai")
-_LOG_PREFIXES = ("Running node", "Running script node", "Loop edge")
 _LOG_CAP = 500  # keep at most this many lines per job
 
 
-class _JobLogHandler(logging.Handler):
-    """Buffers curated log lines into a job's ``log`` list, scoped to one run.
-
-    The handler is attached to the process-wide ``flow`` / ``agent`` / ``ai``
-    loggers, so it would otherwise also see records emitted by *other* request
-    threads (e.g. a concurrent ``/load`` logging "Loading workflow …").  Because
-    each job runs its executor on its own dedicated thread, we filter to records
-    emitted on that thread — the only ones that belong to this run.
-    """
-
-    def __init__(self, sink: list[str], thread_id: int) -> None:
-        super().__init__(level=logging.DEBUG)
-        self._sink = sink
-        self._thread_id = thread_id
-        self.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.thread != self._thread_id:
-            return  # a record from another request/worker thread — not this run
-        msg = record.getMessage()
-        if not msg.startswith(_LOG_PREFIXES):
-            return
-        if len(self._sink) < _LOG_CAP:
-            self._sink.append(self.format(record))
+def _format_event(ev: FlowEvent) -> str | None:
+    """Render a P3 lifecycle event as one human-readable execution-log line."""
+    if isinstance(ev, NodeStarted):
+        return f"▶ {ev.node_id}"
+    if isinstance(ev, NodeFinished):
+        tok = f", {ev.tokens} tok" if ev.tokens else ""
+        return f"✓ {ev.node_id} ({ev.duration_s:.1f}s{tok})"
+    if isinstance(ev, NodeFailed):
+        return f"✗ {ev.node_id} ({ev.duration_s:.1f}s): {ev.error}"
+    return None
 
 
 @dataclass
@@ -135,13 +116,11 @@ class JobRunner:
         base_dir: Path | None,
         web_search_fn_factory: Callable[[str], Any] | None,
     ) -> None:
-        handler = _JobLogHandler(job.log, threading.get_ident())
-        loggers = [logging.getLogger(name) for name in _LOG_LOGGERS]
-        saved_levels = [lg.level for lg in loggers]
-        for lg in loggers:
-            lg.addHandler(handler)
-            if lg.level == logging.NOTSET or lg.level > logging.DEBUG:
-                lg.setLevel(logging.DEBUG)
+        def _on_event(ev: FlowEvent) -> None:
+            line = _format_event(ev)
+            if line is not None and len(job.log) < _LOG_CAP:
+                job.log.append(line)
+
         try:
             result = asyncio.run(
                 execute(
@@ -151,6 +130,7 @@ class JobRunner:
                     timeout=_RUN_TIMEOUT,
                     base_dir=base_dir,
                     inputs=inputs,
+                    on_event=_on_event,
                 )
             )
             job.result = result.runtime["out"]
@@ -159,9 +139,6 @@ class JobRunner:
             job.error = f"{type(exc).__name__}: {exc}"
             job.state = "error"
         finally:
-            for lg, lvl in zip(loggers, saved_levels, strict=True):
-                lg.removeHandler(handler)
-                lg.setLevel(lvl)
             job.finished = time.monotonic()
             self._current = None
 

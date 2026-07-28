@@ -304,6 +304,8 @@ def test_havefun_status_includes_execution_log() -> None:
         time.sleep(0.2)
     job = runner.get(job_id)
     assert job is not None and job.state == "done"
-    # the captured log names the agent nodes as they run
+    # the log is built from flow's P3 structured event stream (on_event), formatted
+    # into per-node lines: "▶ <node>" on start, "✓ <node> (<dur>s[, <n> tok])" on finish.
     assert job.log
-    assert any("Running node 'draft'" in line for line in job.log)
+    assert any(line.startswith("▶ draft") for line in job.log)
+    assert any(line.startswith("✓ draft") for line in job.log)
