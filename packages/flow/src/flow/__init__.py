@@ -9,6 +9,7 @@ from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid, to_svg
 from flow.loader import load_workflow
 from flow.models import WorkflowDef
+from flow.telemetry import MetricsCollector, NodeMetrics, RunMetrics
 
 __all__ = [
     "WorkflowDef",
@@ -23,4 +24,7 @@ __all__ = [
     "workflow_to_svg_document",
     "read_workflow_from_svg",
     "dump_workflow_svg",
+    "MetricsCollector",
+    "NodeMetrics",
+    "RunMetrics",
 ]
