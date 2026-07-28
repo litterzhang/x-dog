@@ -156,6 +156,8 @@ async def _run_agent(
                     if isinstance(part, TextContent):
                         accumulated.append(part.text)
                 _u = msg.usage
+                # Mirrors flow.executor's token accounting: some providers leave
+                # total_tokens at 0 but fill input/output, so fall back to their sum.
                 _node_tokens += _u.total_tokens or (_u.input + _u.output)
     if output_schema:
         _result_obj = _sink.get("result")

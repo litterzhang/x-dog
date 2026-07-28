@@ -58,7 +58,13 @@ async def _retry_wait(node_id: str, attempt: int, max_attempts: int, backoff: fl
 
 
 def _memo_key(node_id: str, ins: dict[str, str]) -> str:
-    """Return a deterministic memo key for (node_id, input namespace)."""
+    """Return a deterministic memo key for (node_id, input namespace).
+
+    codegen emits an equivalent inline f-string (see ``_memo_hit_block``); the two
+    forms are kept in lock-step by the interpret==compile parity tests rather than a
+    shared helper — the generated module must stay self-contained (no import back
+    into flow's runtime), so the digest logic is intentionally expressed twice.
+    """
     digest = hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()
     return f"{node_id}:{digest}"
 
@@ -282,7 +288,13 @@ async def execute(
             tokens_used = int(snap.get("tokens_used", 0))
 
     def _save_checkpoint() -> None:
-        """Persist a snapshot of the current run state (called inside _state_lock)."""
+        """Persist a snapshot of the current run state (called inside _state_lock).
+
+        The generated module's checkpoint (templates/runtime.py.tmpl) shares this
+        schema EXCEPT ``loop_counters``: codegen compiles bounded loops to native
+        ``for`` ranges with no runtime counter to persist, so cross-engine resume
+        mid-loop is a codegen limitation, not a schema bug.
+        """
         if not _ckpt_active:
             return
         assert checkpoint is not None and run_id is not None
