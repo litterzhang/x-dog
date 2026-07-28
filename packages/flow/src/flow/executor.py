@@ -43,14 +43,6 @@ async def _wrap_sync(value: Any) -> Any:
     return value
 
 
-def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
-    """Parse 'module:func' and import the callable."""
-    module_name, _, func_name = run.partition(":")
-    module = importlib.import_module(module_name)
-    fn: Callable[..., Awaitable[str]] = getattr(module, func_name)
-    return fn
-
-
 def _memo_key(node_id: str, ins: dict[str, str]) -> str:
     """Return a deterministic memo key for (node_id, input namespace)."""
     digest = hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()
@@ -145,8 +137,11 @@ async def execute(
         Registry of :class:`~agent.core.AgentTool` objects available to agent nodes.
         Defaults to :func:`~flow.tools.default_registry`.
     script_resolver:
-        Callable that maps a ``'module:func'`` string to an async callable for script nodes.
-        Defaults to the built-in importlib-based resolver.
+        Optional override mapping a script node's ``'module:func'`` run-ref to its
+        callable. When omitted, script nodes resolve via the built-in
+        :func:`_resolve_script_fn` (inline ``code`` is ``exec``'d; a ``run`` ref is
+        imported with the workflow's own directory on ``sys.path``). Inline-``code``
+        nodes always use the built-in resolver regardless of this override.
     inputs:
         Optional run-time values for the ``$in`` source's output ports.  These
         override the workflow's ``state`` defaults key-by-key (a key absent from

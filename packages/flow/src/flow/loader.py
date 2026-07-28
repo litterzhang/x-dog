@@ -100,10 +100,16 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
     if raw_on_error not in ("fail", "isolate"):
         raise WorkflowValidationError(f"Node {node_id!r}: on_error must be 'fail' or 'isolate'")
     on_error: Literal["fail", "isolate"] = raw_on_error
+    raw_type = data.get("type", "agent")
+    if raw_type not in ("agent", "script", "human"):
+        raise WorkflowValidationError(
+            f"Node {node_id!r}: type must be 'agent', 'script', or 'human', got {raw_type!r}"
+        )
+    node_type: Literal["agent", "script", "human"] = raw_type
     signal = str(data.get("signal", ""))
     return NodeDef(
         id=node_id,
-        type=data.get("type", "agent"),
+        type=node_type,
         signal=signal,
         model=data.get("model"),
         system_prompt=data.get("system_prompt", ""),
@@ -128,7 +134,22 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
         when = _parse_condition(data["when"])
     loop_max: int | None = None
     if "loop" in data and isinstance(data["loop"], dict):
-        loop_max = int(data["loop"]["max"])
+        if "max" not in data["loop"]:
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: loop must declare an integer 'max'"
+            )
+        try:
+            loop_max = int(data["loop"]["max"])
+        except (TypeError, ValueError):
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: loop 'max' must be an integer,"
+                f" got {data['loop']['max']!r}"
+            ) from None
+        if loop_max <= 0:
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: loop 'max' must be positive,"
+                f" got {loop_max}"
+            )
     raw_map = data.get("map", {})
     mapping: tuple[tuple[str, str], ...]
     if isinstance(raw_map, dict) and raw_map:

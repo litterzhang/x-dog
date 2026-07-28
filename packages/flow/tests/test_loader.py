@@ -64,6 +64,67 @@ def test_cyclic_edge_with_loop_max_ok() -> None:
     assert wf.edges[1].loop_max == 3
 
 
+def test_unknown_node_type_raises() -> None:
+    """A node type outside agent/script/human is rejected at parse time."""
+    data = {
+        "name": "bad-type",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a", "type": "scripts"}],  # typo'd type
+        "edges": [],
+    }
+    with pytest.raises(WorkflowValidationError, match="type must be"):
+        parse_workflow(data)
+
+
+def test_loop_missing_max_raises_validation_error() -> None:
+    """A loop edge without 'max' raises WorkflowValidationError, not a raw KeyError."""
+    data = {
+        "name": "loop-no-max",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "a", "loop": {}},  # missing max
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="loop must declare"):
+        parse_workflow(data)
+
+
+def test_loop_non_integer_max_raises_validation_error() -> None:
+    """A non-integer loop 'max' raises WorkflowValidationError, not a raw ValueError."""
+    data = {
+        "name": "loop-bad-max",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "a", "loop": {"max": "abc"}},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="must be an integer"):
+        parse_workflow(data)
+
+
+def test_loop_nonpositive_max_raises_validation_error() -> None:
+    """A loop 'max' of zero (or negative) is rejected — a bounded loop runs >= 1 time."""
+    data = {
+        "name": "loop-zero-max",
+        "provider": "anthropic",
+        "entry": "a",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "a", "loop": {"max": 0}},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="must be positive"):
+        parse_workflow(data)
+
+
 def test_duplicate_node_ids_raises() -> None:
     data = {
         "name": "dup",
