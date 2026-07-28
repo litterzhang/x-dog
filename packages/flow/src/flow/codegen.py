@@ -462,9 +462,9 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     if node.tools:
         tool_names = ", ".join(f'"{t}"' for t in node.tools)
         lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
-        core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr, _tools)'
+        core_call = f'    result, _node_tokens = await _run_agent(provider, "{model}", _sys, _usr, _tools)'
     else:
-        core_call = f'    result = await _run_agent(provider, "{model}", _sys, _usr)'
+        core_call = f'    result, _node_tokens = await _run_agent(provider, "{model}", _sys, _usr)'
     lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
     lines.append("    _t0 = time.monotonic()")
     lines.append("    try:")
@@ -475,6 +475,10 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         lines.append(f"        _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
     for tl in _render_node_tail(node, wf):
         lines.append("    " + tl)
+    lines.append("        global _TOKENS_USED")
+    lines.append("        _TOKENS_USED += _node_tokens")
+    lines.append("        if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:")
+    lines.append("            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]")
     lines.append(f"        _COMPLETED.add({node.id!r})")
     if node.deterministic:
         lines.append(f"        _MEMO[_mk] = dict(_OUT[{node.id!r}])")
@@ -722,12 +726,19 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             extra.setdefault(module, []).append(f"{func} as _script_{safe}")
 
     flow_tools_aliases = extra.pop("flow.tools", [])
-    lines: list[str] = ["from flow.tools import default_registry"]
+    has_agent_nodes = any(n.type not in ("script", "human") for n in wf.nodes)
+    _tools_line = (
+        "from flow.tools import bind_tool, default_registry"
+        if wf.tool_refs
+        else "from flow.tools import default_registry"
+    )
+    if has_agent_nodes:
+        lines: list[str] = ["from flow.errors import WorkflowBudgetExceeded", _tools_line]
+    else:
+        lines = [_tools_line]
 
-    # Custom-tool manifest: import each ref plus the bind_tool helper used to
-    # register it under its manifest name (see _render_tool_registration).
+    # Custom-tool manifest: import each ref.
     if wf.tool_refs:
-        lines[0] = "from flow.tools import bind_tool, default_registry"
         for i, (_name, ref) in enumerate(wf.tool_refs):
             module, attr = ref.rsplit(":", 1)
             lines.append(f"from {module} import {attr} as _tool_{i}")
@@ -740,14 +751,17 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
         if any(n.output_ports for n in script_nodes):
             coercers.append("to_state")
         if coercers:
-            lines.insert(0, f"from flow.coerce import {', '.join(coercers)}")
-        lines.insert(1 if coercers else 0, "from flow.runtime import RuntimeContext")
+            lines.append(f"from flow.coerce import {', '.join(coercers)}")
+        lines.append("from flow.runtime import RuntimeContext")
 
     for alias in flow_tools_aliases:
         lines.append(f"from flow.tools import {alias}")
     for module, aliases in sorted(extra.items()):
         for alias in aliases:
             lines.append(f"from {module} import {alias}")
+
+    # Sort all lines to satisfy ruff import ordering within the third-party block.
+    lines = sorted(lines)
 
     return "\n".join(lines) + "\n"
 

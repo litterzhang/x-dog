@@ -25,7 +25,7 @@ from ai.types import AssistantMessage, TextContent
 from flow.checkpoint import CheckpointStore
 from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
-from flow.errors import WorkflowExecutionError, WorkflowPaused
+from flow.errors import WorkflowBudgetExceeded, WorkflowExecutionError, WorkflowPaused
 from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.interpolate import interpolate
 from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef
@@ -121,6 +121,7 @@ async def execute(
     on_event: EventCallback | None = None,
     max_concurrency: int | None = None,
     signals: set[str] | None = None,
+    max_tokens: int | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -194,6 +195,7 @@ async def execute(
     outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
     _signals: set[str] = signals if signals is not None else set()
+    tokens_used = 0
 
     # Semaphore for concurrency cap (None = unlimited).
     _eff_cap = max_concurrency if max_concurrency is not None else wf.max_concurrency
@@ -552,6 +554,12 @@ async def execute(
             duration_s=time.monotonic() - _t0_agent,
             tokens=total_tokens,
         ))
+        # Budget check — must be done under the state lock to avoid races.
+        async with _state_lock:
+            nonlocal tokens_used
+            tokens_used += total_tokens
+            if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
+                raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
         """Coerce a script's return value into the node's output port(s)."""
@@ -692,8 +700,8 @@ async def execute(
         for n, res in zip(ready, results):
             if not isinstance(res, BaseException):
                 continue
-            # WorkflowPaused is not a node failure — propagate immediately.
-            if isinstance(res, WorkflowPaused):
+            # WorkflowPaused / WorkflowBudgetExceeded are not node failures — propagate immediately.
+            if isinstance(res, (WorkflowPaused, WorkflowBudgetExceeded)):
                 raise res
             node_def = node_map[n]
             if node_def.on_error == "isolate":
@@ -734,5 +742,6 @@ async def execute(
         "out": out_live,
         "failed": failed,
         "memo": memo,
+        "tokens_used": tokens_used,
     }
     return ExecResult(runtime=runtime)
