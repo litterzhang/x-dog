@@ -290,6 +290,26 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     lines.append(f'    if {node.id!r} in _ISOLATED:')
     lines.append('        return')
     lines += _render_ins(node, wf)
+    # Determinism memo hit guard — emitted only for deterministic nodes.
+    if node.deterministic:
+        ins_expr3 = "dict(ins)" if node.input_ports else "{}"
+        lines.append(
+            f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
+            f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501'
+        )
+        lines.append('    if _mk in _MEMO:')
+        lines.append(f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))')
+        lines.append('        _t0_memo = time.monotonic()')
+        lines.append(f'        _OUT[{node.id!r}] = dict(_MEMO[_mk])')
+        lines.append(f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
+                     f' "in": {ins_expr3}, "out": dict(_OUT[{node.id!r}])}})')
+        lines.append(f'        _COMPLETED.add({node.id!r})')
+        lines.append('        _save_checkpoint()')
+        lines.append(
+            f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
+            f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501'
+        )
+        lines.append('        return')
     lines.append(
         f'    _ctx = RuntimeContext(step=len(_STACK), node_id="{_ESC(node.id)}", workflow_name="{_ESC(wf.name)}")'
     )
@@ -318,6 +338,8 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     for tl in _render_node_tail(node, wf):
         lines.append("    " + tl)
     lines.append(f'        _COMPLETED.add({node.id!r})')
+    if node.deterministic:
+        lines.append(f'        _MEMO[_mk] = dict(_OUT[{node.id!r}])')
     lines.append('        _save_checkpoint()')
     _finished_log = (
         f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
@@ -415,6 +437,26 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     lines.append(f"    if {node.id!r} in _ISOLATED:")
     lines.append("        return")
     lines += _render_ins(node, wf)
+    # Determinism memo hit guard — emitted only for deterministic nodes.
+    if node.deterministic:
+        ins_expr3 = "dict(ins)" if node.input_ports else "{}"
+        lines.append(
+            f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
+            f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501'
+        )
+        lines.append("    if _mk in _MEMO:")
+        lines.append(f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))')
+        lines.append("        _t0_memo = time.monotonic()")
+        lines.append(f"        _OUT[{node.id!r}] = dict(_MEMO[_mk])")
+        lines.append(f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
+                     f' "in": {ins_expr3}, "out": dict(_OUT[{node.id!r}])}})')
+        lines.append(f"        _COMPLETED.add({node.id!r})")
+        lines.append("        _save_checkpoint()")
+        lines.append(
+            f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
+            f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501'
+        )
+        lines.append("        return")
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
     if node.tools:
@@ -434,6 +476,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     for tl in _render_node_tail(node, wf):
         lines.append("    " + tl)
     lines.append(f"        _COMPLETED.add({node.id!r})")
+    if node.deterministic:
+        lines.append(f"        _MEMO[_mk] = dict(_OUT[{node.id!r}])")
     lines.append("        _save_checkpoint()")
     _finished_log = (
         f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
@@ -777,6 +821,9 @@ def generate(wf: WorkflowDef) -> str:
         signals_boilerplate = "\n_SIGNALS: set[str] = set()"
         signals_main_init = ""
 
+    has_deterministic = any(n.deterministic for n in wf.nodes)
+    hashlib_import = "import hashlib\n" if has_deterministic else ""
+
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
         in_seed=_render_in_seed(wf),
@@ -789,5 +836,6 @@ def generate(wf: WorkflowDef) -> str:
         concurrency_boilerplate=concurrency_boilerplate,
         signals_boilerplate=signals_boilerplate,
         signals_main_init=signals_main_init,
+        hashlib_import=hashlib_import,
     )
     return result

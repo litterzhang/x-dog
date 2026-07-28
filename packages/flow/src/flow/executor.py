@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib
 import inspect
 import json
@@ -48,6 +49,12 @@ def _default_script_resolver(run: str) -> Callable[..., Awaitable[str]]:
     module = importlib.import_module(module_name)
     fn: Callable[..., Awaitable[str]] = getattr(module, func_name)
     return fn
+
+
+def _memo_key(node_id: str, ins: dict[str, str]) -> str:
+    """Return a deterministic memo key for (node_id, input namespace)."""
+    digest = hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()
+    return f"{node_id}:{digest}"
 
 
 def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
@@ -235,6 +242,8 @@ async def execute(
     completed: set[str] = set()
     # Per-edge loop fire counter (loop_max edges only)
     loop_counters: dict[EdgeDef, int] = {}
+    # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
+    memo: dict[str, dict[str, str]] = {}
 
     # -----------------------------------------------------------------------
     # Checkpoint restore — only when both checkpoint store and run_id given.
@@ -256,6 +265,9 @@ async def execute(
             stack = snap.get("stack", [])
             out_live = snap.get("out_live", {})
             step_counter = len(stack)
+            raw_memo = snap.get("memo", {})
+            if isinstance(raw_memo, dict):
+                memo = {str(k): dict(v) for k, v in raw_memo.items() if isinstance(v, dict)}
 
     def _save_checkpoint() -> None:
         """Persist a snapshot of the current run state (called inside _state_lock)."""
@@ -269,6 +281,7 @@ async def execute(
             "loop_counters": lc_serial,
             "stack": stack,
             "out_live": out_live,
+            "memo": memo,
         }
         checkpoint.save(run_id, snap)
 
@@ -319,6 +332,22 @@ async def execute(
 
         async with _state_lock:
             ins = _build_inputs(node_id)
+
+        # Determinism memo hit: reuse stored output keyed by (node_id, hash(inputs)).
+        if node.deterministic:
+            _mk = _memo_key(node_id, ins)
+            if _mk in memo:
+                step = await _reserve_step()
+                _emit(NodeStarted(node_id=node_id, step=step))
+                _t0_memo = time.monotonic()
+                async with _state_lock:
+                    outputs[node_id] = dict(memo[_mk])
+                await _record_frame(node_id, ins, step)
+                async with _state_lock:
+                    completed.add(node_id)
+                    _save_checkpoint()
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_memo, tokens=0))
+                return
 
         if node.type == "human":
             if node.signal in _signals:
@@ -388,6 +417,9 @@ async def execute(
                 ))
                 raise last_exc
             await _record_frame(node_id, ins, step)
+            async with _state_lock:
+                if node.deterministic:
+                    memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
             completed.add(node_id)
             _save_checkpoint()
             _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
@@ -506,6 +538,9 @@ async def execute(
                 outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_text
 
         await _record_frame(node_id, ins, agent_step)
+        async with _state_lock:
+            if node.deterministic:
+                memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
         completed.add(node_id)
         _save_checkpoint()
         _emit(NodeFinished(
@@ -694,5 +729,6 @@ async def execute(
         "in": outputs[IN_NODE_ID],
         "out": out_live,
         "failed": failed,
+        "memo": memo,
     }
     return ExecResult(runtime=runtime)

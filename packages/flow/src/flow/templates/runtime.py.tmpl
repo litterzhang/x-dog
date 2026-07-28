@@ -1,7 +1,7 @@
 """$workflow_name — generated workflow module."""
 
 import asyncio
-import json
+${hashlib_import}import json
 import logging
 import os
 import tempfile
@@ -28,6 +28,8 @@ _COMPLETED: set[str] = set()
 # Isolation tracking: nodes whose failure was captured (on_error="isolate").
 _ISOLATED: set[str] = set()
 _FAILED: dict[str, str] = {}
+# Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
+_MEMO: dict[str, dict[str, str]] = {}
 # Signals delivered to this run (human nodes check against this set).
 $signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
@@ -68,6 +70,11 @@ def _load_checkpoint() -> None:
     _outp = _snap.get("out_live")
     if isinstance(_outp, dict):
         _OUTPUT.update(_outp)  # type: ignore[arg-type]
+    _mem = _snap.get("memo")
+    if isinstance(_mem, dict):
+        for _mk, _mv in _mem.items():
+            if isinstance(_mv, dict):
+                _MEMO[str(_mk)] = dict(_mv)  # type: ignore[arg-type]
 
 
 def _save_checkpoint() -> None:
@@ -80,6 +87,7 @@ def _save_checkpoint() -> None:
         "completed": list(_COMPLETED),
         "stack": _STACK,
         "out_live": _OUTPUT,
+        "memo": _MEMO,
     }
     _fd, _tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
     try:
@@ -131,6 +139,7 @@ $main_body
             "in": _OUT[$in_node_id],
             "out": _OUTPUT,
             "failed": _FAILED,
+            "memo": _MEMO,
         }
     )
     print(json.dumps(_RUNTIME["out"] if _RUNTIME["out"] else _RUNTIME, indent=2, ensure_ascii=False))

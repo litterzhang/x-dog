@@ -81,6 +81,9 @@ class NodeDef:
     # Failure isolation: "fail" = propagate (default/fail-fast); "isolate" = capture
     # and continue sibling branches.
     on_error: Literal["fail", "isolate"] = "fail"
+    # Determinism flag: when True, output is memoised keyed by (node_id, hash(inputs))
+    # so the node is skipped on retry/resume when the same input was already processed.
+    deterministic: bool = False
 
     @property
     def input_names(self) -> tuple[str, ...]:

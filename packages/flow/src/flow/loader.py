@@ -118,6 +118,7 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         web_search_model=data.get("web_search_model"),
         retry=retry,
         on_error=on_error,
+        deterministic=bool(data.get("deterministic", False)),
     )
 
 
