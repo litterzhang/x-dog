@@ -246,13 +246,14 @@ EXAMPLES: tuple[Example, ...] = (
 # --- Gaps vs production-grade + roadmap --------------------------------------
 
 GAPS: tuple[Gap, ...] = (
-    Gap("Failure isolation", "A fan-out uses asyncio.gather, which is fail-fast: one failing branch cancels "
-        "its siblings. There is no per-branch isolation or compensation."),
-    Gap("Concurrency limits", "The ready set launches with no semaphore or worker-pool cap, so a very wide "
-        "graph can burst well past provider rate limits."),
-    Gap("Human-in-the-loop", "No first-class pause/await-signal so a run can stop for approval and resume."),
-    Gap("Idempotency", "No exactly-once guarantees; a retried node with side effects could repeat them. The "
-        "reference daemon adds its own deterministic commit logic instead."),
+    Gap("Distributed execution", "Everything runs in one asyncio event loop in one process. There is no "
+        "worker pool across machines, no queue, and no scheduling of a single graph across hosts."),
+    Gap("Metrics & tracing export", "The P3 event stream is in-process; there is no built-in exporter to "
+        "OpenTelemetry / Prometheus / a trace backend, so run telemetry still has to be wired up by the caller."),
+    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) but there is no enforced per-run cost "
+        "ceiling or provider quota that aborts a run before it overspends."),
+    Gap("Compensation / rollback", "P4.1 isolates a failed branch, but there is no saga-style compensation to "
+        "undo the side-effects of branches that already committed before the failure."),
 )
 
 ROADMAP: tuple[Phase, ...] = (
@@ -281,11 +282,33 @@ ROADMAP: tuple[Phase, ...] = (
         "The foundation for observability and live TUI/web progress. Also "
         "implemented by the tools/autoenrich workflow itself.",
     ), done=True),
-    Phase("P4", "Durability & human-in-the-loop", (
-        "Per-branch failure isolation and compensation.",
-        "Concurrency caps (semaphore / worker pool) to respect provider limits.",
-        "Pause/await-signal nodes for approvals; idempotency keys for safe retries.",
-    )),
+    Phase("P4.1", "Per-branch failure isolation", (
+        "Done: a node marked on_error:\"isolate\" whose branch fails is captured "
+        "(its error recorded in runtime[\"failed\"]) and its downstream sub-tree "
+        "skipped, while independent sibling branches still run to completion. The "
+        "default on_error:\"fail\" keeps the fail-fast semantics.",
+        "Implemented by the tools/autoenrich workflow itself; codegen mirrors it.",
+    ), done=True),
+    Phase("P4.2", "Concurrency caps", (
+        "Done: a workflow (or execute() override) can cap how many nodes run at "
+        "once via an asyncio.Semaphore, so a wide fan-out can't burst past a "
+        "provider's rate limits. Unlimited by default.",
+        "Implemented by the tools/autoenrich workflow itself; codegen mirrors it.",
+    ), done=True),
+    Phase("P4.3", "Human-in-the-loop", (
+        "Done: a human node awaits a named signal — absent, the run checkpoints and "
+        "raises WorkflowPaused (the generated module exits with a PAUSED line); "
+        "deliver the signal and resume with the same run id to pass the gate. Real "
+        "stop-for-approval built on P2 checkpointing.",
+        "Implemented by the tools/autoenrich workflow itself; codegen mirrors it.",
+    ), done=True),
+    Phase("P4.4", "Deterministic nodes (safe retries)", (
+        "Done: a node marked deterministic:true memoises its output keyed by "
+        "(node id, input hash), so a retry or resume with the same input reuses the "
+        "result instead of repeating a side-effect. Non-deterministic nodes (the "
+        "default) always run.",
+        "Implemented by the tools/autoenrich workflow itself; codegen mirrors it.",
+    ), done=True),
 )
 
 

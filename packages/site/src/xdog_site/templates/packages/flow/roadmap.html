@@ -6,20 +6,23 @@
 <section>
   <h2>Roadmap</h2>
   <div>flow's modeling layer — typed ports, explicit edges, conditional and bounded-loop edges,
-    codegen, and a strict type-checked codebase — is solid. The distance to a production-grade
-    orchestrator is mostly runtime resilience and operations. Here is an honest account of the
-    gaps and the plan to close them.</div>
+    codegen, and a strict type-checked codebase — is solid. The runtime-resilience roadmap (P1–P4)
+    is now complete: per-node retries, checkpoint &amp; resume, a structured event stream, and the
+    durability suite (branch isolation, concurrency caps, human-in-the-loop, deterministic reuse) —
+    each one implemented by flow's own auto-enrich workflow and mirrored in codegen. Below is an
+    honest account of what is done and the gaps that remain toward a fully distributed,
+    production-grade orchestrator.</div>
 </section>
 
 <section>
-  <h3>Gaps vs production-grade orchestrators</h3>
+  <h3>Remaining gaps vs production-grade orchestrators</h3>
   {% for g in gaps %}
   <div><strong>{{ g.area }}.</strong> {{ g.detail }}</div>
   {% endfor %}
 </section>
 
 <section>
-  <h3>Planned work</h3>
+  <h3>Roadmap progress</h3>
   <div class="cards grid">
     {% for phase in roadmap %}
       <div class="card -5of12 cell">
