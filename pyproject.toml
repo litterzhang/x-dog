@@ -78,6 +78,25 @@ select = ["E", "F", "I", "W"]
 # Authored content tables: one-line card descriptions read better un-wrapped than
 # split to satisfy the 120-col limit.
 "packages/site/src/xdog_site/content/flow.py" = ["E501"]
+# Package __init__.py files re-export their public API; imports there are
+# intentional even when the module itself doesn't reference them.
+"**/__init__.py" = ["F401"]
+# Pre-existing E501 debt in packages outside flow/site. Ignored per-file so the
+# strict 120-col limit still applies to new code and to flow/site.
+"packages/agent/src/agent/tools/tool_filesystem.py" = ["E501"]
+"packages/agent/tests/test_agent_loop.py" = ["E501"]
+"packages/agent/tests/test_before_after_hooks.py" = ["E501"]
+"packages/agent/tests/test_parallel_tool_execution.py" = ["E501"]
+"packages/ai/src/ai/core.py" = ["E501"]
+"packages/ai/src/ai/protocols/openai_responses.py" = ["E501"]
+"packages/ai/src/ai/providers/copilot.py" = ["E501"]
+"packages/ai/src/ai/vendors/copilot/_model_sync.py" = ["E501"]
+"packages/claw/src/claw/cli/cli.py" = ["E501"]
+"packages/claw/tests/test_agent_session.py" = ["E501"]
+"packages/claw/tests/test_gateway.py" = ["E501"]
+"packages/claw/tests/test_scheduler.py" = ["E501"]
+"packages/claw/tests/test_tools_memory.py" = ["E501"]
+"packages/tui/src/tui/components/markdown.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
