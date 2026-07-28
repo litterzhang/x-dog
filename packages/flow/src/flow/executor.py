@@ -270,6 +270,7 @@ async def execute(
             raw_memo = snap.get("memo", {})
             if isinstance(raw_memo, dict):
                 memo = {str(k): dict(v) for k, v in raw_memo.items() if isinstance(v, dict)}
+            tokens_used = int(snap.get("tokens_used", 0))
 
     def _save_checkpoint() -> None:
         """Persist a snapshot of the current run state (called inside _state_lock)."""
@@ -284,6 +285,7 @@ async def execute(
             "stack": stack,
             "out_live": out_live,
             "memo": memo,
+            "tokens_used": tokens_used,
         }
         checkpoint.save(run_id, snap)
 
@@ -399,7 +401,7 @@ async def execute(
                     await _store_script_output(node, node_id, value)
                     last_exc = None
                     break
-                except BaseException as exc:
+                except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
                     last_exc = exc
                     remaining = max_attempts - attempt - 1
                     if remaining > 0:
@@ -509,7 +511,7 @@ async def execute(
                 await asyncio.wait_for(_drain(), timeout=timeout)
                 agent_last_exc = None
                 break
-            except BaseException as exc:
+            except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
                 agent_last_exc = exc
                 remaining = agent_max_attempts - agent_attempt - 1
                 if remaining > 0:
@@ -545,6 +547,8 @@ async def execute(
 
         await _record_frame(node_id, ins, agent_step)
         async with _state_lock:
+            nonlocal tokens_used
+            tokens_used += total_tokens  # before the checkpoint so the saved total is current
             if node.deterministic:
                 memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
         completed.add(node_id)
@@ -554,12 +558,9 @@ async def execute(
             duration_s=time.monotonic() - _t0_agent,
             tokens=total_tokens,
         ))
-        # Budget check — must be done under the state lock to avoid races.
-        async with _state_lock:
-            nonlocal tokens_used
-            tokens_used += total_tokens
-            if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
-                raise WorkflowBudgetExceeded(tokens_used, max_tokens)
+        # Budget circuit-breaker: abort once the cumulative total passes the ceiling.
+        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
+            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
         """Coerce a script's return value into the node's output port(s)."""

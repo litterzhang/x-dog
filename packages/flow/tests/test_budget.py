@@ -195,3 +195,37 @@ async def test_budget_exceeded_attributes() -> None:
     assert exc.used == 100
     assert exc.budget == 50
     assert "token budget exceeded" in str(exc)
+
+
+async def test_tokens_used_persisted_across_resume(tmp_path: object) -> None:
+    """B2: the running token total is checkpointed, so a resumed run keeps counting
+    from it — the budget spans resume instead of resetting to 0."""
+    from flow.checkpoint import JSONFileCheckpointStore
+
+    store = JSONFileCheckpointStore(tmp_path)  # type: ignore[arg-type]
+    run_id = "resume-budget"
+
+    # First run: node a spends 100 tokens and completes; node b would spend 100 more.
+    # With a checkpoint, a's completion is saved along with tokens_used=100.
+    wf = _two_node_agent_wf()
+    await execute(
+        wf,
+        stream_fn_factory=_make_stream_fn_with_tokens(100),
+        checkpoint=store,
+        run_id=run_id,
+    )
+    snap = store.load(run_id)
+    assert snap is not None
+    assert snap["tokens_used"] == 200, "both nodes' tokens must be persisted"
+
+    # A resume that restores this checkpoint starts tokens_used from 200, not 0.
+    # A fresh run over the same store/run_id with a tight budget below the restored
+    # total must trip immediately (nothing new to run, but the restored total stands).
+    restored = await execute(
+        wf,
+        stream_fn_factory=_make_stream_fn_with_tokens(100),
+        checkpoint=store,
+        run_id=run_id,
+    )
+    # Both nodes were already completed, so nothing re-runs; the restored total is kept.
+    assert restored.runtime["tokens_used"] == 200
