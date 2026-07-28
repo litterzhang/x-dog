@@ -1060,6 +1060,47 @@ async def test_agent_retry_succeeds_after_failures() -> None:
     assert call_count[0] == n_failures + 1
 
 
+async def test_script_cancelled_error_is_not_retried() -> None:
+    """A CancelledError from a script node propagates and is NEVER retried.
+
+    Regression for the cancellation-swallow bug: the retry loop caught
+    BaseException, so a cooperative cancel (or KeyboardInterrupt) was treated as
+    a retryable failure. It must be re-raised on the first occurrence even when a
+    retry policy is set.
+    """
+    call_count: list[int] = [0]
+
+    async def _cancels(ctx: Any) -> str:
+        call_count[0] += 1
+        raise asyncio.CancelledError
+
+    wf = WorkflowDef(
+        name="cancel_test",
+        provider="fake",
+        entry="s1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="s1",
+                type="script",
+                run="dummy:fn",
+                output_ports=(Port("result"),),
+                retry=RetryPolicy(max=3, backoff=0.0),  # would retry 3x on a normal Exception
+            ),
+        ),
+        edges=(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await execute(
+            wf,
+            stream_fn_factory=_make_stream_fn({}),
+            script_resolver=lambda _run: _cancels,
+        )
+    # Exactly one call — the CancelledError short-circuited the retry loop.
+    assert call_count[0] == 1
+
+
 async def test_agent_without_web_search_has_no_search_tool() -> None:
     """A node without web_search never invokes the search factory."""
     searched: list[str] = []

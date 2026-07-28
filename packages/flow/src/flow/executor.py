@@ -43,6 +43,20 @@ async def _wrap_sync(value: Any) -> Any:
     return value
 
 
+def _retry_bounds(node: NodeDef) -> tuple[int, float]:
+    """Return ``(max_attempts, backoff)`` for a node's retry policy (1 attempt if none)."""
+    return 1 + (node.retry.max if node.retry else 0), (node.retry.backoff if node.retry else 0.0)
+
+
+async def _retry_wait(node_id: str, attempt: int, max_attempts: int, backoff: float) -> None:
+    """Sleep + log before the next retry, if any attempts remain after *attempt* (0-based)."""
+    if attempt + 1 >= max_attempts:
+        return
+    delay = backoff * (attempt + 1)
+    logger.debug("Retrying node %r (attempt %d/%d) after %s", node_id, attempt + 1, max_attempts, delay)
+    await asyncio.sleep(delay)
+
+
 def _memo_key(node_id: str, ins: dict[str, str]) -> str:
     """Return a deterministic memo key for (node_id, input namespace)."""
     digest = hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()
@@ -382,8 +396,7 @@ async def execute(
             _t0 = time.monotonic()
             _emit(NodeStarted(node_id=node_id, step=step))
 
-            max_attempts = 1 + (node.retry.max if node.retry else 0)
-            backoff = node.retry.backoff if node.retry else 0.0
+            max_attempts, backoff = _retry_bounds(node)
             last_exc: BaseException | None = None
             for attempt in range(max_attempts):
                 try:
@@ -398,16 +411,7 @@ async def execute(
                     break
                 except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
                     last_exc = exc
-                    remaining = max_attempts - attempt - 1
-                    if remaining > 0:
-                        logger.debug(
-                            "Retrying node %r (attempt %d/%d) after %s",
-                            node_id,
-                            attempt + 1,
-                            max_attempts,
-                            backoff * (attempt + 1),
-                        )
-                        await asyncio.sleep(backoff * (attempt + 1))
+                    await _retry_wait(node_id, attempt, max_attempts, backoff)
             if last_exc is not None:
                 _emit(NodeFailed(
                     node_id=node_id, step=step,
@@ -472,8 +476,7 @@ async def execute(
 
         logger.debug("Running node %r with model %r", node_id, model)
 
-        agent_max_attempts = 1 + (node.retry.max if node.retry else 0)
-        agent_backoff = node.retry.backoff if node.retry else 0.0
+        agent_max_attempts, agent_backoff = _retry_bounds(node)
         agent_last_exc: BaseException | None = None
         accumulated: list[str] = []
         agent_step = await _reserve_step()
@@ -508,16 +511,7 @@ async def execute(
                 break
             except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
                 agent_last_exc = exc
-                remaining = agent_max_attempts - agent_attempt - 1
-                if remaining > 0:
-                    logger.debug(
-                        "Retrying node %r (attempt %d/%d) after %s",
-                        node_id,
-                        agent_attempt + 1,
-                        agent_max_attempts,
-                        agent_backoff * (agent_attempt + 1),
-                    )
-                    await asyncio.sleep(agent_backoff * (agent_attempt + 1))
+                await _retry_wait(node_id, agent_attempt, agent_max_attempts, agent_backoff)
 
         if agent_last_exc is not None:
             _emit(NodeFailed(
