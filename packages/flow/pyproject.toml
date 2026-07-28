@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "flow"
 version = "0.57.1"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "ai",
@@ -21,7 +21,7 @@ xdog-flow = "flow.cli:main"
 packages = ["src/flow"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

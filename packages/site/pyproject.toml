@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "site"
 version = "0.1.0"
 description = "x-dog public site: package overview, blog, and FAQ (Flask)"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "flask>=3.0",
@@ -19,7 +19,7 @@ xdog-site = "xdog_site.app:main"
 packages = ["src/xdog_site"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

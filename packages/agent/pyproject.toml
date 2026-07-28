@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "agent"
 version = "0.57.1"
 description = "Agent runtime with tool calling and state management"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "ai",

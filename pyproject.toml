@@ -8,7 +8,7 @@ version = "0.57.1"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
     { name = "Mario Zechner" },
 ]
@@ -69,7 +69,7 @@ addopts = "--import-mode=importlib"
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
@@ -99,7 +99,7 @@ select = ["E", "F", "I", "W"]
 "packages/tui/src/tui/components/markdown.py" = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

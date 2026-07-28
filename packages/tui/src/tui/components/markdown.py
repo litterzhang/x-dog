@@ -982,9 +982,17 @@ class Markdown(Component):
             for i in range(min(leftover, num_cols)):
                 col_widths[i] += 1
 
+        # Box-drawing join separators. Kept as locals (not inline in the
+        # f-strings below) so the expression part contains no backslash escapes \u2014
+        # that syntax only parses on Python 3.12+.
+        cell_sep = " \u2502 "  # \u2502 between cells within a row
+        top_sep = "\u2500\u252c\u2500"  # \u2500\u252c\u2500 between columns on the top border
+        mid_sep = "\u2500\u253c\u2500"  # \u2500\u253c\u2500 between columns on the separator row
+        bot_sep = "\u2500\u2534\u2500"  # \u2500\u2534\u2500 between columns on the bottom border
+
         # Top border
         top_cells = ["\u2500" * w for w in col_widths]
-        lines.append(f"\u250c\u2500{'\u2500\u252c\u2500'.join(top_cells)}\u2500\u2510")
+        lines.append(f"\u250c\u2500{top_sep.join(top_cells)}\u2500\u2510")
 
         # Header
         header_cell_lines: list[list[str]] = []
@@ -999,11 +1007,11 @@ class Markdown(Component):
                 text = cell_lines[line_idx] if line_idx < len(cell_lines) else ""
                 pad = max(0, col_widths[col_idx] - visible_width(text))
                 parts.append(self._theme.bold(text + " " * pad))
-            lines.append(f"\u2502 {' \u2502 '.join(parts)} \u2502")
+            lines.append(f"\u2502 {cell_sep.join(parts)} \u2502")
 
         # Separator
         sep_cells = ["\u2500" * w for w in col_widths]
-        separator = f"\u251c\u2500{'\u2500\u253c\u2500'.join(sep_cells)}\u2500\u2524"
+        separator = f"\u251c\u2500{mid_sep.join(sep_cells)}\u2500\u2524"
         lines.append(separator)
 
         # Data rows
@@ -1023,14 +1031,14 @@ class Markdown(Component):
                     text = cell_lines[line_idx] if line_idx < len(cell_lines) else ""
                     pad = max(0, col_widths[col_idx] - visible_width(text))
                     parts.append(text + " " * pad)
-                lines.append(f"\u2502 {' \u2502 '.join(parts)} \u2502")
+                lines.append(f"\u2502 {cell_sep.join(parts)} \u2502")
 
             if row_idx < len(token.rows) - 1:
                 lines.append(separator)
 
         # Bottom border
         bot_cells = ["\u2500" * w for w in col_widths]
-        lines.append(f"\u2514\u2500{'\u2500\u2534\u2500'.join(bot_cells)}\u2500\u2518")
+        lines.append(f"\u2514\u2500{bot_sep.join(bot_cells)}\u2500\u2518")
 
         lines.append("")  # spacing after table
         return lines
