@@ -228,6 +228,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once via a semaphore (default: unlimited).", "Execution"),
     Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo}: outputs plus a per-node trace.", "Execution"),
     Feature("Structured event stream", "on_event streams NodeStarted / NodeFinished / NodeFailed with per-node duration and tokens.", "Execution"),
+    Feature("Metrics aggregation", "A MetricsCollector consumes the event stream into a per-node + per-run snapshot (runs, duration, tokens, failures).", "Execution"),
     Feature("Offline dry-run", "Run with no LLM calls; agent nodes echo DRYRUN:<model> to test wiring.", "Execution"),
     # --- Resilience: surviving failure & long runs ---
     Feature("Per-node retry", "A RetryPolicy(max, backoff) retries a failed node before giving up (default: fail-fast).", "Resilience"),
@@ -328,12 +329,13 @@ NON_GOALS: tuple[Gap, ...] = (
 )
 
 GAPS: tuple[Gap, ...] = (
-    Gap("Metrics & tracing export", "The P3 event stream is in-process; there is no built-in exporter to "
-        "OpenTelemetry / Prometheus / a trace backend, so run telemetry still has to be wired up by the "
-        "caller. A real gap, and one that fits the single-machine kernel — a pure add-on over on_event."),
-    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) but there is no enforced per-run "
-        "cost ceiling that aborts a run before it overspends. A real, in-kernel gap — a small execute() "
-        "guard, no distribution required."),
+    Gap("External telemetry export", "Done in-kernel: a MetricsCollector consumes the P3 event stream "
+        "into a per-node + per-run RunMetrics snapshot (runs, failures, duration, tokens) with zero "
+        "dependencies. Still open: an OPTIONAL exporter that pushes those to OpenTelemetry / Prometheus "
+        "— left out of the core so the kernel keeps no third-party deps; it would be an opt-in add-on."),
+    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) and aggregated per run (metrics), "
+        "but there is no enforced per-run cost ceiling that aborts a run before it overspends. A real, "
+        "in-kernel gap — a small execute() guard, no distribution required."),
 )
 
 ROADMAP: tuple[Phase, ...] = (
