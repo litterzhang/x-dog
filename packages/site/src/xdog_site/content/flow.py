@@ -191,6 +191,23 @@ DESIGN_SECTIONS: tuple[Section, ...] = (
             "Graphviz-backed SVG (with a dependency-free fallback), and a Mermaid flowchart.",
         ),
     ),
+    Section(
+        heading="Deliberately single-machine — a kernel, not a platform",
+        body=(
+            "flow runs one graph in one asyncio event loop in one process: `pip install`, then "
+            "`asyncio.run(execute(wf))` — no server, no queue, no database. That is a chosen boundary, "
+            "not an unfinished one. Distributed execution is a non-goal: building it would mean "
+            "rewriting the executor's core (a node is a closure over shared in-process state, not a "
+            "serialisable task) and would force a trade against the interpret==compile guarantee that "
+            "makes a workflow compilable to a self-contained module in the first place.",
+            "When a run must scale across machines, embed flow as a LIBRARY — run a flow graph as one "
+            "unit of work inside a durable engine like Temporal — rather than asking flow to become "
+            "that engine. Keeping the kernel small, type-checked, and compilable is the value a "
+            "heavyweight platform cannot offer; competing with Temporal on distribution would forfeit "
+            "it. The resilience features flow does ship (retry, checkpoint/resume, isolation, "
+            "human-in-the-loop, deterministic reuse) are all the single-machine, in-kernel kind.",
+        ),
+    ),
 )
 
 
@@ -268,17 +285,50 @@ EXAMPLES: tuple[Example, ...] = (
 )
 
 
-# --- Gaps vs production-grade + roadmap --------------------------------------
+# --- Positioning, non-goals, remaining gaps, and roadmap ---------------------
+
+# The core positioning statement — what flow deliberately is, and is not.
+POSITIONING: Section = Section(
+    heading="What flow is — and what it is not",
+    body=(
+        "flow is a single-machine, type-safe, compilable LLM-workflow kernel. A workflow is one JSON "
+        "graph that the runtime interprets directly OR compiles to a self-contained, dependency-free "
+        "Python module — and the two paths agree node-for-node (interpret == compile). It runs with a "
+        "plain `pip install` and `asyncio.run(execute(wf))`: no server, no queue, no database.",
+        "flow is deliberately NOT a distributed orchestration platform. It does not span machines, own "
+        "a worker pool, or replace Temporal / Step Functions / LangGraph Platform. When you need to "
+        "scale a run across hosts, embed flow as a library — run a flow graph as one activity inside "
+        "your durable engine — rather than asking flow to become that engine. Keeping the kernel small, "
+        "readable, and compilable is the point; that is exactly what a heavyweight platform can't give.",
+    ),
+)
+
+# Non-goals: capabilities we have deliberately decided NOT to build, with the reasoning.
+NON_GOALS: tuple[Gap, ...] = (
+    Gap("Distributed execution", "Not a goal. The executor is one asyncio event loop in one process; "
+        "there is no cross-machine worker pool, queue, or per-graph scheduling — by design. Building it "
+        "would mean rewriting the executor's core (nodes are closures over shared in-process state, not "
+        "serialisable tasks) and would force a choice between distribution and the interpret==compile "
+        "guarantee — flow's signature feature — while shedding its zero-ops, single-binary advantage. "
+        "Cross-machine scale belongs to a durable engine flow is embedded in, not to flow itself."),
+    Gap("Multi-tenancy & auth", "Not a goal. flow is a kernel/library, not a hosted service. Isolation, "
+        "authn/authz, and quotas per tenant are the host environment's job (the reference HaveFun runner "
+        "adds only a single-slot guard for safety)."),
+    Gap("Built-in scheduling", "Not a goal. Cron/interval/event triggers are wired around flow by the "
+        "host (e.g. a systemd timer driving a cycle), not baked into the engine — the same separation a "
+        "library keeps from its scheduler."),
+)
 
 GAPS: tuple[Gap, ...] = (
-    Gap("Distributed execution", "Everything runs in one asyncio event loop in one process. There is no "
-        "worker pool across machines, no queue, and no scheduling of a single graph across hosts."),
     Gap("Metrics & tracing export", "The P3 event stream is in-process; there is no built-in exporter to "
-        "OpenTelemetry / Prometheus / a trace backend, so run telemetry still has to be wired up by the caller."),
-    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) but there is no enforced per-run cost "
-        "ceiling or provider quota that aborts a run before it overspends."),
-    Gap("Compensation / rollback", "P4.1 isolates a failed branch, but there is no saga-style compensation to "
-        "undo the side-effects of branches that already committed before the failure."),
+        "OpenTelemetry / Prometheus / a trace backend, so run telemetry still has to be wired up by the "
+        "caller. A real gap, and one that fits the single-machine kernel — a pure add-on over on_event."),
+    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) but there is no enforced per-run "
+        "cost ceiling that aborts a run before it overspends. A real, in-kernel gap — a small execute() "
+        "guard, no distribution required."),
+    Gap("Compensation / rollback", "P4.1 isolates a failed branch, but there is no saga-style "
+        "compensation to undo the side-effects of branches that already committed before the failure. A "
+        "real gap that lives entirely within the single-machine model."),
 )
 
 ROADMAP: tuple[Phase, ...] = (

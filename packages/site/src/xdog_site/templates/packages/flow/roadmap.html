@@ -4,18 +4,30 @@
 
 {% block content %}
 <section>
-  <h2>Roadmap</h2>
-  <div>flow's modeling layer — typed ports, explicit edges, conditional and bounded-loop edges,
-    codegen, and a strict type-checked codebase — is solid. The runtime-resilience roadmap (P1–P4)
-    is now complete: per-node retries, checkpoint &amp; resume, a structured event stream, and the
-    durability suite (branch isolation, concurrency caps, human-in-the-loop, deterministic reuse) —
-    each one implemented by flow's own auto-enrich workflow and mirrored in codegen. Below is an
-    honest account of what is done and the gaps that remain toward a fully distributed,
-    production-grade orchestrator.</div>
+  <h2>Roadmap &amp; positioning</h2>
+  <div>The runtime-resilience roadmap (P1–P4) is complete: per-node retries, checkpoint &amp; resume, a
+    structured event stream, and the durability suite (branch isolation, concurrency caps,
+    human-in-the-loop, deterministic reuse) — each implemented by flow's own auto-enrich workflow and
+    mirrored in codegen. What remains is scoped by a deliberate decision about what flow is for.</div>
 </section>
 
 <section>
-  <h3>Remaining gaps vs production-grade orchestrators</h3>
+  <h3>{{ positioning.heading }}</h3>
+  {% for line in positioning.body %}
+  <div>{{ line }}</div>
+  {% endfor %}
+</section>
+
+<section>
+  <h3>Non-goals (deliberately out of scope)</h3>
+  {% for g in non_goals %}
+  <div><strong>{{ g.area }}.</strong> {{ g.detail }}</div>
+  {% endfor %}
+</section>
+
+<section>
+  <h3>Remaining gaps (real, and in-kernel)</h3>
+  <div>These fit the single-machine kernel — each is a pure add-on, no distribution required.</div>
   {% for g in gaps %}
   <div><strong>{{ g.area }}.</strong> {{ g.detail }}</div>
   {% endfor %}

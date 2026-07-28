@@ -19,6 +19,8 @@ from xdog_site.content.flow import (
     FEATURE_CATEGORIES,
     FEATURES,
     GAPS,
+    NON_GOALS,
+    POSITIONING,
     ROADMAP,
     RUNTIME_ROWS,
     SCHEMA_BLOCKS,
@@ -85,7 +87,14 @@ def flow_examples() -> str:
 
 @bp.route("/packages/flow/roadmap")
 def flow_roadmap() -> str:
-    return render_template("packages/flow/roadmap.html", pkg=PACKAGES_BY_NAME["flow"], gaps=GAPS, roadmap=ROADMAP)
+    return render_template(
+        "packages/flow/roadmap.html",
+        pkg=PACKAGES_BY_NAME["flow"],
+        positioning=POSITIONING,
+        non_goals=NON_GOALS,
+        gaps=GAPS,
+        roadmap=ROADMAP,
+    )
 
 
 # -- HaveFun: load a workflow, view diagrams, fill inputs, run async ----------
