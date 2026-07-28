@@ -754,3 +754,67 @@ async def test_generate_retry_exhausted_raises() -> None:
 
     with _pytest.raises(ValueError, match="boom"):
         await gen_module.main()  # type: ignore[attr-defined]
+
+
+async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
+    """An isolate node must NOT swallow a WorkflowBudgetExceeded (control-flow).
+
+    Regression for the codegen budget-swallow bug: the isolate node's
+    ``except BaseException`` used to capture the budget breach into ``_ISOLATED``
+    instead of aborting the run, diverging from the interpreter (which
+    special-cases budget/pause at the scheduler level).
+    """
+    import types
+
+    from flow.errors import WorkflowBudgetExceeded
+
+    # A script-only isolate node that raises the control-flow exception directly.
+    script_code = (
+        "def over_budget(ctx):\n"
+        "    from flow.errors import WorkflowBudgetExceeded\n"
+        "    raise WorkflowBudgetExceeded(100, 10)\n"
+    )
+    wf = WorkflowDef(
+        name="isolate-budget-wf",
+        provider="copilot",
+        entry="over_budget",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="over_budget",
+                type="script",
+                code=script_code,
+                output_ports=(Port("result", "string"),),
+                on_error="isolate",
+            ),
+        ),
+        edges=(),
+    )
+    src = generate(wf)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
+    # Script-only isolate workflows must still import the budget error to re-raise it.
+    assert "from flow.errors import WorkflowBudgetExceeded" in src
+
+    gen_module = types.ModuleType("_isolate_budget_test_module")
+    exec(compile(src, "<isolate_budget_test>", "exec"), gen_module.__dict__)  # noqa: S102
+    import pytest as _pytest
+
+    with _pytest.raises(WorkflowBudgetExceeded):
+        await gen_module.main()  # type: ignore[attr-defined]
+    # The node was NOT captured as an isolated failure — the run aborted instead.
+    assert "over_budget" not in gen_module._ISOLATED  # type: ignore[attr-defined]
+    assert "over_budget" not in gen_module._FAILED  # type: ignore[attr-defined]
+
+
+def test_generate_checkpoint_persists_tokens_used() -> None:
+    """The generated _save_checkpoint serializes tokens_used (budget-on-resume).
+
+    Mirrors the interpreter's checkpoint schema so a run resumed across engines
+    keeps its cumulative spend instead of resetting to zero.
+    """
+    src = generate(_make_linear_wf())
+    assert '"tokens_used": _TOKENS_USED,' in src
+    # ...and _load_checkpoint restores it back into the running total.
+    assert 'global _TOKENS_USED' in src
+    assert '_snap.get("tokens_used")' in src

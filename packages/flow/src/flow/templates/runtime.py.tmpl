@@ -77,6 +77,10 @@ def _load_checkpoint() -> None:
         for _mk, _mv in _mem.items():
             if isinstance(_mv, dict):
                 _MEMO[str(_mk)] = dict(_mv)  # type: ignore[arg-type]
+    global _TOKENS_USED
+    _tok = _snap.get("tokens_used")
+    if isinstance(_tok, int):
+        _TOKENS_USED = _tok
 
 
 def _save_checkpoint() -> None:
@@ -90,6 +94,7 @@ def _save_checkpoint() -> None:
         "stack": _STACK,
         "out_live": _OUTPUT,
         "memo": _MEMO,
+        "tokens_used": _TOKENS_USED,
     }
     _fd, _tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
     try:

@@ -272,8 +272,18 @@ def _render_isolation_handler(node_id: str, wf: WorkflowDef) -> list[str]:
 
     Records the failure in ``_FAILED``, marks the node and its transitive
     successors in ``_ISOLATED``, and returns without re-raising.
+
+    Control-flow exceptions are re-raised first: a budget breach, cancellation,
+    KeyboardInterrupt, or the human-pause SystemExit must abort the whole run,
+    never be captured as an isolated node failure. This mirrors the interpreter,
+    which special-cases these at the scheduler level.
     """
     lines: list[str] = []
+    lines.append(
+        "        if isinstance(_ev_exc, (WorkflowBudgetExceeded, KeyboardInterrupt,"
+        " SystemExit, asyncio.CancelledError)):  # noqa: E501"
+    )
+    lines.append("            raise")
     lines.append(f"        _FAILED[{node_id!r}] = f'{{type(_ev_exc).__name__}}: {{_ev_exc}}'")
     lines.append(f"        _ISOLATED.add({node_id!r})")
     for succ in _transitive_successors_ids(node_id, wf):
@@ -732,7 +742,10 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
         if wf.tool_refs
         else "from flow.tools import default_registry"
     )
-    if has_agent_nodes:
+    # WorkflowBudgetExceeded is referenced by agent nodes (budget check) and by
+    # every isolate node's except block (it must re-raise, never capture it).
+    needs_budget_err = has_agent_nodes or any(n.on_error == "isolate" for n in wf.nodes)
+    if needs_budget_err:
         lines: list[str] = ["from flow.errors import WorkflowBudgetExceeded", _tools_line]
     else:
         lines = [_tools_line]
