@@ -326,13 +326,14 @@ NON_GOALS: tuple[Gap, ...] = (
         "collects failures into runtime.failed, and a downstream cleanup node reads it — or handled in "
         "the host/driver layer, exactly as the auto-enrich driver rolls back with `git checkout` outside "
         "the engine."),
+    Gap("External telemetry export", "Not a goal (as a core feature). Metrics are aggregated in-kernel by "
+        "MetricsCollector; pushing them to OpenTelemetry / Prometheus / a trace backend is left to the "
+        "caller, who consumes the P3 event stream (or the metrics snapshot) and forwards it. Baking an "
+        "exporter in would add third-party deps to a kernel whose whole point is to have none — so it "
+        "stays outside, wired up by the host if wanted."),
 )
 
 GAPS: tuple[Gap, ...] = (
-    Gap("External telemetry export", "Done in-kernel: a MetricsCollector consumes the P3 event stream "
-        "into a per-node + per-run RunMetrics snapshot (runs, failures, duration, tokens) with zero "
-        "dependencies. Still open: an OPTIONAL exporter that pushes those to OpenTelemetry / Prometheus "
-        "— left out of the core so the kernel keeps no third-party deps; it would be an opt-in add-on."),
     Gap("Cost budgets & quotas", "Token usage is reported per node (P3) and aggregated per run (metrics), "
         "but there is no enforced per-run cost ceiling that aborts a run before it overspends. A real, "
         "in-kernel gap — a small execute() guard, no distribution required."),
