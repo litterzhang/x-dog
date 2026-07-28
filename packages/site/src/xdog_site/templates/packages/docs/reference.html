@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %} — {{ pkg.name }} / Reference{% endblock %}
+{% block ctitle %}/ Packages / {{ pkg.name }} / Reference{% endblock %}
+
+{% block content %}
+<section>
+  <h2>Reference</h2>
+  <div>{{ docs.reference_intro }}</div>
+</section>
+
+{% for block in docs.reference_blocks %}
+<section>
+  <h3>{{ block.heading }}</h3>
+  {% for line in block.body %}
+  <div>{{ line }}</div>
+  {% endfor %}
+  {% if block.bullets %}
+  <ul>
+    {% for b in block.bullets %}<li>{{ b }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if block.columns %}
+  <table>
+    <thead>
+      <tr>{% for col in block.columns %}<th>{{ col }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in block.rows %}
+      <tr>{% for cell in row %}<td>{% if loop.first %}<code>{{ cell }}</code>{% else %}{{ cell }}{% endif %}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

@@ -32,18 +32,19 @@ PACKAGES: tuple[Package, ...] = (
     Package(
         name="ai",
         cli="xdog-ai",
-        tagline="Unified multi-provider LLM API",
+        tagline="Unified, typed LLM API",
         summary=(
-            "A single, typed interface over every major model provider — Anthropic, OpenAI, "
-            "Google, Bedrock, Mistral, and GitHub Copilot — so application code never hard-codes "
-            "a vendor SDK.",
-            "Streaming, tool calls, web search, and token accounting are normalised across "
-            "providers behind one Context/StreamOptions model.",
+            "A single, typed interface over LLM backends, built on a Provider / Protocol / Vendor "
+            "split so application code never hard-codes a model SDK. The shipped vendor today is "
+            "GitHub Copilot, reached over three wire protocols (openai-completions, "
+            "anthropic-messages, openai-responses); the architecture is multi-vendor by design.",
+            "Streaming, tool calls, web search, and token accounting are normalised behind one "
+            "immutable Context / StreamOptions model.",
         ),
         highlights=(
-            "One provider(id) call resolves any backend; swap models without touching app code",
-            "Streaming events, tool calls, and web search unified across vendors",
-            "Copilot model catalog sync keeps the available model list current",
+            "One provider(id) call resolves the backend; swap models without touching app code",
+            "Streaming event union, tool calls, and web search behind a typed interface",
+            "Copilot auth via GitHub device code; model catalog sync with offline fallback",
             "Pure-Python message/type model — no vendor SDK leaks into your code",
         ),
         install="uv run xdog-ai --help",

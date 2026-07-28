@@ -60,7 +60,17 @@
         <input type="checkbox" />
         <li><a href="{{ url_for('main.packages') }}">All Packages</a></li>
         {% for name in ["ai", "agent", "tui", "coding", "claw"] %}
-        <li><a href="{{ url_for('main.package_detail', name=name) }}">{{ name }}</a></li>
+        <li>
+          {{ name }}
+          <ul style="margin:0">
+            <input type="checkbox" />
+            <li><a href="{{ url_for('main.package_detail', name=name) }}">Overview</a></li>
+            <li><a href="{{ url_for('main.package_design', name=name) }}">Design</a></li>
+            <li><a href="{{ url_for('main.package_features', name=name) }}">Features</a></li>
+            <li><a href="{{ url_for('main.package_reference', name=name) }}">Reference</a></li>
+            <li><a href="{{ url_for('main.package_roadmap', name=name) }}">Roadmap</a></li>
+          </ul>
+        </li>
         {% endfor %}
         <li>
           flow

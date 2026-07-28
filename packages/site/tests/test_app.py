@@ -165,6 +165,66 @@ def test_flow_content_module_importable() -> None:
     assert SCHEMA_BLOCKS and TYPE_ROWS and CONDITION_ROWS and RUNTIME_ROWS and COMMANDS and VALIDATION_RULES
 
 
+# --- generic package deep-dive sub-pages (ai / agent / tui / coding / claw) ---
+
+_DOC_PACKAGES = ["ai", "agent", "tui", "coding", "claw"]
+_DOC_SUBPAGES = ["design", "features", "reference", "roadmap"]
+
+
+@pytest.mark.parametrize("name", _DOC_PACKAGES)
+@pytest.mark.parametrize("sub", _DOC_SUBPAGES)
+def test_package_docs_subpages_ok_with_breadcrumb(client: FlaskClient, name: str, sub: str) -> None:
+    resp = client.get(f"/packages/{name}/{sub}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    # breadcrumb reflects the sub-page, e.g. "Packages / ai / Design"
+    assert f"Packages / {name} / {sub.capitalize()}" in body
+    # every doc page is reachable from the collapsible left-nav
+    assert f"/packages/{name}/reference" in body
+
+
+@pytest.mark.parametrize("name", _DOC_PACKAGES)
+def test_package_overview_links_to_deep_dive(client: FlaskClient, name: str) -> None:
+    body = client.get(f"/packages/{name}").get_data(as_text=True)
+    assert f"/packages/{name}/design" in body
+    assert f"/packages/{name}/roadmap" in body
+
+
+def test_package_docs_unknown_name_404(client: FlaskClient) -> None:
+    # flow is not in the generic registry (it has bespoke pages)
+    assert client.get("/packages/flow/design").status_code == 200  # bespoke, still fine
+    assert client.get("/packages/nope/design").status_code == 404
+    assert client.get("/packages/nope/roadmap").status_code == 404
+
+
+def test_package_docs_content_is_accurate(client: FlaskClient) -> None:
+    # ai: the old five-vendor claim is gone; Copilot + protocols are documented
+    ai_over = client.get("/packages/ai").get_data(as_text=True)
+    assert "Mistral" not in ai_over and "Bedrock" not in ai_over
+    assert "copilot" in client.get("/packages/ai/reference").get_data(as_text=True)
+    # agent: built-in tools; tui: differential renderer; claw: workspace files
+    assert "submit_result" in client.get("/packages/agent/reference").get_data(as_text=True)
+    assert "differential" in client.get("/packages/tui/design").get_data(as_text=True).lower()
+    assert "IDENTITY.md" in client.get("/packages/claw/reference").get_data(as_text=True)
+    # every roadmap carries a forward-looking 2026 phase
+    for name in _DOC_PACKAGES:
+        assert "2026" in client.get(f"/packages/{name}/roadmap").get_data(as_text=True)
+
+
+def test_docs_content_modules_importable() -> None:
+    from xdog_site.content.agent import DOCS as AGENT_DOCS
+    from xdog_site.content.ai import DOCS as AI_DOCS
+    from xdog_site.content.claw import DOCS as CLAW_DOCS
+    from xdog_site.content.coding import DOCS as CODING_DOCS
+    from xdog_site.content.tui import DOCS as TUI_DOCS
+
+    for docs in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS):
+        assert docs.design_sections and docs.features and docs.reference_blocks and docs.roadmap
+        # grouped_features drops empty buckets and preserves every feature
+        grouped = docs.grouped_features()
+        assert sum(len(feats) for _, feats in grouped) == len(docs.features)
+
+
 # --- HaveFun page + async run ------------------------------------------------
 
 

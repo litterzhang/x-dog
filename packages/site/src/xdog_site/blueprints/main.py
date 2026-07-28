@@ -10,6 +10,7 @@ from typing import Any
 from flask import Blueprint, abort, jsonify, render_template, request
 from markupsafe import Markup
 
+from xdog_site.content.docs import PackageDocs
 from xdog_site.content.faq import FAQS
 from xdog_site.content.flow import (
     COMMANDS,
@@ -32,6 +33,20 @@ from xdog_site.content.packages import LAYERS, PACKAGES, PACKAGES_BY_NAME
 bp = Blueprint("main", __name__)
 
 _MAX_UPLOAD_BYTES = 256 * 1024  # generous cap for a workflow JSON
+
+
+def _load_package_docs() -> dict[str, PackageDocs]:
+    """Registry of packages that use the generic four-page deep dive (not flow)."""
+    from xdog_site.content.agent import DOCS as AGENT_DOCS
+    from xdog_site.content.ai import DOCS as AI_DOCS
+    from xdog_site.content.claw import DOCS as CLAW_DOCS
+    from xdog_site.content.coding import DOCS as CODING_DOCS
+    from xdog_site.content.tui import DOCS as TUI_DOCS
+
+    return {d.name: d for d in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS)}
+
+
+PACKAGE_DOCS: dict[str, PackageDocs] = _load_package_docs()
 
 
 @bp.route("/")
@@ -212,12 +227,50 @@ def flow_havefun_status(job_id: str) -> Any:
     return jsonify(payload)
 
 
+# -- generic package deep-dive sub-pages (ai / agent / tui / coding / claw) ----
+# Registered before the generic <name> route so /packages/ai/design resolves here.
+
+
+def _docs_or_404(name: str) -> tuple[Any, PackageDocs]:
+    pkg = PACKAGES_BY_NAME.get(name)
+    docs = PACKAGE_DOCS.get(name)
+    if pkg is None or docs is None:
+        abort(404)
+    return pkg, docs
+
+
+@bp.route("/packages/<name>/design")
+def package_design(name: str) -> str:
+    pkg, docs = _docs_or_404(name)
+    return render_template("packages/docs/design.html", pkg=pkg, docs=docs)
+
+
+@bp.route("/packages/<name>/features")
+def package_features(name: str) -> str:
+    pkg, docs = _docs_or_404(name)
+    return render_template(
+        "packages/docs/features.html", pkg=pkg, docs=docs, groups=docs.grouped_features()
+    )
+
+
+@bp.route("/packages/<name>/reference")
+def package_reference(name: str) -> str:
+    pkg, docs = _docs_or_404(name)
+    return render_template("packages/docs/reference.html", pkg=pkg, docs=docs)
+
+
+@bp.route("/packages/<name>/roadmap")
+def package_roadmap(name: str) -> str:
+    pkg, docs = _docs_or_404(name)
+    return render_template("packages/docs/roadmap.html", pkg=pkg, docs=docs)
+
+
 @bp.route("/packages/<name>")
 def package_detail(name: str) -> str:
     pkg = PACKAGES_BY_NAME.get(name)
     if pkg is None:
         abort(404)
-    return render_template("packages/detail.html", pkg=pkg)
+    return render_template("packages/detail.html", pkg=pkg, has_docs=name in PACKAGE_DOCS)
 
 
 @bp.route("/faq")

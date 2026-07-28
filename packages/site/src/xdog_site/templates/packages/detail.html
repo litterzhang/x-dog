@@ -31,6 +31,18 @@
 </section>
 {% endif %}
 
+{% if has_docs %}
+<section>
+  <h3>Deep dive</h3>
+  <div>
+    <a href="{{ url_for('main.package_design', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Design</a>
+    <a href="{{ url_for('main.package_features', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Features</a>
+    <a href="{{ url_for('main.package_reference', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Reference</a>
+    <a href="{{ url_for('main.package_roadmap', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Roadmap</a>
+  </div>
+</section>
+{% endif %}
+
 <section>
   <div>
     <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>

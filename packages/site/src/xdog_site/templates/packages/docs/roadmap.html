@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %} — {{ pkg.name }} / Roadmap{% endblock %}
+{% block ctitle %}/ Packages / {{ pkg.name }} / Roadmap{% endblock %}
+
+{% block content %}
+<section>
+  <h2>Roadmap</h2>
+  <div>{{ docs.roadmap_intro }}</div>
+</section>
+
+<section>
+  <div class="cards grid">
+    {% for phase in docs.roadmap %}
+      <div class="card -5of12 cell">
+        <header class="card-header">
+          {{ phase.tag }} &nbsp;|&nbsp; {{ phase.title }}
+          {% if phase.done %}<span class="state state-success">✓ Done</span>{% endif %}
+        </header>
+        <div class="card-content">
+          <div class="inner">
+            <ul>
+              {% for item in phase.items %}<li>{{ item }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="cell -1of12 spacer"></div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
