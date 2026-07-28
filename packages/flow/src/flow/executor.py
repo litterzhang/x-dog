@@ -497,7 +497,11 @@ async def execute(
                             for part in msg.content:
                                 if isinstance(part, TextContent):
                                     accumulated.append(part.text)
-                            total_tokens += msg.usage.total_tokens
+                            # Some providers report per-category counts but leave
+                            # total_tokens at 0; fall back to input + output so the
+                            # P3 NodeFinished event still carries a real token count.
+                            _u = msg.usage
+                            total_tokens += _u.total_tokens or (_u.input + _u.output)
 
             try:
                 await asyncio.wait_for(_drain(), timeout=timeout)
