@@ -48,6 +48,8 @@ members = [
     "packages/flow",
     "packages/tui",
     "packages/site",
+    "packages/claw",
+    "packages/coding",
 ]
 
 [tool.uv.sources]
@@ -56,6 +58,8 @@ agent = { workspace = true }
 flow = { workspace = true }
 tui = { workspace = true }
 site = { workspace = true }
+claw = { workspace = true }
+coding = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
