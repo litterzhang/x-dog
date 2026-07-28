@@ -74,6 +74,11 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
+[tool.ruff.lint.per-file-ignores]
+# Authored content tables: one-line card descriptions read better un-wrapped than
+# split to satisfy the 120-col limit.
+"packages/site/src/xdog_site/content/flow.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

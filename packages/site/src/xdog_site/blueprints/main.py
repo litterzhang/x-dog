@@ -16,6 +16,7 @@ from xdog_site.content.flow import (
     CONDITION_ROWS,
     DESIGN_SECTIONS,
     EXAMPLES,
+    FEATURE_CATEGORIES,
     FEATURES,
     GAPS,
     ROADMAP,
@@ -52,7 +53,15 @@ def flow_design() -> str:
 
 @bp.route("/packages/flow/features")
 def flow_features() -> str:
-    return render_template("packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], features=FEATURES)
+    # Group features by category in the declared category order (unlisted → end).
+    order = {c: i for i, c in enumerate(FEATURE_CATEGORIES)}
+    cats: list[str] = []
+    for f in FEATURES:
+        if f.category not in cats:
+            cats.append(f.category)
+    cats.sort(key=lambda c: order.get(c, len(order)))
+    grouped = [(c, [f for f in FEATURES if f.category == c]) for c in cats]
+    return render_template("packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], groups=grouped)
 
 
 @bp.route("/packages/flow/reference")

@@ -10,9 +10,11 @@
     <a href="{{ url_for('main.flow_reference') }}">Reference</a>.</div>
 </section>
 
+{% for category, feats in groups %}
 <section>
+  <h3>{{ category }}</h3>
   <div class="cards grid">
-    {% for f in features %}
+    {% for f in feats %}
       <div class="card -5of12 cell">
         <header class="card-header">{{ f.title }}</header>
         <div class="card-content">
@@ -25,4 +27,5 @@
     {% endfor %}
   </div>
 </section>
+{% endfor %}
 {% endblock %}

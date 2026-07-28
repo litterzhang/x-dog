@@ -20,10 +20,11 @@ class Section:
 
 @dataclass(frozen=True)
 class Feature:
-    """A single capability with a one-line explanation."""
+    """A single capability with a one-line explanation, grouped by category."""
 
     title: str
     detail: str
+    category: str = ""
 
 
 @dataclass(frozen=True)
@@ -196,24 +197,48 @@ DESIGN_SECTIONS: tuple[Section, ...] = (
 # --- Features ----------------------------------------------------------------
 
 FEATURES: tuple[Feature, ...] = (
-    Feature("Node-private ports", "Typed inputs/outputs wired by explicit edge mappings — no shared flat state."),
-    Feature("Typed port coercion", "string / integer / number / boolean / array / object, with empty → zero-value."),
-    Feature("Optional inputs", "Mark an input optional so a loop-carried port need not be fed on the first pass."),
-    Feature("$in / $output nodes", "Reserved source + sink: state seeds $in; edges to $output collect the result."),
-    Feature("Runtime container", "execute() returns {ctx, stack, state, in, out} — outputs plus a per-node trace."),
-    Feature("Parallel executor", "Readiness-based fan-out/fan-in; every ready node runs concurrently via gather."),
-    Feature("Conditional edges", "equals / contains / and / or / not guards over a source output port."),
-    Feature("Bounded loops", "Back-edges declare loop.max so revise cycles terminate; re-runs reset successors."),
-    Feature("Code generation", "Compile a workflow JSON to a runnable, ruff- and mypy --strict-clean Python module."),
-    Feature("Agent web search", "Agent nodes can enable a built-in web_search tool with its own browsing model."),
-    Feature("JSON-declared custom tools", "A module:func tool manifest, loaded at run and generate time."),
-    Feature("Structured output", "output_schema forces a submit_result call whose validated JSON is the port."),
-    Feature("Script nodes", "Inline code or a run: module:func reference, imported with the workflow dir on path."),
-    Feature("Validate before running", "Unknown ports, unfed inputs, ambiguous producers, unbounded loops fail fast."),
-    Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; round-trips JSON."),
-    Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid."),
-    Feature("Offline dry-run", "Run with no LLM calls; agent nodes echo DRYRUN:<model> to test wiring."),
+    # --- Modeling: how a workflow is shaped ---
+    Feature("Node-private ports", "Typed inputs/outputs wired by explicit edge mappings — no shared flat state.", "Modeling"),
+    Feature("Typed port coercion", "string / integer / number / boolean / array / object, with empty → zero-value.", "Modeling"),
+    Feature("Optional inputs", "Mark an input optional so a loop-carried port need not be fed on the first pass.", "Modeling"),
+    Feature("$in / $output nodes", "Reserved source + sink: state seeds $in; edges to $output collect the result.", "Modeling"),
+    Feature("Conditional edges", "equals / contains / and / or / not guards over a source output port.", "Modeling"),
+    Feature("Bounded loops", "Back-edges declare loop.max so revise cycles terminate; re-runs reset successors.", "Modeling"),
+    Feature("Script nodes", "Inline code or a run: module:func reference, imported with the workflow dir on path.", "Modeling"),
+    Feature("Validate before running", "Unknown ports, unfed inputs, ambiguous producers, unbounded loops fail fast.", "Modeling"),
+    # --- Execution: how a run behaves ---
+    Feature("Parallel executor", "Readiness-based fan-out/fan-in; every ready node runs concurrently via gather.", "Execution"),
+    Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once via a semaphore (default: unlimited).", "Execution"),
+    Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo}: outputs plus a per-node trace.", "Execution"),
+    Feature("Structured event stream", "on_event streams NodeStarted / NodeFinished / NodeFailed with per-node duration and tokens.", "Execution"),
+    Feature("Offline dry-run", "Run with no LLM calls; agent nodes echo DRYRUN:<model> to test wiring.", "Execution"),
+    # --- Resilience: surviving failure & long runs ---
+    Feature("Per-node retry", "A RetryPolicy(max, backoff) retries a failed node before giving up (default: fail-fast).", "Resilience"),
+    Feature("Failure isolation", "on_error:isolate records a failed branch in runtime.failed and skips only its sub-tree.", "Resilience"),
+    Feature("Checkpoint & resume", "A CheckpointStore persists progress by run id; a resumed run skips already-completed nodes.", "Resilience"),
+    Feature("Human-in-the-loop", "A human node pauses awaiting a named signal; deliver it and resume the run to continue.", "Resilience"),
+    Feature("Deterministic reuse", "deterministic:true memoises output by (node, input hash) for safe retry/resume.", "Resilience"),
+    # --- Agents & tools ---
+    Feature("Agent web search", "Agent nodes can enable a built-in web_search tool with its own browsing model.", "Agents & tools"),
+    Feature("JSON-declared custom tools", "A module:func tool manifest, loaded at run and generate time.", "Agents & tools"),
+    Feature("Structured output", "output_schema forces a submit_result call whose validated JSON is the port.", "Agents & tools"),
+    # --- Codegen & authoring ---
+    Feature("Code generation", "Compile a workflow JSON to a runnable, ruff- and mypy --strict-clean Python module.", "Codegen & authoring"),
+    Feature("Interpret == compile", "The generated module mirrors the interpreter — every feature above works both ways.", "Codegen & authoring"),
+    Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; round-trips JSON.", "Codegen & authoring"),
+    Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid.", "Codegen & authoring"),
 )
+
+# Category display order for the Features page (any unlisted category falls to the end).
+FEATURE_CATEGORIES: tuple[str, ...] = (
+    "Modeling",
+    "Execution",
+    "Resilience",
+    "Agents & tools",
+    "Codegen & authoring",
+)
+
+
 
 
 # --- Examples (the shipped packages/flow/examples/*.json) --------------------
