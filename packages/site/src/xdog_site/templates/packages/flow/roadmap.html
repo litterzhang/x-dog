@@ -27,10 +27,15 @@
 
 <section>
   <h3>Remaining gaps (real, and in-kernel)</h3>
+  {% if gaps %}
   <div>These fit the single-machine kernel — each is a pure add-on, no distribution required.</div>
   {% for g in gaps %}
   <div><strong>{{ g.area }}.</strong> {{ g.detail }}</div>
   {% endfor %}
+  {% else %}
+  <div>None remaining. Every real single-machine gap has shipped — metrics aggregation and cost
+    budgets included; what's left (above) are deliberate non-goals, not unfinished work.</div>
+  {% endif %}
 </section>
 
 <section>

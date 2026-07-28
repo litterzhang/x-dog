@@ -226,9 +226,10 @@ FEATURES: tuple[Feature, ...] = (
     # --- Execution: how a run behaves ---
     Feature("Parallel executor", "Readiness-based fan-out/fan-in; every ready node runs concurrently via gather.", "Execution"),
     Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once via a semaphore (default: unlimited).", "Execution"),
-    Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo}: outputs plus a per-node trace.", "Execution"),
+    Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo, tokens_used}: outputs plus a per-node trace.", "Execution"),
     Feature("Structured event stream", "on_event streams NodeStarted / NodeFinished / NodeFailed with per-node duration and tokens.", "Execution"),
     Feature("Metrics aggregation", "A MetricsCollector consumes the event stream into a per-node + per-run snapshot (runs, duration, tokens, failures).", "Execution"),
+    Feature("Cost budget", "execute(max_tokens=N) aborts a run with WorkflowBudgetExceeded once cumulative agent tokens pass the ceiling.", "Execution"),
     Feature("Offline dry-run", "Run with no LLM calls; agent nodes echo DRYRUN:<model> to test wiring.", "Execution"),
     # --- Resilience: surviving failure & long runs ---
     Feature("Per-node retry", "A RetryPolicy(max, backoff) retries a failed node before giving up (default: fail-fast).", "Resilience"),
@@ -333,11 +334,9 @@ NON_GOALS: tuple[Gap, ...] = (
         "stays outside, wired up by the host if wanted."),
 )
 
-GAPS: tuple[Gap, ...] = (
-    Gap("Cost budgets & quotas", "Token usage is reported per node (P3) and aggregated per run (metrics), "
-        "but there is no enforced per-run cost ceiling that aborts a run before it overspends. A real, "
-        "in-kernel gap — a small execute() guard, no distribution required."),
-)
+# Remaining in-kernel gaps. Empty: every real single-machine gap has shipped
+# (metrics aggregation, cost budgets); the rest are deliberate non-goals above.
+GAPS: tuple[Gap, ...] = ()
 
 ROADMAP: tuple[Phase, ...] = (
     Phase("P1", "Per-node retry & timeout policy", (
@@ -484,6 +483,9 @@ RUNTIME_ROWS: tuple[tuple[str, str], ...] = (
     ("state", "Real-node outputs only: {node_id: {port: value}} — excludes $in and $output."),
     ("in", "The $in seed: the workflow's state, with any run-time input overrides applied."),
     ("out", "The $output map: the key/value pairs collected from edges targeting $output."),
+    ("failed", "Isolated failures: {node_id: error} for branches captured by on_error:isolate."),
+    ("memo", "The determinism ledger: memo_key(node, input hash) → output ports, for deterministic reuse."),
+    ("tokens_used", "Cumulative agent tokens spent this run; enforced against execute(max_tokens=…)."),
 )
 
 # The xdog-flow CLI (flow.cli). Every subcommand accepts a .json or .svg (with embedded JSON) config.

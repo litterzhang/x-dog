@@ -152,7 +152,7 @@ def test_flow_content_module_importable() -> None:
         DESIGN_SECTIONS,
         EXAMPLES,
         FEATURES,
-        GAPS,
+        NON_GOALS,
         ROADMAP,
         RUNTIME_ROWS,
         SCHEMA_BLOCKS,
@@ -160,7 +160,8 @@ def test_flow_content_module_importable() -> None:
         VALIDATION_RULES,
     )
 
-    assert DESIGN_SECTIONS and FEATURES and EXAMPLES and GAPS and ROADMAP
+    # GAPS may be empty (all in-kernel gaps shipped); NON_GOALS is the meaningful set now.
+    assert DESIGN_SECTIONS and FEATURES and EXAMPLES and NON_GOALS and ROADMAP
     assert SCHEMA_BLOCKS and TYPE_ROWS and CONDITION_ROWS and RUNTIME_ROWS and COMMANDS and VALIDATION_RULES
 
 
