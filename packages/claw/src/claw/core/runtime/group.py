@@ -142,7 +142,9 @@ class GroupRuntime:
 
         group_dir = data_dir / "groups" / group.id
         ws = Path(group.workspace) if group.workspace else workspace_path(group_dir)
-        init_workspace(ws)
+        # Seed identity files with the configured agent name (falls back to the
+        # group id) so IDENTITY.md matches config instead of the generic default.
+        init_workspace(ws, agent_name=group.name or group.id)
 
         # Build embed_fn from the ai provider for API-based embedding fallback
         embed_fn = None

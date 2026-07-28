@@ -52,6 +52,32 @@ def init_workspace(
     _write_if_missing(ws / "MEMORY.md", "# Long-Term Memory\n\n")
 
 
+def set_identity_name(ws: Path, agent_name: str) -> None:
+    """Force IDENTITY.md's ``Name:`` line to *agent_name*.
+
+    Unlike :func:`init_workspace` (which only writes when the file is absent),
+    this always applies the name — used by ``onboard`` so renaming the agent
+    actually takes effect on an existing workspace. Any other IDENTITY.md content
+    the user has added is preserved; only the ``Name:`` line is rewritten (or
+    appended if none exists).
+    """
+    ws.mkdir(parents=True, exist_ok=True)
+    path = ws / "IDENTITY.md"
+    if not path.exists():
+        path.write_text(f"# Identity\n\nName: {agent_name}\n", encoding="utf-8")
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.lstrip().lower().startswith("name:"):
+            lines[i] = f"Name: {agent_name}"
+            replaced = True
+            break
+    if not replaced:
+        lines += ["", f"Name: {agent_name}"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def load_workspace_file(ws: Path, filename: str) -> str:
     """Load a single workspace file. Returns empty string if missing."""
     filepath = ws / filename
@@ -81,7 +107,7 @@ def load_memory_section(ws: Path) -> str:
 
     content = filepath.read_text(encoding="utf-8").strip()
     # Check if memory has actual content beyond the header
-    lines = [l for l in content.splitlines() if l.strip() and not l.startswith("#")]
+    lines = [line for line in content.splitlines() if line.strip() and not line.startswith("#")]
     if not lines:
         return MEMORY_EMPTY
 
@@ -94,7 +120,7 @@ def format_memory_section(content: str) -> str:
     Used when memory content is provided as a frozen snapshot
     instead of read from disk.
     """
-    lines = [l for l in content.splitlines() if l.strip() and not l.startswith("#")]
+    lines = [line for line in content.splitlines() if line.strip() and not line.startswith("#")]
     if not lines:
         return MEMORY_EMPTY
     return f"{MEMORY_HEADER}\n\n{content}"

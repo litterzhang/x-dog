@@ -121,7 +121,7 @@ def onboard(config_path: str | None) -> None:
             click.echo()
             click.echo("  Logging in to GitHub Copilot...")
             try:
-                token = asyncio.run(ai.login("copilot"))
+                asyncio.run(ai.login("copilot"))
                 click.echo("  Logged in successfully.")
                 # Reload runtime with new provider
                 runtime = ai.load()
@@ -140,7 +140,13 @@ def onboard(config_path: str | None) -> None:
         import ai
         runtime = ai.load()
         if runtime.active_providers():
-            models = list(runtime.models())
+            # Refresh from the provider first so the list reflects newly available
+            # models, not just whatever was cached; fall back to the cache on error.
+            click.echo("  Syncing available models...")
+            try:
+                models = list(asyncio.run(runtime.sync_models()))
+            except Exception:
+                models = list(runtime.models())
     except Exception:
         pass
 
@@ -194,10 +200,13 @@ def onboard(config_path: str | None) -> None:
     click.echo("Step 5: Initialize Workspace")
     click.echo("-" * 30)
 
-    from claw.core.prompt import init_workspace, workspace_path
+    from claw.core.prompt import init_workspace, set_identity_name, workspace_path
     data_dir = Path(config.data_dir)
     ws = workspace_path(data_dir / "groups" / "main")
     init_workspace(ws, agent_name=agent_name)
+    # init_workspace only writes IDENTITY.md when absent; force the chosen name so
+    # re-running onboard to rename the agent actually updates an existing workspace.
+    set_identity_name(ws, agent_name)
     click.echo(f"  Workspace: {ws}")
 
     # Done
