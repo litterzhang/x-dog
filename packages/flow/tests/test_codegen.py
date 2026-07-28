@@ -8,6 +8,7 @@ equivalent (``{$in: runtime["in"], **runtime["state"]}``).
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import subprocess
 import sys
@@ -818,3 +819,117 @@ def test_generate_checkpoint_persists_tokens_used() -> None:
     # ...and _load_checkpoint restores it back into the running total.
     assert 'global _TOKENS_USED' in src
     assert '_snap.get("tokens_used")' in src
+
+
+def _make_output_schema_wf() -> WorkflowDef:
+    """A single agent node with output_schema + web_search."""
+    return WorkflowDef(
+        name="schema_ws_wf",
+        provider="copilot",
+        entry="n1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="n1",
+                model="m",
+                system_prompt="Summarise.",
+                prompt="summarise {{topic}}",
+                input_ports=(Port("topic"),),
+                output_ports=(Port("out"),),
+                output_schema=(("summary", "string"), ("score", "integer")),
+                web_search=True,
+                web_search_model="sonar",
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="n1", mapping=(("topic", "topic"),)),),
+        initial_state=(("topic", "flow"),),
+    )
+
+
+def test_generate_output_schema_call_site_and_ruff_clean() -> None:
+    """output_schema + web_search reach the generated _run_agent call and stay ruff-clean."""
+    src = generate(_make_output_schema_wf())
+    # the submit_result directive path is compiled in (via the template helper)
+    assert "create_submit_result_tool" in src
+    assert "web_search_fn_from_provider" in src
+    # the node's call site forwards both the schema and the search model
+    assert "output_schema=(('summary', 'string'), ('score', 'integer'))" in src
+    assert 'web_search_model="sonar"' in src
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
+
+
+async def test_generate_output_schema_parity_with_interpreter() -> None:
+    """A generated output_schema module emits the same JSON output as the interpreter.
+
+    Both engines register submit_result, the (stubbed) agent submits an object, and
+    each serializes it as sorted JSON into the node's output port. web_search is
+    enabled but the stub agent never invokes it, so it is inert here.
+    """
+    import types
+
+    import agent.helpers as _agent_helpers
+    import ai as _ai
+    from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
+    from ai.utils.event_stream import EventStream as AiEventStream
+    from flow.executor import execute
+
+    result_obj = {"summary": "all good", "score": 42}
+
+    def _submit_stream_fn(model_id: object, context: object, options: object = None) -> "AiEventStream[AssistantMessage]":  # noqa: E501
+        stream: AiEventStream[AssistantMessage] = AiEventStream()
+        # First turn: emit a submit_result tool call; the Agent executes it,
+        # populating the result sink via tool_ctx. Second turn: stop.
+        if not getattr(_submit_stream_fn, "_called", False):
+            _submit_stream_fn._called = True  # type: ignore[attr-defined]
+            call = ToolCall(id="tc-1", name="submit_result", arguments={"result": result_obj})
+            msg = AssistantMessage(content=(call,), stop_reason="toolUse")
+        else:
+            msg = AssistantMessage(content=(TextContent(text="done"),), stop_reason="stop")
+
+        async def _push() -> None:
+            await asyncio.sleep(0)
+            await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+            stream.set_result(msg)
+            await stream.close()
+
+        asyncio.ensure_future(_push())  # noqa: RUF006
+        return stream
+
+    wf = _make_output_schema_wf()
+    src = generate(wf)
+
+    original_sfp = _agent_helpers.stream_fn_from_provider
+    original_ai_provider = _ai.provider
+    # The template calls web_search_fn_from_provider only when a search model is set;
+    # the stub agent never calls the tool, so a no-op factory is enough to stay import-safe.
+    original_ws = _agent_helpers.web_search_fn_from_provider
+    _agent_helpers.stream_fn_from_provider = lambda _p: _submit_stream_fn  # type: ignore[assignment]
+
+    async def _noop_ws(_q: str) -> str:
+        return ""
+
+    _agent_helpers.web_search_fn_from_provider = lambda _p, _m: _noop_ws  # type: ignore[assignment]
+    _ai.provider = lambda _name: object()  # type: ignore[assignment]
+    gen_module = types.ModuleType("_schema_parity_module")
+    try:
+        _submit_stream_fn._called = False  # type: ignore[attr-defined]
+        exec(compile(src, "<schema_parity>", "exec"), gen_module.__dict__)  # noqa: S102
+        await gen_module.main()  # type: ignore[attr-defined]
+        gen_out = gen_module._RUNTIME["state"]["n1"]["out"]  # type: ignore[attr-defined]
+
+        def _interp_factory(model: str) -> object:
+            _submit_stream_fn._called = False  # type: ignore[attr-defined]
+            return _submit_stream_fn
+
+        interp = await execute(wf, stream_fn_factory=_interp_factory)  # type: ignore[arg-type]
+        interp_out = interp.runtime["state"]["n1"]["out"]
+    finally:
+        _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
+        _agent_helpers.web_search_fn_from_provider = original_ws  # type: ignore[assignment]
+        _ai.provider = original_ai_provider  # type: ignore[assignment]
+
+    import json as _json
+
+    assert _json.loads(gen_out) == result_obj
+    assert gen_out == interp_out  # both serialize identically (sorted keys)

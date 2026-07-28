@@ -469,12 +469,21 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         lines.append("        return")
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
+    _call_args = [f'provider, "{model}", _sys, _usr']
     if node.tools:
         tool_names = ", ".join(f'"{t}"' for t in node.tools)
         lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
-        core_call = f'    result, _node_tokens = await _run_agent(provider, "{model}", _sys, _usr, _tools)'
-    else:
-        core_call = f'    result, _node_tokens = await _run_agent(provider, "{model}", _sys, _usr)'
+        _call_args.append("_tools")
+    if node.output_schema:
+        # repr renders the tuple-of-(name,type) pairs as a valid Python literal.
+        _call_args.append(f"output_schema={node.output_schema!r}")
+    if node.web_search:
+        # Mirror the interpreter: the search model defaults to the node model.
+        _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
+    _core_line = f"    result, _node_tokens = await _run_agent({', '.join(_call_args)})"
+    if len(_core_line) > 120:
+        _core_line += "  # noqa: E501"
+    core_call = _core_line
     lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
     lines.append("    _t0 = time.monotonic()")
     lines.append("    try:")
@@ -742,13 +751,15 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
         if wf.tool_refs
         else "from flow.tools import default_registry"
     )
-    # WorkflowBudgetExceeded is referenced by agent nodes (budget check) and by
-    # every isolate node's except block (it must re-raise, never capture it).
+    # flow.errors imports: WorkflowExecutionError is always referenced by the
+    # template's _run_agent (output_schema submission check). WorkflowBudgetExceeded
+    # is additionally needed by agent nodes (budget check) and by every isolate
+    # node's except block (it must re-raise, never capture it).
     needs_budget_err = has_agent_nodes or any(n.on_error == "isolate" for n in wf.nodes)
+    _errs = ["WorkflowExecutionError"]
     if needs_budget_err:
-        lines: list[str] = ["from flow.errors import WorkflowBudgetExceeded", _tools_line]
-    else:
-        lines = [_tools_line]
+        _errs.append("WorkflowBudgetExceeded")
+    lines: list[str] = [f"from flow.errors import {', '.join(sorted(_errs))}", _tools_line]
 
     # Custom-tool manifest: import each ref.
     if wf.tool_refs:

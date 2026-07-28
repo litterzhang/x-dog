@@ -6,13 +6,15 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import ai
 from agent import Agent
 from agent.core import AgentConfig, AgentTool, StreamFn
 from agent.events import TurnEndEvent
-from agent.helpers import stream_fn_from_provider
+from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
+from agent.tools import create_submit_result_tool
 from ai.types import AssistantMessage, TextContent
 $script_imports
 _EVENT_LOG = logging.getLogger("flow.generated.events")
@@ -110,10 +112,39 @@ def _save_checkpoint() -> None:
 
 
 async def _run_agent(
-    provider: object, model: str, system_prompt: str, prompt: str, tools: tuple[AgentTool, ...] = ()
+    provider: object,
+    model: str,
+    system_prompt: str,
+    prompt: str,
+    tools: tuple[AgentTool, ...] = (),
+    output_schema: tuple[tuple[str, str], ...] = (),
+    web_search_model: str | None = None,
 ) -> tuple[str, int]:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
-    agent = Agent(stream_fn, config=AgentConfig(model=model, system_prompt=system_prompt), tools=tools)
+    # Structured output: register submit_result + a result sink, and instruct the
+    # agent to call it.  The submitted object becomes the node's JSON output.
+    _sink: dict[str, object] = {}
+    _tool_ctx: dict[str, object] | None = None
+    _sys = system_prompt
+    if output_schema:
+        tools = tools + (create_submit_result_tool(),)
+        _tool_ctx = {"flow_output_schema": dict(output_schema), "flow_result_sink": _sink}
+        _fields = ", ".join(_f for _f, _ in output_schema)
+        _sys = system_prompt + (
+            "\nWhen finished, you MUST call the submit_result tool"
+            f" with an object containing these fields: {_fields}."
+        )
+    # Built-in web_search tool (search model may differ from the node model).
+    _web_search_fn: Callable[[str], Awaitable[str]] | None = None
+    if web_search_model is not None:
+        _web_search_fn = web_search_fn_from_provider(provider, web_search_model)  # type: ignore[arg-type]
+    agent = Agent(
+        stream_fn,
+        config=AgentConfig(model=model, system_prompt=_sys),
+        tools=tools,
+        tool_ctx=_tool_ctx,
+        web_search_fn=_web_search_fn,
+    )
     accumulated: list[str] = []
     _node_tokens = 0
     event_stream = await agent.prompt(prompt)
@@ -126,6 +157,11 @@ async def _run_agent(
                         accumulated.append(part.text)
                 _u = msg.usage
                 _node_tokens += _u.total_tokens or (_u.input + _u.output)
+    if output_schema:
+        _result_obj = _sink.get("result")
+        if _result_obj is None:
+            raise WorkflowExecutionError("agent did not submit a result via submit_result")
+        return json.dumps(_result_obj, ensure_ascii=False, sort_keys=True), _node_tokens
     return "".join(accumulated), _node_tokens
 
 
