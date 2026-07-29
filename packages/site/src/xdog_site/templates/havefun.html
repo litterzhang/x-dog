@@ -107,7 +107,7 @@
 
   function load(source) {
     $("hf-load-msg").textContent = "Loading…";
-    post("{{ url_for('main.havefun_load') }}", source).then(function (res) {
+    post("{{ url_for('main.havefun_load', name=name) }}", source).then(function (res) {
       if (res.status === 200 && res.body.ok) {
         state.source = source;
         $("hf-load-msg").textContent = "";
@@ -147,7 +147,7 @@
     $("hf-result").style.display = "none";
     $("hf-log").textContent = "";
     $("hf-log-wrap").style.display = "";
-    post("{{ url_for('main.havefun_run') }}", body).then(function (res) {
+    post("{{ url_for('main.havefun_run', name=name) }}", body).then(function (res) {
       if (res.status === 429) {
         $("hf-run-status").textContent = "Busy — a run is already in progress. Try again shortly.";
         $("hf-run").disabled = false;
@@ -161,7 +161,7 @@
       var jobId = res.body.job_id;
       $("hf-run-status").textContent = "Running… ⏳";
       poll = setInterval(function () {
-        fetch("{{ url_for('main.havefun_status', job_id='__ID__') }}".replace("__ID__", jobId))
+        fetch("{{ url_for('main.havefun_status', name=name, job_id='__ID__') }}".replace("__ID__", jobId))
           .then(function (r) { return r.json(); })
           .then(function (j) {
             if (!j.ok) { return; }

@@ -2,6 +2,10 @@
 title: Overview
 ---
 
+# agent
+
+*Agent runtime with tool calling and state management.*
+
 The loop that turns a model plus a set of tools into an autonomous agent: it
 streams the model, dispatches tool calls, applies steering, and manages
 conversation state and compaction.

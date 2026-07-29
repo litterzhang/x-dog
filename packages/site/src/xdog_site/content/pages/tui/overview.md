@@ -2,6 +2,10 @@
 title: Overview
 ---
 
+# tui
+
+*Terminal UI library with differential rendering.*
+
 A string-based component toolkit for terminal apps: components return lines, the
 engine diffs frames and repaints only what changed — no alternate screen, no
 flicker.

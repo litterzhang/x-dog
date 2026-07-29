@@ -2,6 +2,10 @@
 title: Overview
 ---
 
+# coding
+
+*Interactive coding agent CLI.*
+
 A terminal coding assistant built on `agent` + `tui`: session management, a live
 TUI, and the filesystem/bash tools an agent needs to read and edit a real
 repository.

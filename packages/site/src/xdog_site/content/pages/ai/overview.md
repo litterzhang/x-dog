@@ -2,6 +2,10 @@
 title: Overview
 ---
 
+# ai
+
+*Unified, typed LLM API.*
+
 A single, typed interface over LLM backends, built on a Provider / Protocol /
 Vendor split so application code never hard-codes a model SDK. The shipped vendor
 today is GitHub Copilot, reached over three wire protocols (openai-completions,

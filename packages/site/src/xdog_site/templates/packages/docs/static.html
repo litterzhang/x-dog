@@ -9,10 +9,15 @@
 
 <section>
   <div>
+    {% if page == "overview" %}
+    <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>
+    <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-default btn-small">&larr; All packages</a>
+    {% else %}
     <a href="{{ url_for('main.package_detail', name=pkg.name) }}" class="btn btn-ghost btn-default btn-small">&larr; {{ pkg.name }} overview</a>
     {% if has_docs %}
     <a href="{{ url_for('main.package_features', name=pkg.name) }}" class="btn btn-ghost btn-default btn-small">Features</a>
     <a href="{{ url_for('main.package_roadmap', name=pkg.name) }}" class="btn btn-ghost btn-default btn-small">Roadmap</a>
+    {% endif %}
     {% endif %}
   </div>
 </section>

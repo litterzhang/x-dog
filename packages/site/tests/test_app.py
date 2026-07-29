@@ -176,9 +176,15 @@ def test_package_docs_subpages_ok_with_breadcrumb(client: FlaskClient, name: str
 
 
 @pytest.mark.parametrize("name", _DOC_PACKAGES)
-def test_package_overview_links_to_deep_dive(client: FlaskClient, name: str) -> None:
+def test_overview_route_and_nav(client: FlaskClient, name: str) -> None:
+    # Both /packages/<name> and /packages/<name>/overview render the overview.
+    assert client.get(f"/packages/{name}/overview").status_code == 200
     body = client.get(f"/packages/{name}").get_data(as_text=True)
-    assert f"/packages/{name}/design" in body
+    # The overview body no longer carries an in-page "Deep dive" block or a CLI line;
+    # sub-pages are reached via the left-nav, which links them on every page.
+    assert "Deep dive" not in body
+    assert "CLI:" not in body
+    assert f"/packages/{name}/design" in body  # left-nav submenu
     assert f"/packages/{name}/roadmap" in body
 
 
@@ -244,7 +250,7 @@ def test_docs_content_modules_importable() -> None:
 
 
 def test_havefun_page_ok(client: FlaskClient) -> None:
-    resp = client.get("/havefun")
+    resp = client.get("/havefun/flow")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "HaveFun" in body
@@ -254,13 +260,15 @@ def test_havefun_page_ok(client: FlaskClient) -> None:
 
 
 def test_old_flow_havefun_url_gone(client: FlaskClient) -> None:
-    # HaveFun was promoted to a top-level route; the old nested URL is gone.
+    # HaveFun moved to a per-package route /havefun/<name>; old + un-named URLs are gone.
     assert client.get("/packages/flow/havefun").status_code == 404
     assert client.post("/packages/flow/havefun/load", json={"example": "agent_calculator"}).status_code == 404
+    assert client.get("/havefun").status_code == 404  # must name a package
+    assert client.get("/havefun/ai").status_code == 404  # only packages with workflows
 
 
 def test_havefun_load_example_returns_diagram_and_inputs(client: FlaskClient) -> None:
-    resp = client.post("/havefun/load", json={"example": "agent_calculator"})
+    resp = client.post("/havefun/flow/load", json={"example": "agent_calculator"})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True
@@ -271,7 +279,7 @@ def test_havefun_load_example_returns_diagram_and_inputs(client: FlaskClient) ->
 
 
 def test_havefun_load_unknown_example_400(client: FlaskClient) -> None:
-    resp = client.post("/havefun/load", json={"example": "does-not-exist"})
+    resp = client.post("/havefun/flow/load", json={"example": "does-not-exist"})
     assert resp.status_code == 400
 
 
@@ -295,7 +303,7 @@ def test_havefun_load_uploaded_json(client: FlaskClient) -> None:
     }
     import json as _json
 
-    resp = client.post("/havefun/load", json={"json": _json.dumps(payload)})
+    resp = client.post("/havefun/flow/load", json={"json": _json.dumps(payload)})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True
@@ -303,7 +311,7 @@ def test_havefun_load_uploaded_json(client: FlaskClient) -> None:
 
 
 def test_havefun_rejects_invalid_json(client: FlaskClient) -> None:
-    resp = client.post("/havefun/load", json={"json": "{ not valid json"})
+    resp = client.post("/havefun/flow/load", json={"json": "{ not valid json"})
     assert resp.status_code == 400
 
 
@@ -353,7 +361,7 @@ def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:
     `feedback` is an internal optional loop-carried port, NOT a workflow input, so
     it must not surface as a user-facing input box.
     """
-    resp = client.post("/havefun/load", json={"example": "refine_loop"})
+    resp = client.post("/havefun/flow/load", json={"example": "refine_loop"})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True

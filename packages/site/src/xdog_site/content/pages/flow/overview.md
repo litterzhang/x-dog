@@ -2,6 +2,10 @@
 title: Overview
 ---
 
+# flow
+
+*Multi-agent workflow engine and JSON to Python codegen.*
+
 Define a multi-agent pipeline as JSON, run it directly, or compile it to a
 self-contained Python module. Data flows through named ports wired by explicit
 edge mappings — not a shared global state — so every connection is spelled out
@@ -26,5 +30,5 @@ diagram renderers.
 uv run xdog-flow --help
 ```
 
-Or run a workflow live in the browser on the [HaveFun](/havefun) page — load a
+Or run a workflow live in the browser on the [HaveFun](/havefun/flow) page — load a
 shipped example, fill its inputs, and watch the per-node execution log stream.

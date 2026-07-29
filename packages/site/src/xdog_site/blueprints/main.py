@@ -52,10 +52,15 @@ def packages() -> str:
 # example that is cheap to run.
 _HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator", "refine_loop")
 
+# Packages that expose a runnable HaveFun page. Today only flow ships workflows.
+_HAVEFUN_PACKAGES: tuple[str, ...] = ("flow",)
 
-@bp.route("/havefun")
-def havefun() -> str:
-    return render_template("havefun.html", example_stems=list(_HAVEFUN_STEMS))
+
+@bp.route("/havefun/<name>")
+def havefun(name: str) -> str:
+    if name not in _HAVEFUN_PACKAGES:
+        abort(404)
+    return render_template("havefun.html", name=name, example_stems=list(_HAVEFUN_STEMS))
 
 
 def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None, str | None]:
@@ -93,8 +98,10 @@ def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None,
     return wf, None, None
 
 
-@bp.route("/havefun/load", methods=["POST"])
-def havefun_load() -> Any:
+@bp.route("/havefun/<name>/load", methods=["POST"])
+def havefun_load(name: str) -> Any:
+    if name not in _HAVEFUN_PACKAGES:
+        abort(404)
     from flow.graph import to_ascii_diagram, to_svg
 
     data = request.get_json(silent=True) or {}
@@ -110,8 +117,10 @@ def havefun_load() -> Any:
     return jsonify({"ok": True, "name": wf.name, "svg": svg, "ascii": ascii_diagram, "inputs": inputs})
 
 
-@bp.route("/havefun/run", methods=["POST"])
-def havefun_run() -> Any:
+@bp.route("/havefun/<name>/run", methods=["POST"])
+def havefun_run(name: str) -> Any:
+    if name not in _HAVEFUN_PACKAGES:
+        abort(404)
     from xdog_site.jobs import runner
 
     data = request.get_json(silent=True) or {}
@@ -143,8 +152,10 @@ def havefun_run() -> Any:
     return jsonify({"ok": True, "job_id": job_id})
 
 
-@bp.route("/havefun/status/<job_id>")
-def havefun_status(job_id: str) -> Any:
+@bp.route("/havefun/<name>/status/<job_id>")
+def havefun_status(name: str, job_id: str) -> Any:
+    if name not in _HAVEFUN_PACKAGES:
+        abort(404)
     from xdog_site.jobs import runner
 
     job = runner.get(job_id)
@@ -205,17 +216,21 @@ def package_roadmap(name: str) -> str:
 
 
 @bp.route("/packages/<name>")
+@bp.route("/packages/<name>/overview")
 def package_detail(name: str) -> str:
     pkg = PACKAGES_BY_NAME.get(name)
     rendered = render_page(name, "overview")
     if pkg is None or rendered is None:
         abort(404)
+    # Rendered with the same static-page template as design/reference so the
+    # overview is one markdown block with an "Overview" breadcrumb.
     return render_template(
-        "packages/detail.html",
+        "packages/docs/static.html",
         pkg=pkg,
-        body=rendered.html,
+        page="overview",
+        page_label=rendered.title,
+        content=rendered.html,
         has_docs=name in PACKAGE_DOCS,
-        has_examples=render_page(name, "examples") is not None,
     )
 
 

@@ -6,7 +6,7 @@ title: Examples
      over the shipped packages/flow/examples/*.json. Regenerate if an example changes. -->
 
 Two workflows ship with flow (`packages/flow/examples/*.json`). Both are loadable
-and runnable live on the [HaveFun](/havefun) page — pick the example, fill its
+and runnable live on the [HaveFun](/havefun/flow) page — pick the example, fill its
 inputs, and watch the per-node execution log stream.
 
 ## Agent Calculator (script → agent + bash)
@@ -65,4 +65,4 @@ uv run xdog-flow run packages/flow/examples/agent_calculator.json --dry-run --in
 uv run xdog-flow graph packages/flow/examples/refine_loop.json
 ```
 
-Or open [HaveFun](/havefun) to run either example in the browser.
+Or open [HaveFun](/havefun/flow) to run either example in the browser.
