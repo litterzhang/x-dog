@@ -11,11 +11,6 @@
     stack: a provider API at the bottom, an agent runtime and a workflow engine
     in the middle, ready-to-use tools on top.
   </p>
-  <p>
-    <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-primary">Explore packages</a>
-    <a href="{{ url_for('main.havefun', name='flow') }}" class="btn btn-ghost btn-default">Try it live</a>
-    <a href="{{ url_for('blog.blog_index') }}" class="btn btn-ghost btn-default">Read the blog</a>
-  </p>
 </section>
 
 {% for title, pkgs in layers %}
@@ -40,4 +35,14 @@
   </div>
 </section>
 {% endfor %}
+{% endblock %}
+
+{% block content_nav %}
+<div class="content-nav grid">
+  <div class="cell">
+    <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-primary">Explore packages</a>
+    <a href="{{ url_for('main.havefun', name='flow') }}" class="btn btn-ghost btn-default">Try it live</a>
+    <a href="{{ url_for('blog.blog_index') }}" class="btn btn-ghost btn-default">Read the blog</a>
+  </div>
+</div>
 {% endblock %}
