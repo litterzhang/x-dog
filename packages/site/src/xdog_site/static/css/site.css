@@ -64,14 +64,6 @@ body.hack {
   }
 }
 
-.dev-icon {
-  height: 1.5rem;
-  width: 1.5rem;
-  vertical-align: middle;
-  margin-right: 0.5rem;
-  display: inline-block;
-}
-
 .state {
   color: #ccc;
   padding: 0.4rem 0.8rem;
@@ -87,10 +79,6 @@ body.hack {
   color: #f44;
   border-color: #f44;
 }
-.state-warning {
-  color: #fa0;
-  border-color: #fa0;
-}
 
 .spacer {
   min-height: 1rem;
@@ -100,20 +88,20 @@ body.hack {
   padding: 0.4rem 0.8rem;
 }
 
-.title-break {
-  display: none;
-}
-
-@media (max-width: 600px) {
-  .title-break {
-    display: inline;
-  }
-}
-
 /* x-dog-only elements (blog meta, FAQ accordion, pagination) — depins has no
    equivalents. No .card rules here: card styling comes entirely from hack.css. */
 .muted {
   color: #888;
+}
+/* Blog index: space the post entries and their metadata lines. */
+.media {
+  margin-bottom: 1.5rem;
+}
+.media-content {
+  margin: 0.25rem 0;
+}
+.media-meta {
+  font-size: 0.9rem;
 }
 /* hack.css zeroes section margins; restore vertical rhythm between the main
    content sections. */

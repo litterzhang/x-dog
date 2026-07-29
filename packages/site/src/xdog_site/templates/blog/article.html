@@ -8,6 +8,7 @@
   <header class="post-header">
     <h3>Info</h3>
     <div class="post-meta muted">
+      <strong>Author:</strong> <span itemprop="author">{{ article.author }}</span><br/>
       <strong>Date:</strong>
       <span datetime="{{ article.date.isoformat() }}" itemprop="datePublished">{{ article.date.strftime('%Y-%m-%d %H:%M') }}</span><br/>
       {% if article.tags %}

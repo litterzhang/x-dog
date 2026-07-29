@@ -1,27 +1,33 @@
 {% extends "base.html" %}
 {% from "components/pagination.html" import pagination %}
 {% block title %} — Blog{% endblock %}
-{% block ctitle %} &gt; Blog{% endblock %}
+{% block ctitle %}/ Blog{% endblock %}
 
 {% block content %}
 <section>
-  <h2>Latest Articles</h2>
-  <p>Notes on the design and internals of the x-dog packages.</p>
+  <h2>Posts</h2>
+  <p class="muted">Notes on the design and internals of the x-dog packages.</p>
   <div class="articles-list">
     {% if articles %}
       {% for a in articles %}
-        <article class="article-card">
-          <h3>
-            <a class="article-link" href="{{ url_for('blog.blog_article', slug=a.slug) }}">{{ a.title }}</a>
-          </h3>
-          <p class="article-meta">
-            {{ a.date.strftime("%Y-%m-%d") }} · {% if a.tags %}{{ a.tags|join(", ") }}{% endif %}
-          </p>
-          <p class="article-desc">{{ a.description }}</p>
-          <p class="article-readmore">
-            <a href="{{ url_for('blog.blog_article', slug=a.slug) }}">Read more &rarr;</a>
-          </p>
-        </article>
+        <div class="media">
+          <div class="media-body">
+            <div class="media-heading">
+              <span>{{ a.date.strftime('%d %b %Y') }} &raquo;
+                <a href="{{ url_for('blog.blog_article', slug=a.slug) }}" title="{{ a.title }}">{{ a.title }}</a>
+              </span>
+            </div>
+            {% if a.description %}
+            <div class="media-content">{{ a.description }}</div>
+            {% endif %}
+            <div class="media-meta muted">
+              <strong>Author:</strong> {{ a.author }}
+              {% if a.tags %}&middot; <strong>Tags:</strong>
+                {% for tag in a.tags %}<code>{{ tag }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
       {% endfor %}
       {{ pagination(url_for('blog.blog_index'), page, total_pages) }}
     {% else %}

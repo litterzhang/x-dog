@@ -23,6 +23,9 @@ from xdog_site.content.docpages import render_markdown
 
 _BLOG_DIR = Path(__file__).resolve().parent / "pages" / "blog"
 
+# Default post author when a markdown file's frontmatter omits ``author``.
+_DEFAULT_AUTHOR = "x-dog"
+
 
 @dataclass(frozen=True)
 class Article:
@@ -34,6 +37,7 @@ class Article:
     body: Markup  # rendered HTML
     date: datetime
     tags: tuple[str, ...]
+    author: str = _DEFAULT_AUTHOR
 
 
 # Cache keyed by the directory mtime so new/edited/removed posts are picked up.
@@ -69,6 +73,7 @@ def _load_articles() -> list[Article]:
                 body=render_markdown(post.content),
                 date=_parse_date(post.get("date")),
                 tags=tags,
+                author=str(post.get("author") or _DEFAULT_AUTHOR),
             )
         )
     articles.sort(key=lambda a: a.date, reverse=True)  # newest first
