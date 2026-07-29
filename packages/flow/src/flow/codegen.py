@@ -714,7 +714,12 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
 
 
 def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit imports for the tools registry, coercers/RuntimeContext, and run-ref scripts."""
+    """Emit imports for the tools registry and run-ref scripts.
+
+    The flow-internal helpers (errors / coerce / runtime) are inlined into the
+    template itself, so the generated module never imports the ``flow`` package
+    for them — only ``flow.tools`` (the bridge to the agent tool registry) remains.
+    """
     extra: dict[str, list[str]] = {}
     for node in wf.nodes:
         if node.type == "script" and node.run:
@@ -723,38 +728,18 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             extra.setdefault(module, []).append(f"{func} as _script_{safe}")
 
     flow_tools_aliases = extra.pop("flow.tools", [])
-    has_agent_nodes = any(n.type not in ("script", "human") for n in wf.nodes)
     _tools_line = (
         "from flow.tools import bind_tool, default_registry"
         if wf.tool_refs
         else "from flow.tools import default_registry"
     )
-    # flow.errors imports: WorkflowExecutionError is always referenced by the
-    # template's _run_agent (output_schema submission check). WorkflowBudgetExceeded
-    # is additionally needed by agent nodes (budget check) and by every isolate
-    # node's except block (it must re-raise, never capture it).
-    needs_budget_err = has_agent_nodes or any(n.on_error == "isolate" for n in wf.nodes)
-    _errs = ["WorkflowExecutionError"]
-    if needs_budget_err:
-        _errs.append("WorkflowBudgetExceeded")
-    lines: list[str] = [f"from flow.errors import {', '.join(sorted(_errs))}", _tools_line]
+    lines: list[str] = [_tools_line]
 
     # Custom-tool manifest: import each ref.
     if wf.tool_refs:
         for i, (_name, ref) in enumerate(wf.tool_refs):
             module, attr = ref.rsplit(":", 1)
             lines.append(f"from {module} import {attr} as _tool_{i}")
-
-    script_nodes = [n for n in wf.nodes if n.type == "script"]
-    if script_nodes:
-        coercers = []
-        if any(n.input_ports for n in script_nodes):
-            coercers.append("to_python")
-        if any(n.output_ports for n in script_nodes):
-            coercers.append("to_state")
-        if coercers:
-            lines.append(f"from flow.coerce import {', '.join(coercers)}")
-        lines.append("from flow.runtime import RuntimeContext")
 
     for alias in flow_tools_aliases:
         lines.append(f"from flow.tools import {alias}")

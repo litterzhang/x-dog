@@ -213,5 +213,7 @@ def test_codegen_no_human_nodes_unchanged() -> None:
     src = generate(wf)
     assert "_SIGNALS" in src  # present but empty set
     assert "FLOW_SIGNALS" not in src  # not populated from env for non-human workflows
-    # No PAUSED / SystemExit from human logic
-    assert "WorkflowPaused" not in src
+    # No PAUSED / SystemExit runtime logic from a human node (the WorkflowPaused
+    # class is inlined into every module, but the pause code path is human-only).
+    assert "PAUSED" not in src
+    assert "SystemExit" not in src

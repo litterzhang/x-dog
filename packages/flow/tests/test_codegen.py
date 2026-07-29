@@ -767,12 +767,10 @@ async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
     """
     import types
 
-    from flow.errors import WorkflowBudgetExceeded
-
-    # A script-only isolate node that raises the control-flow exception directly.
+    # The script raises the generated module's own inlined WorkflowBudgetExceeded
+    # (available in the module globals) — the same class the isolate handler checks.
     script_code = (
         "def over_budget(ctx):\n"
-        "    from flow.errors import WorkflowBudgetExceeded\n"
         "    raise WorkflowBudgetExceeded(100, 10)\n"
     )
     wf = WorkflowDef(
@@ -794,14 +792,16 @@ async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
     src = generate(wf)
     ok, msg = _ruff_clean(src)
     assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
-    # Script-only isolate workflows must still import the budget error to re-raise it.
-    assert "from flow.errors import WorkflowBudgetExceeded" in src
+    # WorkflowBudgetExceeded is inlined into the module (not imported from flow).
+    assert "class WorkflowBudgetExceeded" in src
+    assert "from flow.errors import" not in src
 
     gen_module = types.ModuleType("_isolate_budget_test_module")
     exec(compile(src, "<isolate_budget_test>", "exec"), gen_module.__dict__)  # noqa: S102
     import pytest as _pytest
 
-    with _pytest.raises(WorkflowBudgetExceeded):
+    # The control-flow exception propagates instead of being isolated.
+    with _pytest.raises(gen_module.WorkflowBudgetExceeded):  # type: ignore[attr-defined]
         await gen_module.main()  # type: ignore[attr-defined]
     # The node was NOT captured as an isolated failure — the run aborted instead.
     assert "over_budget" not in gen_module._ISOLATED  # type: ignore[attr-defined]
@@ -933,3 +933,49 @@ async def test_generate_output_schema_parity_with_interpreter() -> None:
 
     assert _json.loads(gen_out) == result_obj
     assert gen_out == interp_out  # both serialize identically (sorted keys)
+
+
+async def test_generated_module_does_not_import_flow_internal() -> None:
+    """errors / coerce / runtime are inlined; the module never imports them from flow.
+
+    Only ``flow.tools`` (the bridge to the agent tool registry) may remain — the
+    flow-internal helpers must be self-contained in the generated source.
+    """
+    import types
+
+    # A script node exercises to_python / to_state / RuntimeContext. This is a
+    # pure-script workflow (no agent nodes).
+    wf = WorkflowDef(
+        name="no-flow-internal",
+        provider="copilot",
+        entry="s",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="s",
+                type="script",
+                code="def s(ctx, n):\n    return n + 1\n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("o", "integer"),),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="s", mapping=(("n", "n"),)),),
+        initial_state=(("n", "41"),),
+    )
+    src = generate(wf)
+
+    # No import of the inlined flow modules.
+    assert "from flow.errors" not in src
+    assert "from flow.coerce" not in src
+    assert "from flow.runtime" not in src
+    # The helpers are inlined instead.
+    assert "def to_python" in src and "def to_state" in src
+    assert "class RuntimeContext" in src
+
+    # And the inlined coercion actually works end to end (41 -> "42").
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
+    gen_module = types.ModuleType("_no_flow_internal_module")
+    exec(compile(src, "<no_flow_internal>", "exec"), gen_module.__dict__)  # noqa: S102
+    await gen_module.main()  # type: ignore[attr-defined]
+    assert gen_module._OUT["s"]["o"] == "42"  # type: ignore[attr-defined]

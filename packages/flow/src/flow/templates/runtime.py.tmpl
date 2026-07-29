@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 import ai
 from agent import Agent
@@ -18,6 +19,96 @@ from agent.tools import create_submit_result_tool
 from ai.types import AssistantMessage, TextContent
 $script_imports
 _EVENT_LOG = logging.getLogger("flow.generated.events")
+
+
+# ---------------------------------------------------------------------------
+# Inlined flow-internal helpers (equivalent to flow.errors / flow.coerce /
+# flow.runtime) so this module does not import the flow package at run time.
+# ---------------------------------------------------------------------------
+class WorkflowError(Exception):
+    """Base class for all flow workflow errors."""
+
+
+class WorkflowExecutionError(WorkflowError):
+    """Raised when a workflow fails during execution."""
+
+
+class WorkflowBudgetExceeded(WorkflowError):
+    """Raised when a run's cumulative token usage exceeds its configured budget."""
+
+    def __init__(self, used: int, budget: int) -> None:
+        super().__init__(f"token budget exceeded: used {used} > budget {budget}")
+        self.used = used
+        self.budget = budget
+
+
+class WorkflowPaused(Exception):
+    """Raised when a human node pauses the run awaiting an external signal."""
+
+    def __init__(self, node_id: str, signal: str) -> None:
+        super().__init__(f"paused at {node_id!r} awaiting signal {signal!r}")
+        self.node_id = node_id
+        self.signal = signal
+
+
+class RuntimeContext:
+    """Read-only runtime info for a single script-node invocation.
+
+    A plain class (not a dataclass) so it works when this module is exec'd into
+    an unregistered module object — @dataclass resolves string annotations via
+    sys.modules[cls.__module__], which fails there.
+    """
+
+    __slots__ = ("step", "node_id", "workflow_name")
+
+    def __init__(self, step: int, node_id: str, workflow_name: str) -> None:
+        self.step = step
+        self.node_id = node_id
+        self.workflow_name = workflow_name
+
+
+_COERCE_TRUE = {"true", "1", "yes", "on"}
+_COERCE_FALSE = {"false", "0", "no", "off", ""}
+
+
+def to_python(value: str, json_type: str) -> Any:
+    """Coerce a state string *value* into the Python type named by *json_type*."""
+    if json_type == "string":
+        return value
+    if json_type == "integer":
+        return int(value) if value.strip() != "" else 0
+    if json_type == "number":
+        return float(value) if value.strip() != "" else 0.0
+    if json_type == "boolean":
+        low = value.strip().lower()
+        if low in _COERCE_TRUE:
+            return True
+        if low in _COERCE_FALSE:
+            return False
+        raise ValueError(f"cannot coerce {value!r} to boolean")
+    if json_type in ("array", "object"):
+        if value.strip() == "":
+            return [] if json_type == "array" else {}
+        parsed = json.loads(value)
+        if json_type == "array" and not isinstance(parsed, list):
+            raise ValueError(f"expected a JSON array, got {type(parsed).__name__}")
+        if json_type == "object" and not isinstance(parsed, dict):
+            raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+        return parsed
+    raise ValueError(f"unknown json type {json_type!r}")
+
+
+def to_state(value: Any, json_type: str) -> str:
+    """Coerce a script's return *value* back into a string for state storage."""
+    if json_type == "string":
+        return value if isinstance(value, str) else str(value)
+    if json_type in ("integer", "number", "boolean"):
+        return str(value)
+    if json_type in ("array", "object"):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    raise ValueError(f"unknown json type {json_type!r}")
+
+
 
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
