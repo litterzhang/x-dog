@@ -74,6 +74,8 @@ def test_bundle_main_bootstraps_vendor_path(tmp_path: Path) -> None:
     assert "_vendor" in main
     assert "sys.path.insert" in main
     assert "from workflow import main" in main
+    # -v / --verbose enables the node-event logging.
+    assert "--verbose" in main and "basicConfig" in main
 
 
 def test_bundle_overwrites_existing(tmp_path: Path) -> None:

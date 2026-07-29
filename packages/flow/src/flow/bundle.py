@@ -73,6 +73,7 @@ def _render_main() -> str:
         '"""Entry point: run the bundled workflow with vendored ai/agent on sys.path."""\n'
         "\n"
         "import asyncio\n"
+        "import logging\n"
         "import sys\n"
         "from pathlib import Path\n"
         "\n"
@@ -84,6 +85,10 @@ def _render_main() -> str:
         "from workflow import main  # noqa: E402  (after sys.path setup)\n"
         "\n"
         "if __name__ == '__main__':\n"
+        "    if '-v' in sys.argv or '--verbose' in sys.argv:\n"
+        "        # Surface the P3 node lifecycle events the workflow logs to\n"
+        "        # 'flow.generated.events'; off by default (JSON output only).\n"
+        "        logging.basicConfig(level=logging.INFO, format='%(message)s')\n"
         "    asyncio.run(main())\n"
     )
 
@@ -118,6 +123,7 @@ def _render_readme(wf: WorkflowDef, requirements: list[str], offline: bool) -> s
         f"{install}\n"
         "python .              # real run (needs provider auth)\n"
         "python . --dry-run    # wiring check, no LLM calls, no auth\n"
+        "python . -v           # also print node lifecycle events\n"
         "```\n"
         "\n"
         "## Requirements\n"
