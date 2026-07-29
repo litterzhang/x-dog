@@ -1,28 +1,19 @@
-"""Shared content model for the per-package deep-dive sub-pages.
+"""Shared content model for the dynamic per-package sub-pages (Features + Roadmap).
 
-The ``flow`` package has its own bespoke content module and templates (it carries
-extras like the runnable HaveFun page). The other packages — ai, agent, tui,
-coding, claw — share this small set of frozen dataclasses and a single set of
-generic templates (``templates/packages/docs/*.html``), so each package only has
-to author a :class:`PackageDocs` value.
+Every package's static pages (Overview / Design / Reference / Examples) are
+authored as markdown under ``content/pages/<package>/`` and rendered by
+:mod:`xdog_site.content.docpages`. The two DYNAMIC pages — Features and Roadmap —
+keep their content in Python here, so all packages (including flow) share one
+:class:`PackageDocs` value plus the generic templates
+``templates/packages/docs/{features,roadmap}.html``.
 
 Everything here is hand-written prose kept accurate against each package's actual
-source (public ``__init__`` exports, CLI, and modules), so the site has no
-import-time dependency on the packages it documents.
+source, so the site has no import-time dependency on the packages it documents.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Section:
-    """A titled block of prose lines and optional bullet points (Design page)."""
-
-    heading: str
-    body: tuple[str, ...] = ()
-    bullets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -32,23 +23,6 @@ class Feature:
     title: str
     detail: str
     category: str = ""
-
-
-@dataclass(frozen=True)
-class RefBlock:
-    """A reference block: heading, optional prose/bullets, and an optional table.
-
-    When ``columns`` is set the block renders a table whose header is ``columns``
-    and whose body is ``rows`` (each row a tuple the same width as ``columns``).
-    Prose (``body``/``bullets``) renders above the table, so one block can explain
-    a concept and then tabulate it.
-    """
-
-    heading: str
-    body: tuple[str, ...] = ()
-    bullets: tuple[str, ...] = ()
-    columns: tuple[str, ...] = ()
-    rows: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,19 +37,13 @@ class Phase:
 
 @dataclass(frozen=True)
 class PackageDocs:
-    """Everything the four generic sub-pages need for one package."""
+    """The Features + Roadmap content for one package (the dynamic sub-pages)."""
 
     name: str
-
-    design_intro: str
-    design_sections: tuple[Section, ...]
 
     features_intro: str
     feature_categories: tuple[str, ...]
     features: tuple[Feature, ...]
-
-    reference_intro: str
-    reference_blocks: tuple[RefBlock, ...]
 
     roadmap_intro: str
     roadmap: tuple[Phase, ...]

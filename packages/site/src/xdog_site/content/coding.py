@@ -1,58 +1,15 @@
-"""Deep-dive content for the ``coding`` package — an interactive coding agent CLI.
+"""Dynamic (Features + Roadmap) content for the ``coding`` package.
 
-Accurate against packages/coding/src/coding: agent+tui composition, session
-management, the three run modes (interactive TUI / print / RPC), layered
-settings, and the single xdog-coding command with its slash commands.
+coding's static pages (Overview / Design / Reference) are markdown under
+``content/pages/coding/``; its Features and Roadmap stay in Python here. Accurate
+against packages/coding/src/coding: agent+tui composition, session management, the
+three run modes (interactive TUI / print / RPC), layered settings, and the single
+xdog-coding command with its slash commands.
 """
 
 from __future__ import annotations
 
-from xdog_site.content.docs import Feature, PackageDocs, Phase, RefBlock, Section
-
-_DESIGN = (
-    Section(
-        heading="The reference application for the stack",
-        body=(
-            "coding is where the lower-level packages become a product: it builds an agent.Agent over "
-            "ai's Copilot provider and the default filesystem / bash / current_time tools, wraps it in "
-            "an AgentSession, and renders it with tui. If you want to see how ai + agent + tui compose, "
-            "this is the worked example.",
-        ),
-    ),
-    Section(
-        heading="Sessions that persist, branch, and compact",
-        body=(
-            "A session is JSON-persisted SessionData (session_manager.py). The AgentSession subscribes "
-            "to Agent events to persist as it runs, compacts history when it approaches the model "
-            "window (core/compaction), and supports branching — fork a conversation and restore a "
-            "branch — so exploratory work does not clobber the main thread.",
-        ),
-    ),
-    Section(
-        heading="Three run modes, one core",
-        body=(
-            "The same session core drives three front-ends: an interactive TUI "
-            "(header / chat log / status / editor) that streams tokens and visualises tool runs; a "
-            "non-interactive print mode with text / json / markdown output for scripting; and an RPC "
-            "mode for IDE integration.",
-        ),
-    ),
-    Section(
-        heading="Layered settings",
-        body=(
-            "Settings resolve session > project > global via pydantic models "
-            "(settings_manager.py), so a repository can pin a model or thinking level while a single "
-            "session overrides it for one run.",
-        ),
-    ),
-    Section(
-        heading="Extensible via skills and extensions",
-        body=(
-            "YAML skills (core/skills.py) and an extension loader (core/extensions) let a project add "
-            "reusable prompts and capabilities without forking the agent.",
-        ),
-    ),
-)
+from xdog_site.content.docs import Feature, PackageDocs, Phase
 
 _FEATURES = (
     Feature("Interactive TUI", "Streaming chat with live tool-execution and diff display, built on "
@@ -78,48 +35,6 @@ _FEATURES = (
 )
 
 _FEATURE_CATEGORIES = ("Modes", "Sessions", "Tools")
-
-_REFERENCE = (
-    RefBlock(
-        heading="CLI — xdog-coding",
-        body=("A single command (not subcommands) with flags. FILES… are appended to the initial "
-              "message.",),
-        columns=("Flag", "Does"),
-        rows=(
-            ("-m / --model", "Choose the model."),
-            ("-r / --resume · --resume-id", "Resume the most-recent session, or one by id."),
-            ("-p / --prompt", "Provide the initial prompt."),
-            ("--print · --output-format", "Non-interactive output as text / json / markdown."),
-            ("--working-dir · --config", "Set the working directory / config file."),
-            ("--thinking-level", "none / normal / deep / ultrathink."),
-            ("--list-models · --pick-session", "List models / pick a session interactively."),
-            ("--rpc · --verbose", "Start the RPC front-end / verbose logging."),
-        ),
-    ),
-    RefBlock(
-        heading="Slash commands",
-        body=("Available inside the interactive session (slash_commands.py).",),
-        columns=("Command", "Does"),
-        rows=(
-            ("/help", "List commands."),
-            ("/model · /thinking", "Switch model / reasoning depth."),
-            ("/compact · /clear", "Compact history / clear the session."),
-            ("/session · /sessions", "Show the current session / list sessions."),
-            ("/fork · /branch", "Fork the conversation / manage branches."),
-            ("/quit · /exit", "Leave."),
-        ),
-    ),
-    RefBlock(
-        heading="SDK entry points",
-        body=("For embedding the coding agent programmatically (core/sdk.py).",),
-        columns=("Name", "Purpose"),
-        rows=(
-            ("create_agent_session", "Build a ready AgentSession from options."),
-            ("CreateSessionOptions / Result", "Typed inputs / outputs for session creation."),
-            ("AgentSession", "The persisted, event-subscribed session wrapper."),
-        ),
-    ),
-)
 
 _ROADMAP = (
     Phase("Shipped", "Interactive coding agent", (
@@ -148,15 +63,10 @@ _ROADMAP = (
 
 DOCS = PackageDocs(
     name="coding",
-    design_intro="How coding composes ai + agent + tui into a terminal coding assistant — sessions, "
-                 "three run modes, and layered settings.",
-    design_sections=_DESIGN,
     features_intro="What the coding CLI does today. It is the reference application showing how the "
                    "lower-level packages fit together.",
     feature_categories=_FEATURE_CATEGORIES,
     features=_FEATURES,
-    reference_intro="The xdog-coding command, its slash commands, and the embedding SDK.",
-    reference_blocks=_REFERENCE,
     roadmap_intro="Shipped foundations plus where coding is heading in 2026. Planned items are "
                   "aspirational, not yet implemented.",
     roadmap=_ROADMAP,

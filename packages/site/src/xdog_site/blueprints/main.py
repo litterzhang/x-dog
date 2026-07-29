@@ -8,26 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, abort, jsonify, render_template, request
-from markupsafe import Markup
 
+from xdog_site.content.docpages import render_page
 from xdog_site.content.docs import PackageDocs
 from xdog_site.content.faq import FAQS
-from xdog_site.content.flow import (
-    COMMANDS,
-    CONDITION_ROWS,
-    DESIGN_SECTIONS,
-    EXAMPLES,
-    FEATURE_CATEGORIES,
-    FEATURES,
-    GAPS,
-    NON_GOALS,
-    POSITIONING,
-    ROADMAP,
-    RUNTIME_ROWS,
-    SCHEMA_BLOCKS,
-    TYPE_ROWS,
-    VALIDATION_RULES,
-)
 from xdog_site.content.packages import LAYERS, PACKAGES, PACKAGES_BY_NAME
 
 bp = Blueprint("main", __name__)
@@ -36,14 +20,15 @@ _MAX_UPLOAD_BYTES = 256 * 1024  # generous cap for a workflow JSON
 
 
 def _load_package_docs() -> dict[str, PackageDocs]:
-    """Registry of packages that use the generic four-page deep dive (not flow)."""
+    """Registry of packages whose Features + Roadmap are Python-authored (all of them)."""
     from xdog_site.content.agent import DOCS as AGENT_DOCS
     from xdog_site.content.ai import DOCS as AI_DOCS
     from xdog_site.content.claw import DOCS as CLAW_DOCS
     from xdog_site.content.coding import DOCS as CODING_DOCS
+    from xdog_site.content.flow_docs import DOCS as FLOW_DOCS
     from xdog_site.content.tui import DOCS as TUI_DOCS
 
-    return {d.name: d for d in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS)}
+    return {d.name: d for d in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS, FLOW_DOCS)}
 
 
 PACKAGE_DOCS: dict[str, PackageDocs] = _load_package_docs()
@@ -60,58 +45,6 @@ def packages() -> str:
     return render_template("packages/index.html", packages=PACKAGES)
 
 
-# -- flow deep-dive sub-pages (registered before the generic <name> route) ----
-
-
-@bp.route("/packages/flow/design")
-def flow_design() -> str:
-    return render_template("packages/flow/design.html", pkg=PACKAGES_BY_NAME["flow"], sections=DESIGN_SECTIONS)
-
-
-@bp.route("/packages/flow/features")
-def flow_features() -> str:
-    # Group features by category in the declared category order (unlisted → end).
-    order = {c: i for i, c in enumerate(FEATURE_CATEGORIES)}
-    cats: list[str] = []
-    for f in FEATURES:
-        if f.category not in cats:
-            cats.append(f.category)
-    cats.sort(key=lambda c: order.get(c, len(order)))
-    grouped = [(c, [f for f in FEATURES if f.category == c]) for c in cats]
-    return render_template("packages/flow/features.html", pkg=PACKAGES_BY_NAME["flow"], groups=grouped)
-
-
-@bp.route("/packages/flow/reference")
-def flow_reference() -> str:
-    return render_template(
-        "packages/flow/reference.html",
-        pkg=PACKAGES_BY_NAME["flow"],
-        schema_blocks=SCHEMA_BLOCKS,
-        type_rows=TYPE_ROWS,
-        condition_rows=CONDITION_ROWS,
-        runtime_rows=RUNTIME_ROWS,
-        commands=COMMANDS,
-        validation_rules=VALIDATION_RULES,
-    )
-
-
-@bp.route("/packages/flow/examples")
-def flow_examples() -> str:
-    return render_template("packages/flow/examples.html", pkg=PACKAGES_BY_NAME["flow"], examples=_flow_examples())
-
-
-@bp.route("/packages/flow/roadmap")
-def flow_roadmap() -> str:
-    return render_template(
-        "packages/flow/roadmap.html",
-        pkg=PACKAGES_BY_NAME["flow"],
-        positioning=POSITIONING,
-        non_goals=NON_GOALS,
-        gaps=GAPS,
-        roadmap=ROADMAP,
-    )
-
-
 # -- HaveFun: load a workflow, view diagrams, fill inputs, run async ----------
 
 # Curated built-in workflows offered in the HaveFun example picker (also the
@@ -120,11 +53,9 @@ def flow_roadmap() -> str:
 _HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator", "refine_loop")
 
 
-@bp.route("/packages/flow/havefun")
-def flow_havefun() -> str:
-    return render_template(
-        "packages/flow/havefun.html", pkg=PACKAGES_BY_NAME["flow"], example_stems=list(_HAVEFUN_STEMS)
-    )
+@bp.route("/havefun")
+def havefun() -> str:
+    return render_template("havefun.html", example_stems=list(_HAVEFUN_STEMS))
 
 
 def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None, str | None]:
@@ -162,8 +93,8 @@ def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None,
     return wf, None, None
 
 
-@bp.route("/packages/flow/havefun/load", methods=["POST"])
-def flow_havefun_load() -> Any:
+@bp.route("/havefun/load", methods=["POST"])
+def havefun_load() -> Any:
     from flow.graph import to_ascii_diagram, to_svg
 
     data = request.get_json(silent=True) or {}
@@ -179,8 +110,8 @@ def flow_havefun_load() -> Any:
     return jsonify({"ok": True, "name": wf.name, "svg": svg, "ascii": ascii_diagram, "inputs": inputs})
 
 
-@bp.route("/packages/flow/havefun/run", methods=["POST"])
-def flow_havefun_run() -> Any:
+@bp.route("/havefun/run", methods=["POST"])
+def havefun_run() -> Any:
     from xdog_site.jobs import runner
 
     data = request.get_json(silent=True) or {}
@@ -212,8 +143,8 @@ def flow_havefun_run() -> Any:
     return jsonify({"ok": True, "job_id": job_id})
 
 
-@bp.route("/packages/flow/havefun/status/<job_id>")
-def flow_havefun_status(job_id: str) -> Any:
+@bp.route("/havefun/status/<job_id>")
+def havefun_status(job_id: str) -> Any:
     from xdog_site.jobs import runner
 
     job = runner.get(job_id)
@@ -227,8 +158,10 @@ def flow_havefun_status(job_id: str) -> Any:
     return jsonify(payload)
 
 
-# -- generic package deep-dive sub-pages (ai / agent / tui / coding / claw) ----
-# Registered before the generic <name> route so /packages/ai/design resolves here.
+# -- per-package sub-pages ----------------------------------------------------
+# Static pages (Design / Reference / Examples) are markdown rendered by one view;
+# dynamic pages (Features / Roadmap) come from PACKAGE_DOCS. Both are registered
+# before the generic <name> route so /packages/ai/design resolves here.
 
 
 def _docs_or_404(name: str) -> tuple[Any, PackageDocs]:
@@ -239,10 +172,22 @@ def _docs_or_404(name: str) -> tuple[Any, PackageDocs]:
     return pkg, docs
 
 
-@bp.route("/packages/<name>/design")
-def package_design(name: str) -> str:
-    pkg, docs = _docs_or_404(name)
-    return render_template("packages/docs/design.html", pkg=pkg, docs=docs)
+@bp.route("/packages/<name>/design", defaults={"page": "design"})
+@bp.route("/packages/<name>/reference", defaults={"page": "reference"})
+@bp.route("/packages/<name>/examples", defaults={"page": "examples"})
+def package_static(name: str, page: str) -> str:
+    pkg = PACKAGES_BY_NAME.get(name)
+    rendered = render_page(name, page)
+    if pkg is None or rendered is None:
+        abort(404)
+    return render_template(
+        "packages/docs/static.html",
+        pkg=pkg,
+        page=page,
+        page_label=rendered.title,
+        content=rendered.html,
+        has_docs=name in PACKAGE_DOCS,
+    )
 
 
 @bp.route("/packages/<name>/features")
@@ -251,12 +196,6 @@ def package_features(name: str) -> str:
     return render_template(
         "packages/docs/features.html", pkg=pkg, docs=docs, groups=docs.grouped_features()
     )
-
-
-@bp.route("/packages/<name>/reference")
-def package_reference(name: str) -> str:
-    pkg, docs = _docs_or_404(name)
-    return render_template("packages/docs/reference.html", pkg=pkg, docs=docs)
 
 
 @bp.route("/packages/<name>/roadmap")
@@ -268,9 +207,16 @@ def package_roadmap(name: str) -> str:
 @bp.route("/packages/<name>")
 def package_detail(name: str) -> str:
     pkg = PACKAGES_BY_NAME.get(name)
-    if pkg is None:
+    rendered = render_page(name, "overview")
+    if pkg is None or rendered is None:
         abort(404)
-    return render_template("packages/detail.html", pkg=pkg, has_docs=name in PACKAGE_DOCS)
+    return render_template(
+        "packages/detail.html",
+        pkg=pkg,
+        body=rendered.html,
+        has_docs=name in PACKAGE_DOCS,
+        has_examples=render_page(name, "examples") is not None,
+    )
 
 
 @bp.route("/faq")
@@ -292,58 +238,3 @@ def _examples_dir() -> Path | None:
         return candidate if candidate.is_dir() else None
     except Exception:
         return None
-
-
-@functools.lru_cache(maxsize=1)
-def _flow_examples() -> tuple[dict[str, Any], ...]:
-    """Render each curated example to SVG + ASCII + one generated-Python sample.
-
-    Every step is guarded so a missing binary or bad example degrades the card
-    (skips its SVG) instead of 500-ing the page.  Only the authored allow-list of
-    stems is loaded — never user input.  Cached: examples are static content.
-    """
-    ex_dir = _examples_dir()
-    if ex_dir is None:
-        return ()
-    from flow.codegen import generate
-    from flow.graph import to_ascii_diagram, to_svg
-    from flow.loader import load_workflow
-
-    out: list[dict[str, Any]] = []
-    show_codegen = True
-    for meta in EXAMPLES:
-        path = ex_dir / f"{meta.stem}.json"
-        if not path.is_file():
-            continue
-        try:
-            wf = load_workflow(path)
-        except Exception:
-            continue
-        svg = ascii_diagram = code = None
-        try:
-            svg = Markup(to_svg(wf))
-        except Exception:
-            svg = None
-        try:
-            ascii_diagram = to_ascii_diagram(wf)
-        except Exception:
-            ascii_diagram = None
-        # One generated-Python sample (the first example that compiles cleanly).
-        if show_codegen:
-            try:
-                code = generate(wf)
-                show_codegen = False
-            except Exception:
-                code = None
-        out.append(
-            {
-                "title": meta.title,
-                "blurb": meta.blurb,
-                "effect": meta.effect,
-                "stem": meta.stem,
-                "svg": svg,
-                "ascii": ascii_diagram,
-                "code": code,
-            }
-        )
-    return tuple(out)

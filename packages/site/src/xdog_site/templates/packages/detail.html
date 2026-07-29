@@ -9,35 +9,20 @@
   {% if pkg.cli %}<div class="state">CLI: <code>{{ pkg.cli }}</code></div>{% else %}<div class="state">Library (no CLI)</div>{% endif %}
 </section>
 
-<section>
-  {% for para in pkg.summary %}
-  <div>{{ para }}</div>
-  {% endfor %}
+<section class="markdown-body">
+  {{ body }}
 </section>
-
-<section>
-  <h3>Highlights</h3>
-  <ul>
-    {% for h in pkg.highlights %}
-    <li>{{ h }}</li>
-    {% endfor %}
-  </ul>
-</section>
-
-{% if pkg.install %}
-<section>
-  <h3>Try it</h3>
-  <pre><code>{{ pkg.install }}</code></pre>
-</section>
-{% endif %}
 
 {% if has_docs %}
 <section>
   <h3>Deep dive</h3>
   <div>
-    <a href="{{ url_for('main.package_design', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Design</a>
+    <a href="{{ url_for('main.package_static', name=pkg.name, page='design') }}" class="btn btn-ghost btn-primary btn-small">Design</a>
     <a href="{{ url_for('main.package_features', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Features</a>
-    <a href="{{ url_for('main.package_reference', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Reference</a>
+    <a href="{{ url_for('main.package_static', name=pkg.name, page='reference') }}" class="btn btn-ghost btn-primary btn-small">Reference</a>
+    {% if has_examples %}
+    <a href="{{ url_for('main.package_static', name=pkg.name, page='examples') }}" class="btn btn-ghost btn-primary btn-small">Examples</a>
+    {% endif %}
     <a href="{{ url_for('main.package_roadmap', name=pkg.name) }}" class="btn btn-ghost btn-primary btn-small">Roadmap</a>
   </div>
 </section>

@@ -81,7 +81,7 @@ select = ["E", "F", "I", "W"]
 [tool.ruff.lint.per-file-ignores]
 # Authored content tables: one-line card descriptions read better un-wrapped than
 # split to satisfy the 120-col limit.
-"packages/site/src/xdog_site/content/flow.py" = ["E501"]
+"packages/site/src/xdog_site/content/flow_docs.py" = ["E501"]
 # Package __init__.py files re-export their public API; imports there are
 # intentional even when the module itself doesn't reference them.
 "**/__init__.py" = ["F401"]
@@ -109,5 +109,5 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["agent", "agent.*", "ai", "ai.*", "flow", "flow.*", "flask", "flask.*", "markupsafe", "markupsafe.*"]
+module = ["agent", "agent.*", "ai", "ai.*", "flow", "flow.*", "flask", "flask.*", "markupsafe", "markupsafe.*", "markdown", "markdown.*", "frontmatter", "frontmatter.*"]
 ignore_missing_imports = true

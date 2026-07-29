@@ -95,7 +95,7 @@ def test_404_page_is_styled(client: FlaskClient) -> None:
     assert "hack.css" in body  # renders through base.html
 
 
-# --- flow deep-dive sub-pages ------------------------------------------------
+# --- flow deep-dive sub-pages (now the shared markdown + dynamic routes) ------
 
 
 @pytest.mark.parametrize(
@@ -127,47 +127,39 @@ def test_flow_reference_documents_schema_and_rules(client: FlaskClient) -> None:
     assert "$output" in body  # the reserved sink
     assert "xdog-flow" in body  # the CLI section
     assert "not fed by any edge mapping" in body  # a validation rule
+    assert "<table>" in body  # the schema/type/rule tables render as markdown tables
 
 
-def test_flow_examples_renders_live_svg_and_ascii(client: FlaskClient) -> None:
+def test_flow_examples_renders_ascii_diagrams(client: FlaskClient) -> None:
     body = client.get("/packages/flow/examples").get_data(as_text=True)
-    # a real Graphviz-generated inline SVG is embedded
-    assert "<svg" in body
-    # the ASCII diagram is shown in a <pre> block
-    assert "<pre>" in body
-    # the calculator example title is present
+    # the examples page is now static markdown: pre-generated ASCII in a code block
     assert "Agent Calculator" in body
+    assert "make_problem" in body  # an ASCII-diagram node label
+    assert "<pre>" in body or "<code>" in body  # fenced code block
+    # live SVG generation moved to the HaveFun page; examples.md points there
+    assert "/havefun" in body
 
 
-def test_flow_roadmap_has_gaps_and_phases(client: FlaskClient) -> None:
+def test_flow_roadmap_has_phases(client: FlaskClient) -> None:
     body = client.get("/packages/flow/roadmap").get_data(as_text=True)
-    assert "retry" in body.lower()  # a named gap
+    assert "retry" in body.lower()  # a named phase
     assert "Checkpoint" in body  # a roadmap phase
 
 
-def test_flow_content_module_importable() -> None:
-    from xdog_site.content.flow import (
-        COMMANDS,
-        CONDITION_ROWS,
-        DESIGN_SECTIONS,
-        EXAMPLES,
-        FEATURES,
-        NON_GOALS,
-        ROADMAP,
-        RUNTIME_ROWS,
-        SCHEMA_BLOCKS,
-        TYPE_ROWS,
-        VALIDATION_RULES,
-    )
+def test_flow_docs_module_importable() -> None:
+    from xdog_site.content.docpages import render_page
+    from xdog_site.content.flow_docs import DOCS
 
-    # GAPS may be empty (all in-kernel gaps shipped); NON_GOALS is the meaningful set now.
-    assert DESIGN_SECTIONS and FEATURES and EXAMPLES and NON_GOALS and ROADMAP
-    assert SCHEMA_BLOCKS and TYPE_ROWS and CONDITION_ROWS and RUNTIME_ROWS and COMMANDS and VALIDATION_RULES
+    # Features + Roadmap are Python; static pages are markdown.
+    assert DOCS.features and DOCS.roadmap
+    assert sum(len(feats) for _, feats in DOCS.grouped_features()) == len(DOCS.features)
+    for page in ("overview", "design", "reference", "examples"):
+        assert render_page("flow", page) is not None
 
 
-# --- generic package deep-dive sub-pages (ai / agent / tui / coding / claw) ---
+# --- generic package sub-pages (ai / agent / tui / coding / claw / flow) ------
 
-_DOC_PACKAGES = ["ai", "agent", "tui", "coding", "claw"]
+_DOC_PACKAGES = ["ai", "agent", "tui", "coding", "claw", "flow"]
 _DOC_SUBPAGES = ["design", "features", "reference", "roadmap"]
 
 
@@ -191,8 +183,10 @@ def test_package_overview_links_to_deep_dive(client: FlaskClient, name: str) -> 
 
 
 def test_package_docs_unknown_name_404(client: FlaskClient) -> None:
-    # flow is not in the generic registry (it has bespoke pages)
-    assert client.get("/packages/flow/design").status_code == 200  # bespoke, still fine
+    # flow now uses the same shared routes as the others
+    assert client.get("/packages/flow/design").status_code == 200
+    assert client.get("/packages/flow/examples").status_code == 200  # flow ships examples
+    assert client.get("/packages/ai/examples").status_code == 404  # others do not
     assert client.get("/packages/nope/design").status_code == 404
     assert client.get("/packages/nope/roadmap").status_code == 404
 
@@ -211,15 +205,36 @@ def test_package_docs_content_is_accurate(client: FlaskClient) -> None:
         assert "2026" in client.get(f"/packages/{name}/roadmap").get_data(as_text=True)
 
 
+def test_static_markdown_renders_tables(client: FlaskClient) -> None:
+    # a markdown reference page renders GFM tables to <table>
+    assert "<table>" in client.get("/packages/ai/reference").get_data(as_text=True)
+    assert "<table>" in client.get("/packages/flow/reference").get_data(as_text=True)
+
+
+def test_docpages_loader_unit() -> None:
+    from markupsafe import Markup
+    from xdog_site.content.docpages import render_page
+
+    ref = render_page("ai", "reference")
+    assert ref is not None
+    assert isinstance(ref.html, Markup) and "<table>" in ref.html
+    assert ref.title  # frontmatter title or capitalized page name
+    # missing page for a real package, unknown package, and unknown page → None
+    assert render_page("ai", "examples") is None
+    assert render_page("nope", "design") is None
+    assert render_page("flow", "bogus") is None
+
+
 def test_docs_content_modules_importable() -> None:
     from xdog_site.content.agent import DOCS as AGENT_DOCS
     from xdog_site.content.ai import DOCS as AI_DOCS
     from xdog_site.content.claw import DOCS as CLAW_DOCS
     from xdog_site.content.coding import DOCS as CODING_DOCS
+    from xdog_site.content.flow_docs import DOCS as FLOW_DOCS
     from xdog_site.content.tui import DOCS as TUI_DOCS
 
-    for docs in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS):
-        assert docs.design_sections and docs.features and docs.reference_blocks and docs.roadmap
+    for docs in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS, FLOW_DOCS):
+        assert docs.features and docs.roadmap
         # grouped_features drops empty buckets and preserves every feature
         grouped = docs.grouped_features()
         assert sum(len(feats) for _, feats in grouped) == len(docs.features)
@@ -229,7 +244,7 @@ def test_docs_content_modules_importable() -> None:
 
 
 def test_havefun_page_ok(client: FlaskClient) -> None:
-    resp = client.get("/packages/flow/havefun")
+    resp = client.get("/havefun")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "HaveFun" in body
@@ -238,8 +253,14 @@ def test_havefun_page_ok(client: FlaskClient) -> None:
     assert "agent_calculator" in body  # the example option
 
 
+def test_old_flow_havefun_url_gone(client: FlaskClient) -> None:
+    # HaveFun was promoted to a top-level route; the old nested URL is gone.
+    assert client.get("/packages/flow/havefun").status_code == 404
+    assert client.post("/packages/flow/havefun/load", json={"example": "agent_calculator"}).status_code == 404
+
+
 def test_havefun_load_example_returns_diagram_and_inputs(client: FlaskClient) -> None:
-    resp = client.post("/packages/flow/havefun/load", json={"example": "agent_calculator"})
+    resp = client.post("/havefun/load", json={"example": "agent_calculator"})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True
@@ -250,7 +271,7 @@ def test_havefun_load_example_returns_diagram_and_inputs(client: FlaskClient) ->
 
 
 def test_havefun_load_unknown_example_400(client: FlaskClient) -> None:
-    resp = client.post("/packages/flow/havefun/load", json={"example": "does-not-exist"})
+    resp = client.post("/havefun/load", json={"example": "does-not-exist"})
     assert resp.status_code == 400
 
 
@@ -274,7 +295,7 @@ def test_havefun_load_uploaded_json(client: FlaskClient) -> None:
     }
     import json as _json
 
-    resp = client.post("/packages/flow/havefun/load", json={"json": _json.dumps(payload)})
+    resp = client.post("/havefun/load", json={"json": _json.dumps(payload)})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True
@@ -282,7 +303,7 @@ def test_havefun_load_uploaded_json(client: FlaskClient) -> None:
 
 
 def test_havefun_rejects_invalid_json(client: FlaskClient) -> None:
-    resp = client.post("/packages/flow/havefun/load", json={"json": "{ not valid json"})
+    resp = client.post("/havefun/load", json={"json": "{ not valid json"})
     assert resp.status_code == 400
 
 
@@ -332,7 +353,7 @@ def test_havefun_load_refine_loop_example(client: FlaskClient) -> None:
     `feedback` is an internal optional loop-carried port, NOT a workflow input, so
     it must not surface as a user-facing input box.
     """
-    resp = client.post("/packages/flow/havefun/load", json={"example": "refine_loop"})
+    resp = client.post("/havefun/load", json={"example": "refine_loop"})
     assert resp.status_code == 200
     d = resp.get_json()
     assert d["ok"] is True

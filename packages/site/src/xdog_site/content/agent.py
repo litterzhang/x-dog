@@ -1,62 +1,15 @@
-"""Deep-dive content for the ``agent`` package — the tool-calling agent loop.
+"""Dynamic (Features + Roadmap) content for the ``agent`` package.
 
-Accurate against packages/agent/src/agent: the Agent wrapper + two-loop core,
-AgentTool model, the StreamFn bridge, built-in tools, steering/follow-up queues,
-and the xdog-agent CLI.
+agent's static pages (Overview / Design / Reference) are markdown under
+``content/pages/agent/``; its Features and Roadmap stay in Python here. Accurate
+against packages/agent/src/agent: the Agent wrapper + two-loop core, AgentTool
+model, the StreamFn bridge, built-in tools, steering/follow-up queues, and the
+xdog-agent CLI.
 """
 
 from __future__ import annotations
 
-from xdog_site.content.docs import Feature, PackageDocs, Phase, RefBlock, Section
-
-_DESIGN = (
-    Section(
-        heading="A loop that turns model + tools into an agent",
-        body=(
-            "At the centre is agent_loop (agent_loop.py): stream the model, extract the tool calls "
-            "from the assistant message, execute them, feed the results back, and repeat until the "
-            "model stops asking for tools. That single loop is what separates an agent from a bare "
-            "completion.",
-            "It is a two-loop structure — an outer loop that drains queued follow-ups and an inner "
-            "loop that runs tools and honours steering interrupts between turns.",
-        ),
-    ),
-    Section(
-        heading="Agent owns immutable state",
-        body=(
-            "The Agent wrapper (agent.py) holds an AgentState that is only ever replaced (via "
-            "dataclasses.replace), never mutated in place. It also owns event subscriptions and the "
-            "steering / follow-up queues, so callers observe a running turn without reaching into its "
-            "internals.",
-        ),
-    ),
-    Section(
-        heading="Tools are plain objects",
-        body=(
-            "An AgentTool is name + description + JSON-schema params + an async "
-            "execute(id, params, cancel, on_update, ctx). Adding a capability is a small, testable "
-            "unit — no framework base class to subclass.",
-            "A declarative layer (ToolDef / @action / Param) builds multi-action tools where one tool "
-            "exposes several verbs, and a registry SPI lets applications discover tools by name.",
-        ),
-    ),
-    Section(
-        heading="StreamFn decouples the loop from any provider",
-        body=(
-            "The loop never imports a model SDK; it depends on a StreamFn Protocol. "
-            "stream_fn_from_provider (helpers.py) bridges an ai provider into that Protocol, so the "
-            "same agent runs against anything the ai package can reach — or a test double.",
-        ),
-    ),
-    Section(
-        heading="Steering, follow-ups, and cancellation",
-        body=(
-            "Steering interrupts the current turn and skips the remaining tool calls; a follow-up is "
-            "injected after the turn completes. Both are queues with ALL or ONE_AT_A_TIME modes. "
-            "abort() flips an asyncio.Event that unwinds the loop cooperatively.",
-        ),
-    ),
-)
+from xdog_site.content.docs import Feature, PackageDocs, Phase
 
 _FEATURES = (
     Feature("Tool-calling loop", "Stream → extract tool calls → execute → feed back → repeat until "
@@ -89,61 +42,6 @@ _FEATURES = (
 
 _FEATURE_CATEGORIES = ("Loop", "Control", "Extensibility", "Built-in tools")
 
-_REFERENCE = (
-    RefBlock(
-        heading="Top-level API",
-        body=("The names exported from agent/__init__.py that applications use directly.",),
-        columns=("Name", "Kind", "Purpose"),
-        rows=(
-            ("Agent", "class", "Stateful wrapper: state, events, steering / follow-up queues."),
-            ("agent_loop / run_agent_loop", "function", "The raw tool-calling loop and its runner."),
-            ("AgentConfig", "type", "Model, system prompt, execution mode, limits."),
-            ("AgentTool", "type", "name + description + JSON-schema params + async execute."),
-            ("AgentToolResult", "type", "A tool's return payload."),
-            ("StreamFn / EmbedFn / WebSearchFn", "type", "Protocols bridging to the model backend."),
-            ("ToolDef / @action / Param", "api", "Declarative multi-action tool framework."),
-        ),
-    ),
-    RefBlock(
-        heading="Built-in tools",
-        body=("Shipped in agent/tools/. bash, filesystem, current_time, and submit_result "
-              "auto-register; web_search and embed are injected from the provider.",),
-        columns=("Tool", "Actions / purpose"),
-        rows=(
-            ("filesystem", "read · write · delete · edit · ls · grep · find"),
-            ("bash", "Run a shell command"),
-            ("current_time", "Return the current time"),
-            ("submit_result", "Schema-validated structured output"),
-            ("web_search", "Provider-backed web search (injected)"),
-            ("embed", "Provider-backed embedding (injected)"),
-        ),
-    ),
-    RefBlock(
-        heading="CLI — xdog-agent",
-        body=("Subcommands of the agent console script.",),
-        columns=("Command", "Does"),
-        rows=(
-            ("login", "Authenticate the Copilot backend (GitHub device code)."),
-            ("chat [model] [msg]",
-             "Interactive or one-shot chat with tools loaded (-s, -t, --max-tokens, --thinking, "
-             "--no-tools, --tool-ctx…)."),
-        ),
-    ),
-    RefBlock(
-        heading="Chat slash commands",
-        body=("Available inside xdog-agent chat.",),
-        columns=("Command", "Does"),
-        rows=(
-            ("/model", "Switch model."),
-            ("/thinking", "Set reasoning depth."),
-            ("/image", "Attach an image."),
-            ("/tools", "List loaded tools."),
-            ("/status", "Show session token / cost totals."),
-            ("/clear · /verbose · /help · /exit", "Session controls."),
-        ),
-    ),
-)
-
 _ROADMAP = (
     Phase("Shipped", "The agent loop", (
         "Two-loop core: follow-ups outer, tools + steering inner",
@@ -171,15 +69,10 @@ _ROADMAP = (
 
 DOCS = PackageDocs(
     name="agent",
-    design_intro="How agent turns a model plus a set of tools into an autonomous loop — the ideas "
-                 "behind the two-loop core, immutable state, and the plain-object tool model.",
-    design_sections=_DESIGN,
     features_intro="What the agent runtime does today. Each capability is a small, testable unit of "
                    "the loop.",
     feature_categories=_FEATURE_CATEGORIES,
     features=_FEATURES,
-    reference_intro="The top-level API, the built-in tools, and the xdog-agent CLI.",
-    reference_blocks=_REFERENCE,
     roadmap_intro="Shipped foundations plus where agent is heading in 2026. Planned items are "
                   "aspirational, not yet implemented.",
     roadmap=_ROADMAP,

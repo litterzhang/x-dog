@@ -59,34 +59,25 @@
       <ul style="margin:0">
         <input type="checkbox" />
         <li><a href="{{ url_for('main.packages') }}">All Packages</a></li>
-        {% for name in ["ai", "agent", "tui", "coding", "claw"] %}
+        {% for name in ["ai", "agent", "tui", "coding", "claw", "flow"] %}
         <li>
           {{ name }}
           <ul style="margin:0">
             <input type="checkbox" />
             <li><a href="{{ url_for('main.package_detail', name=name) }}">Overview</a></li>
-            <li><a href="{{ url_for('main.package_design', name=name) }}">Design</a></li>
+            <li><a href="{{ url_for('main.package_static', name=name, page='design') }}">Design</a></li>
             <li><a href="{{ url_for('main.package_features', name=name) }}">Features</a></li>
-            <li><a href="{{ url_for('main.package_reference', name=name) }}">Reference</a></li>
+            <li><a href="{{ url_for('main.package_static', name=name, page='reference') }}">Reference</a></li>
+            {% if name == "flow" %}
+            <li><a href="{{ url_for('main.package_static', name=name, page='examples') }}">Examples</a></li>
+            {% endif %}
             <li><a href="{{ url_for('main.package_roadmap', name=name) }}">Roadmap</a></li>
           </ul>
         </li>
         {% endfor %}
-        <li>
-          flow
-          <ul style="margin:0">
-            <input type="checkbox" />
-            <li><a href="{{ url_for('main.package_detail', name='flow') }}">Overview</a></li>
-            <li><a href="{{ url_for('main.flow_design') }}">Design</a></li>
-            <li><a href="{{ url_for('main.flow_features') }}">Features</a></li>
-            <li><a href="{{ url_for('main.flow_reference') }}">Reference</a></li>
-            <li><a href="{{ url_for('main.flow_examples') }}">Examples</a></li>
-            <li><a href="{{ url_for('main.flow_roadmap') }}">Roadmap</a></li>
-            <li><a href="{{ url_for('main.flow_havefun') }}">HaveFun</a></li>
-          </ul>
-        </li>
       </ul>
     </li>
+    <li><a href="{{ url_for('main.havefun') }}">HaveFun</a></li>
     <li><a href="{{ url_for('blog.blog_index') }}">Blog</a></li>
     <li><a href="{{ url_for('main.faq') }}">FAQ</a></li>
   </ul>

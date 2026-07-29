@@ -10,6 +10,9 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "flask>=3.0",
+    "markdown>=3.5",
+    "python-frontmatter>=1.0",
+    "pygments>=2.17",
 ]
 
 [project.scripts]
@@ -25,7 +28,10 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["flask", "flask.*", "jinja2", "jinja2.*", "markupsafe", "markupsafe.*", "flow", "flow.*"]
+module = [
+    "flask", "flask.*", "jinja2", "jinja2.*", "markupsafe", "markupsafe.*", "flow", "flow.*",
+    "markdown", "markdown.*", "frontmatter", "frontmatter.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
