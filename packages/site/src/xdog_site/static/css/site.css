@@ -93,6 +93,16 @@ body.hack {
 .muted {
   color: #888;
 }
+/* Post-content navigation row: sits below the content column (a sibling of it,
+   not inside the markdown), so back/next buttons never disrupt the page body. */
+.content-nav {
+  margin-top: 1.5rem;
+  padding: 0.5rem;
+}
+.content-nav .btn {
+  margin: 0 0.3rem 0.3rem 0;
+}
+
 /* Blog index: space the post entries and their metadata lines. */
 .media {
   margin-bottom: 1.5rem;

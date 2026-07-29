@@ -6,6 +6,13 @@
 <section>
   <p class="state state-error">404 — page not found</p>
   <p>The page you were looking for does not exist.</p>
-  <p><a href="{{ url_for('main.home') }}" class="btn btn-ghost btn-default btn-small">&larr; Home</a></p>
 </section>
+{% endblock %}
+
+{% block content_nav %}
+<div class="content-nav grid">
+  <div class="cell">
+    <a href="{{ url_for('main.home') }}" class="btn btn-ghost btn-default btn-small">&larr; Home</a>
+  </div>
+</div>
 {% endblock %}

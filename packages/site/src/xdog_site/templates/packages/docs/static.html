@@ -6,9 +6,11 @@
 <section class="markdown-body">
   {{ content }}
 </section>
+{% endblock %}
 
-<section>
-  <div>
+{% block content_nav %}
+<div class="content-nav grid">
+  <div class="cell">
     {% if page == "overview" %}
     <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>
     <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-default btn-small">&larr; All packages</a>
@@ -20,5 +22,5 @@
     {% endif %}
     {% endif %}
   </div>
-</section>
+</div>
 {% endblock %}
