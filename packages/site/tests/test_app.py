@@ -6,7 +6,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from xdog_site import create_app
-from xdog_site.content.blog import ARTICLES
+from xdog_site.content.blog import get_articles
 from xdog_site.content.faq import FAQS
 from xdog_site.content.packages import PACKAGES
 
@@ -55,15 +55,18 @@ def test_blog_index_ok_lists_articles(client: FlaskClient) -> None:
     resp = client.get("/blog")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert ARTICLES[0]["title"] in body
+    assert get_articles()[0].title in body
 
 
-@pytest.mark.parametrize("slug", [a["slug"] for a in ARTICLES])
+@pytest.mark.parametrize("slug", [a.slug for a in get_articles()])
 def test_each_article_ok(client: FlaskClient, slug: str) -> None:
     resp = client.get(f"/blog/{slug}")
     assert resp.status_code == 200
-    art = next(a for a in ARTICLES if a["slug"] == slug)
-    assert art["title"] in resp.get_data(as_text=True)
+    art = next(a for a in get_articles() if a.slug == slug)
+    body = resp.get_data(as_text=True)
+    assert art.title in body
+    # the markdown body is rendered as HTML (paragraphs), not a raw list
+    assert "markdown-body" in body
 
 
 def test_unknown_article_404(client: FlaskClient) -> None:

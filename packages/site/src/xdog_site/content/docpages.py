@@ -54,13 +54,22 @@ def _page_path(name: str, page: str) -> Path | None:
     return path if path.is_file() else None
 
 
+def render_markdown(text: str) -> Markup:
+    """Render a markdown string to safe HTML with the site's extension set.
+
+    A fresh ``markdown.Markdown`` per call — the converter accumulates state
+    across uses. Shared by the package pages and the blog. ``Markup`` is safe
+    because all rendered content is first-party authored files.
+    """
+    md = markdown.Markdown(extensions=["tables", "fenced_code", "codehilite", "toc"])
+    return Markup(md.convert(text))
+
+
 def _render(path: Path, page: str) -> RenderedPage:
     """Parse frontmatter and render the markdown body to safe HTML."""
     post = frontmatter.loads(path.read_text(encoding="utf-8"))
     title = str(post.get("title") or page.capitalize())
-    # Fresh instance per call — a Markdown converter accumulates state across uses.
-    md = markdown.Markdown(extensions=["tables", "fenced_code", "codehilite", "toc"])
-    return RenderedPage(html=Markup(md.convert(post.content)), title=title)
+    return RenderedPage(html=render_markdown(post.content), title=title)
 
 
 def render_page(name: str, page: str) -> RenderedPage | None:

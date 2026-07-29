@@ -1,19 +1,30 @@
 {% extends "base.html" %}
 {% block title %} — {{ article.title }}{% endblock %}
 {% block meta_description %}{{ article.description }}{% endblock %}
-{% block ctitle %}/ Blog{% endblock %}
+{% block ctitle %}/ Blog / {{ article.title }}{% endblock %}
 
 {% block content %}
-<article>
-  <h2>{{ article.title }}</h2>
-  <p class="muted">{{ article.date.strftime('%Y-%m-%d') }}
-    {% for tag in article.tags %}<code>{{ tag }}</code> {% endfor %}
-  </p>
-  <p><em>{{ article.description }}</em></p>
+<article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+  <header class="post-header">
+    <h3>Info</h3>
+    <div class="post-meta muted">
+      <strong>Date:</strong>
+      <span datetime="{{ article.date.isoformat() }}" itemprop="datePublished">{{ article.date.strftime('%Y-%m-%d %H:%M') }}</span><br/>
+      {% if article.tags %}
+      <strong>Tags:</strong>
+        {% for tag in article.tags %}<code>{{ tag }}</code>{% if not loop.last %} {% endif %}{% endfor %}<br/>
+      {% endif %}
+      {% if article.description %}
+      <strong>Description:</strong> {{ article.description }}
+      {% endif %}
+    </div>
+  </header>
+
   <hr>
-  {% for para in article.body %}
-  <p>{{ para }}</p>
-  {% endfor %}
+
+  <div class="post-content markdown-body" itemprop="articleBody">
+    {{ article.body }}
+  </div>
 </article>
 
 <section>
