@@ -9,6 +9,7 @@ Usage::
     xdog-flow run <config.json|.svg> [--provider X] [--dry-run] [--input K=V ...]
                                               Execute a workflow
     xdog-flow generate <config.json|.svg> -o OUT   Generate Python code
+    xdog-flow generate <config> --portable -o DIR  Emit a self-contained bundle
     xdog-flow graph <config.json|.svg> [--mermaid|--svg]  Print workflow graph
 """
 
@@ -18,6 +19,7 @@ import argparse
 import asyncio
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -136,13 +138,27 @@ async def _cmd_run(
     print(json.dumps(rt["out"] if rt["out"] else rt, indent=2, ensure_ascii=False))
 
 
-def _cmd_generate(config_path: str, *, output: str | None) -> None:
-    """Generate a Python module from the workflow definition."""
+def _cmd_generate(config_path: str, *, output: str | None, portable: bool = False, offline: bool = False) -> None:
+    """Generate a Python module (or a portable bundle) from the workflow definition."""
     try:
         wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
+
+    if portable:
+        if output is None:
+            print("--portable requires -o/--output (the bundle directory)")
+            raise SystemExit(1)
+        from flow.bundle import build_bundle
+
+        try:
+            out_dir = build_bundle(wf, Path(output), offline=offline)
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            print(str(exc))
+            raise SystemExit(1)
+        print(f"Bundle written to {out_dir}")
+        return
 
     code = generate(wf)
 
@@ -216,7 +232,17 @@ def main(argv: list[str] | None = None) -> None:
     # -- generate ------------------------------------------------------------
     gen_p = sub.add_parser("generate", help="Generate Python code from a workflow")
     gen_p.add_argument("config", help="Path to workflow .json or .svg file")
-    gen_p.add_argument("-o", "--output", help="Output file (default: stdout)")
+    gen_p.add_argument("-o", "--output", help="Output file, or bundle dir with --portable (default: stdout)")
+    gen_p.add_argument(
+        "--portable",
+        action="store_true",
+        help="Emit a self-contained bundle dir (vendors ai/agent) instead of a single module",
+    )
+    gen_p.add_argument(
+        "--offline",
+        action="store_true",
+        help="With --portable: also download third-party wheels for a no-network install",
+    )
 
     # -- graph ---------------------------------------------------------------
     graph_p = sub.add_parser("graph", help="Print workflow graph")
@@ -248,7 +274,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
     elif args.command == "generate":
-        _cmd_generate(args.config, output=args.output)
+        _cmd_generate(args.config, output=args.output, portable=args.portable, offline=args.offline)
     elif args.command == "graph":
         _cmd_graph(args.config, mermaid=args.mermaid, svg=args.svg)
     elif args.command == "build":
