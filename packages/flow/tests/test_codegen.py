@@ -634,7 +634,9 @@ def _make_tool_manifest_wf() -> WorkflowDef:
 def test_generate_tool_manifest_registers_and_imports() -> None:
     src = generate(_make_tool_manifest_wf())
     assert "from mytools import make_reverse as _tool_0" in src
-    assert "from flow.tools import bind_tool, default_registry" in src
+    # default_registry / bind_tool are inlined into the module, not imported from flow.
+    assert "def default_registry" in src and "def bind_tool" in src
+    assert "from flow.tools import" not in src
     assert "_REGISTRY.register(bind_tool(_tool_0, 'reverse'))" in src
     assert '_REGISTRY.resolve(("reverse", "filesystem",))' in src
 
@@ -648,7 +650,9 @@ def test_generate_no_manifest_unchanged_registry_line() -> None:
     """Workflows without a manifest keep the bare registry line (no extra imports)."""
     src = generate(_make_linear_wf())
     assert "_REGISTRY = default_registry()\n" in src
-    assert "coerce_tool" not in src
+    # No custom-tool registration is emitted without a manifest.
+    assert "bind_tool(_tool_" not in src
+    assert "from flow.tools import" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -936,10 +940,11 @@ async def test_generate_output_schema_parity_with_interpreter() -> None:
 
 
 async def test_generated_module_does_not_import_flow_internal() -> None:
-    """errors / coerce / runtime are inlined; the module never imports them from flow.
+    """The generated module never imports the flow package at all.
 
-    Only ``flow.tools`` (the bridge to the agent tool registry) may remain — the
-    flow-internal helpers must be self-contained in the generated source.
+    errors / coerce / runtime AND the tool registry (default_registry / bind_tool /
+    ToolRegistry) are inlined into the module source, so a generated workflow is
+    self-contained with respect to the flow package.
     """
     import types
 
@@ -964,13 +969,13 @@ async def test_generated_module_does_not_import_flow_internal() -> None:
     )
     src = generate(wf)
 
-    # No import of the inlined flow modules.
-    assert "from flow.errors" not in src
-    assert "from flow.coerce" not in src
-    assert "from flow.runtime" not in src
-    # The helpers are inlined instead.
+    # No import of the flow package whatsoever.
+    assert "from flow." not in src
+    assert "import flow" not in src
+    # The helpers and registry are inlined instead.
     assert "def to_python" in src and "def to_state" in src
     assert "class RuntimeContext" in src
+    assert "def default_registry" in src and "class ToolRegistry" in src
 
     # And the inlined coercion actually works end to end (41 -> "42").
     ok, msg = _ruff_clean(src)

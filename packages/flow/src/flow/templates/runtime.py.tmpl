@@ -6,13 +6,14 @@ import logging
 import os
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import ai
 from agent import Agent
-from agent.core import AgentConfig, AgentTool, StreamFn
+from agent.core import AgentConfig, AgentTool, AgentToolResult, StreamFn
 from agent.events import TurnEndEvent
 from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
 from agent.tools import create_submit_result_tool
@@ -107,6 +108,89 @@ def to_state(value: Any, json_type: str) -> str:
     if json_type in ("array", "object"):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     raise ValueError(f"unknown json type {json_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Inlined tool registry (equivalent to flow.tools) so this module does not
+# import the flow package for tool resolution either.  Tools themselves are an
+# agent concept, so this still depends on agent.core / agent.tools / ai.types.
+# ---------------------------------------------------------------------------
+class ToolRegistry:
+    """Registry mapping tool names to agent AgentTool objects."""
+
+    def __init__(self) -> None:
+        self._tools: dict[str, AgentTool] = {}
+
+    def register(self, tool: AgentTool) -> None:
+        self._tools = {**self._tools, tool.name: tool}
+
+    def get(self, name: str) -> AgentTool:
+        try:
+            return self._tools[name]
+        except KeyError:
+            known = ", ".join(sorted(self._tools)) or "<none>"
+            raise WorkflowExecutionError(f"Unknown tool {name!r}. Known tools: {known}") from None
+
+    def resolve(self, names: Iterable[str]) -> tuple[AgentTool, ...]:
+        return tuple(self.get(n) for n in names)
+
+
+async def _echo_execute(
+    tool_call_id: str,
+    params: dict[str, Any],
+    cancel: Any = None,
+    on_update: Any = None,
+    ctx: dict[str, Any] | None = None,
+) -> AgentToolResult:
+    text: str = params.get("text", "")
+    return AgentToolResult(content=(TextContent(text=text),))
+
+
+_ECHO_TOOL = AgentTool(
+    name="echo",
+    description="Echo the given text.",
+    parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+    label="Echo",
+    execute=_echo_execute,
+)
+
+
+def _agent_builtin_tools() -> tuple[AgentTool, ...]:
+    try:
+        from agent.tools.registry import get_registered_tools
+    except ImportError:
+        return ()
+    return tuple(get_registered_tools())
+
+
+def default_registry() -> ToolRegistry:
+    """A fresh registry with the echo demo tool plus every agent-package builtin."""
+    registry = ToolRegistry()
+    registry.register(_ECHO_TOOL)
+    for tool in _agent_builtin_tools():
+        registry.register(tool)
+    return registry
+
+
+def _coerce_tool(obj: object) -> AgentTool:
+    if isinstance(obj, AgentTool):
+        return obj
+    if callable(obj):
+        built = obj()
+        if not isinstance(built, AgentTool):
+            raise WorkflowExecutionError(
+                f"Tool factory {getattr(obj, '__name__', obj)!r} must return an AgentTool, "
+                f"got {type(built).__name__}"
+            )
+        return built
+    raise WorkflowExecutionError(
+        f"Tool ref must resolve to an AgentTool or a factory returning one, got {type(obj).__name__}"
+    )
+
+
+def bind_tool(obj: object, name: str) -> AgentTool:
+    """Coerce *obj* to an AgentTool and rename it to *name* (for manifest tools)."""
+    return replace(_coerce_tool(obj), name=name)
 
 
 

@@ -714,11 +714,13 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
 
 
 def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit imports for the tools registry and run-ref scripts.
+    """Emit imports for custom-tool manifest refs and run-ref scripts.
 
-    The flow-internal helpers (errors / coerce / runtime) are inlined into the
-    template itself, so the generated module never imports the ``flow`` package
-    for them — only ``flow.tools`` (the bridge to the agent tool registry) remains.
+    The flow-internal helpers (errors / coerce / runtime) AND the tool registry
+    (ToolRegistry / default_registry / bind_tool) are inlined into the template,
+    so the generated module never imports the ``flow`` package for them. Only
+    external references remain: a workflow's custom-tool manifest ``module:attr``
+    entries and its script nodes' ``run: module:func`` references.
     """
     extra: dict[str, list[str]] = {}
     for node in wf.nodes:
@@ -728,12 +730,7 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             extra.setdefault(module, []).append(f"{func} as _script_{safe}")
 
     flow_tools_aliases = extra.pop("flow.tools", [])
-    _tools_line = (
-        "from flow.tools import bind_tool, default_registry"
-        if wf.tool_refs
-        else "from flow.tools import default_registry"
-    )
-    lines: list[str] = [_tools_line]
+    lines: list[str] = []
 
     # Custom-tool manifest: import each ref.
     if wf.tool_refs:
@@ -747,6 +744,8 @@ def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
         for alias in aliases:
             lines.append(f"from {module} import {alias}")
 
+    if not lines:
+        return ""
     # Sort all lines to satisfy ruff import ordering within the third-party block.
     lines = sorted(lines)
 
