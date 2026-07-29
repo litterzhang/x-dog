@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# flow
-
 *Multi-agent workflow engine and JSON to Python codegen.*
 
 Define a multi-agent pipeline as JSON, run it directly, or compile it to a

@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# ai
-
 *Unified, typed LLM API.*
 
 A single, typed interface over LLM backends, built on a Provider / Protocol /

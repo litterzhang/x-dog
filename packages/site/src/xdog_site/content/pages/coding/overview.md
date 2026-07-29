@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# coding
-
 *Interactive coding agent CLI.*
 
 A terminal coding assistant built on `agent` + `tui`: session management, a live

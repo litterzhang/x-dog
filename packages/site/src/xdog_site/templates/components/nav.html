@@ -67,11 +67,11 @@
             <li><a href="{{ url_for('main.package_detail', name=name) }}">Overview</a></li>
             <li><a href="{{ url_for('main.package_static', name=name, page='design') }}">Design</a></li>
             <li><a href="{{ url_for('main.package_features', name=name) }}">Features</a></li>
-            <li><a href="{{ url_for('main.package_static', name=name, page='reference') }}">Reference</a></li>
+            <li><a href="{{ url_for('main.package_roadmap', name=name) }}">Roadmap</a></li>
             {% if name == "flow" %}
             <li><a href="{{ url_for('main.package_static', name=name, page='examples') }}">Examples</a></li>
             {% endif %}
-            <li><a href="{{ url_for('main.package_roadmap', name=name) }}">Roadmap</a></li>
+            <li><a href="{{ url_for('main.package_static', name=name, page='reference') }}">Reference</a></li>
           </ul>
         </li>
         {% endfor %}

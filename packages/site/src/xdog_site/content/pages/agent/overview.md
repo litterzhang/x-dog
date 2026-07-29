@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# agent
-
 *Agent runtime with tool calling and state management.*
 
 The loop that turns a model plus a set of tools into an autonomous agent: it

@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# claw
-
 *Agent orchestration runtime with long-term memory.*
 
 A higher-level orchestration runtime (the NanoClaw / OpenClaw pattern) that gives

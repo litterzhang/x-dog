@@ -2,8 +2,6 @@
 title: Overview
 ---
 
-# tui
-
 *Terminal UI library with differential rendering.*
 
 A string-based component toolkit for terminal apps: components return lines, the
