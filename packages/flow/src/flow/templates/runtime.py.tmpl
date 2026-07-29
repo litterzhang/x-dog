@@ -373,4 +373,11 @@ $main_body
 
 
 if __name__ == "__main__":
+    import sys
+
+    if "-v" in sys.argv or "--verbose" in sys.argv:
+        # Surface the P3 node lifecycle events (NodeStarted / NodeFinished /
+        # NodeFailed) that this module logs to "flow.generated.events".  Off by
+        # default so a plain run only prints the workflow's JSON output.
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
     asyncio.run(main())
