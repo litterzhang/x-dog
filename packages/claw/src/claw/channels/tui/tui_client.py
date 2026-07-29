@@ -119,7 +119,7 @@ async def connect_tui(socket_path: str, group_id: str = "main") -> None:
     if not sock.exists():
         raise GatewayConnectionError(
             f"Gateway socket not found at {sock}. "
-            "Is the gateway running? Start it with: xdog gateway start"
+            "Is the gateway running? Start it with: xdog-claw gateway start"
         )
 
     try:
@@ -127,7 +127,7 @@ async def connect_tui(socket_path: str, group_id: str = "main") -> None:
     except (ConnectionRefusedError, FileNotFoundError, OSError) as exc:
         raise GatewayConnectionError(
             f"Cannot connect to gateway at {sock}: {exc}. "
-            "Is the gateway running? Start it with: xdog gateway start"
+            "Is the gateway running? Start it with: xdog-claw gateway start"
         ) from exc
 
     # Verify connection with a ping

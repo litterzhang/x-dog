@@ -416,7 +416,7 @@ class GatewayServer:
         if not token:
             logger.warning(
                 "WeChat channel enabled but no token configured. "
-                "Run 'xdog channel login --weixin' first."
+                "Run 'xdog-claw channel login --weixin' first."
             )
             return
 

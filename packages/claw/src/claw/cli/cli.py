@@ -1,12 +1,12 @@
 """CLI commands for claw.
 
 Commands:
-    xdog onboard                                       — Interactive setup wizard
-    xdog gateway start [--config PATH] [--foreground]  — Start the gateway daemon
-    xdog gateway stop                                  — Stop the running gateway
-    xdog gateway status                                — Check if gateway is running
-    xdog tui [--group GROUP]                           — Connect to gateway with interactive chat
-    xdog channel login --weixin                        — Log in to a channel
+    xdog-claw onboard                                       — Interactive setup wizard
+    xdog-claw gateway start [--config PATH] [--foreground]  — Start the gateway daemon
+    xdog-claw gateway stop                                  — Stop the running gateway
+    xdog-claw gateway status                                — Check if gateway is running
+    xdog-claw tui [--group GROUP]                           — Connect to gateway with interactive chat
+    xdog-claw channel login --weixin                        — Log in to a channel
 """
 from __future__ import annotations
 
@@ -70,13 +70,13 @@ def _get_version() -> str:
 # ---------------------------------------------------------------------------
 
 @click.group()
-@click.version_option(version=_get_version(), prog_name="xdog")
+@click.version_option(version=_get_version(), prog_name="xdog-claw")
 def cli() -> None:
     """claw — AI agent orchestration runtime."""
 
 
 # ---------------------------------------------------------------------------
-# xdog onboard
+# xdog-claw onboard
 # ---------------------------------------------------------------------------
 
 @cli.command()
@@ -128,7 +128,7 @@ def onboard(config_path: str | None) -> None:
                 active = runtime.active_providers()
             except Exception as exc:
                 click.echo(f"  Login failed: {exc}", err=True)
-                click.echo("  You can retry later with: xdog onboard")
+                click.echo("  You can retry later with: xdog-claw onboard")
 
     # Step 2: Primary model
     click.echo()
@@ -215,15 +215,15 @@ def onboard(config_path: str | None) -> None:
     click.echo("  Setup complete!")
     click.echo()
     click.echo("  Start the gateway:")
-    click.echo("    xdog gateway start")
+    click.echo("    xdog-claw gateway start")
     click.echo()
     click.echo("  Then connect:")
-    click.echo("    xdog tui")
+    click.echo("    xdog-claw tui")
     click.echo("=" * 50)
 
 
 # ---------------------------------------------------------------------------
-# xdog gateway {start,stop,status}
+# xdog-claw gateway {start,stop,status}
 # ---------------------------------------------------------------------------
 
 @cli.group()
@@ -245,7 +245,7 @@ def start(config_path: str | None, foreground: bool) -> None:
     existing_pid = read_pid(pid_path)
     if existing_pid is not None:
         click.echo(f"Gateway already running (PID: {existing_pid})")
-        click.echo("Use 'xdog gateway stop' to stop it first.")
+        click.echo("Use 'xdog-claw gateway stop' to stop it first.")
         sys.exit(1)
 
     if foreground:
@@ -338,7 +338,7 @@ def _daemonize(config: ClawConfig) -> None:
             if actual_pid is not None:
                 click.echo(f"Gateway running (PID: {actual_pid})")
             else:
-                click.echo("Gateway may still be starting — check: xdog gateway status")
+                click.echo("Gateway may still be starting — check: xdog-claw gateway status")
             sys.exit(0)
     except OSError as exc:
         click.echo(f"Error: fork failed: {exc}", err=True)
@@ -372,7 +372,7 @@ def _daemonize(config: ClawConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# xdog tui
+# xdog-claw tui
 # ---------------------------------------------------------------------------
 
 @cli.command()
@@ -388,7 +388,7 @@ def tui(config_path: str | None, group_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# xdog channel login --weixin
+# xdog-claw channel login --weixin
 # ---------------------------------------------------------------------------
 
 @cli.group()
@@ -474,5 +474,5 @@ def login(config_path: str | None, use_weixin: bool, base_url: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Entry point for the xdog command."""
+    """Entry point for the xdog-claw command."""
     cli()

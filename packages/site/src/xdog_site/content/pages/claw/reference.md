@@ -2,7 +2,7 @@
 title: Reference
 ---
 
-The top-level API, the workspace files that shape the prompt, the `xdog` CLI, and
+The top-level API, the workspace files that shape the prompt, the `xdog-claw` CLI, and
 the input queue modes.
 
 ## Top-level API
@@ -33,7 +33,7 @@ running `onboard`) changes the agent.
 | `MEMORY.md` | Long-term memory snapshot. |
 | `BOOTSTRAP.md` | One-time first-run setup, consumed then deleted. |
 
-## CLI — `xdog`
+## CLI — `xdog-claw`
 
 Subcommands of the claw console script (`cli/cli.py`).
 

@@ -22,7 +22,7 @@ search = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2
 all = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2", "croniter>=2.0.0"]
 
 [project.scripts]
-xdog = "claw.cli:main"
+xdog-claw = "claw.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claw"]

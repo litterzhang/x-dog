@@ -104,7 +104,7 @@ PACKAGES: tuple[Package, ...] = (
     ),
     Package(
         name="claw",
-        cli="xdog",
+        cli="xdog-claw",
         tagline="Agent orchestration runtime with long-term memory",
         summary=(
             "A higher-level orchestration runtime (the NanoClaw / OpenClaw pattern) that gives "
