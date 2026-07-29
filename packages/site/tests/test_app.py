@@ -92,6 +92,13 @@ def test_static_css_served(client: FlaskClient) -> None:
     assert client.get("/static/css/site.css").status_code == 200
 
 
+def test_favicon_served_and_linked(client: FlaskClient) -> None:
+    resp = client.get("/static/favicon.ico")
+    assert resp.status_code == 200
+    assert "icon" in resp.content_type  # image/vnd.microsoft.icon
+    assert 'rel="icon"' in client.get("/").get_data(as_text=True)
+
+
 def test_404_page_is_styled(client: FlaskClient) -> None:
     body = client.get("/no-such-page").get_data(as_text=True)
     assert "404" in body
