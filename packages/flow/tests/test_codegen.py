@@ -377,7 +377,7 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
     run_result = await execute(wf)
 
     # increments stop as soon as c == 3, not after all 10 iterations
-    assert gen_state["inc"]["c"] == "3"
+    assert gen_state["inc"]["c"] == 3
     assert gen_state == _interp_out(run_result)
 
 
@@ -458,8 +458,8 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
     gen_state = await _run_generated(wf)
     run_result = await execute(wf)
 
-    assert gen_state["C"]["c"] == "66"
-    assert gen_state["B"]["b"] == "60"
+    assert gen_state["C"]["c"] == 66
+    assert gen_state["B"]["b"] == 60
     assert gen_state == _interp_out(run_result)
 
 
@@ -933,10 +933,9 @@ async def test_generate_output_schema_parity_with_interpreter() -> None:
         _agent_helpers.web_search_fn_from_provider = original_ws  # type: ignore[assignment]
         _ai.provider = original_ai_provider  # type: ignore[assignment]
 
-    import json as _json
-
-    assert _json.loads(gen_out) == result_obj
-    assert gen_out == interp_out  # both serialize identically (sorted keys)
+    # output_schema keeps the submitted object structured — a live dict in both engines.
+    assert gen_out == result_obj
+    assert gen_out == interp_out  # both engines hold the same live object
 
 
 async def test_generated_module_does_not_import_flow_internal() -> None:
@@ -983,4 +982,160 @@ async def test_generated_module_does_not_import_flow_internal() -> None:
     gen_module = types.ModuleType("_no_flow_internal_module")
     exec(compile(src, "<no_flow_internal>", "exec"), gen_module.__dict__)  # noqa: S102
     await gen_module.main()  # type: ignore[attr-defined]
-    assert gen_module._OUT["s"]["o"] == "42"  # type: ignore[attr-defined]
+    assert gen_module._OUT["s"]["o"] == 42  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Structured (type-native) wire format + nested interpolation.
+#
+# Gate test for the wire-format change: a script node emits an ``object`` port
+# holding a real dict; a downstream node reads a NESTED field via
+# ``{{plan.owner}}`` interpolation.  Today the port is flattened to a JSON string
+# by to_state and ``{{plan.owner}}`` cannot reach a field, so both the
+# "port is a real dict" and the nested-interpolation assertions fail.  After the
+# change the interpreter and the generated module must agree, and the structured
+# port must hold a live dict (not a serialized string).
+# ---------------------------------------------------------------------------
+
+
+def _make_structured_wire_wf() -> WorkflowDef:
+    """plan (script, object port) -> render (script, reads {{plan.owner}})."""
+    return WorkflowDef(
+        name="structured-wire",
+        provider="copilot",
+        entry="plan",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="plan",
+                type="script",
+                code=(
+                    "def plan(ctx, topic):\n"
+                    "    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"
+                ),
+                input_ports=(Port("topic", "string"),),
+                output_ports=(Port("plan", "object"),),
+            ),
+            NodeDef(
+                id="render",
+                type="script",
+                # The script receives the object port as a live dict and pulls a
+                # nested field; the prompt-style nested interpolation is exercised
+                # by the agent-free assertion below on the interpreter side.
+                code=(
+                    "def render(ctx, plan):\n"
+                    "    return f\"{plan['owner']}:{plan['tasks'][1]}\"\n"
+                ),
+                input_ports=(Port("plan", "object"),),
+                output_ports=(Port("line", "string"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="plan", mapping=(("topic", "topic"),)),
+            EdgeDef(src="plan", dst="render", mapping=(("plan", "plan"),)),
+        ),
+        initial_state=(("topic", "ship"),),
+    )
+
+
+async def test_structured_port_is_live_object_parity() -> None:
+    """An ``object`` port carries a real dict through both engines (not a JSON string)."""
+    from flow.executor import execute
+
+    wf = _make_structured_wire_wf()
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    # The structured port must be a LIVE dict, not a serialized JSON string.
+    assert gen_state["plan"]["plan"] == {"owner": "ada", "tasks": ["spec", "ship"]}
+    assert isinstance(gen_state["plan"]["plan"], dict)
+    # The downstream script read the nested field from the live object.
+    assert gen_state["render"]["line"] == "ada:ship"
+    # interpret == compile.
+    assert gen_state == _interp_out(run_result)
+
+
+async def test_nested_interpolation_in_prompt_parity() -> None:
+    """``{{plan.owner}}`` / ``{{plan.tasks.0}}`` resolve a field from a structured port.
+
+    A downstream script's *input* is a string port fed from the object port via a
+    condition-free edge, but the interpolation grammar itself is exercised through
+    a guard: the edge to ``gate`` fires only when ``{{plan.owner}}`` equals ``ada``.
+    """
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="nested-interp",
+        provider="copilot",
+        entry="plan",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="plan",
+                type="script",
+                code=(
+                    "def plan(ctx, topic):\n"
+                    "    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"
+                ),
+                input_ports=(Port("topic", "string"),),
+                output_ports=(Port("plan", "object"),),
+            ),
+            NodeDef(
+                id="gate",
+                type="script",
+                code="def gate(ctx):\n    return 'reached'",
+                output_ports=(Port("mark", "string"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="plan", mapping=(("topic", "topic"),)),
+            # Guard uses a NESTED field of the structured source port.
+            EdgeDef(
+                src="plan",
+                dst="gate",
+                when=Condition(op="equals", value="{{plan.owner}}", text="ada"),
+            ),
+        ),
+        initial_state=(("topic", "ship"),),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    # owner == "ada" so the gate fires in both engines.
+    assert gen_state["gate"]["mark"] == "reached"
+    assert gen_state == _interp_out(run_result)
+
+
+async def test_structured_initial_state_parity() -> None:
+    """A structured ``$in`` seed (list/object) flows type-native through both engines."""
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="structured-seed",
+        provider="copilot",
+        entry="use",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="use",
+                type="script",
+                code="def use(ctx, cfg, items):\n    return {'first': items[0], 'flag': cfg['on']}",
+                input_ports=(Port("cfg", "object"), Port("items", "array")),
+                output_ports=(Port("r", "object"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="use", mapping=(("cfg", "cfg"), ("items", "items"))),
+        ),
+        # Type-native seed: a dict and a list, not strings.
+        initial_state=(("cfg", {"on": True}), ("items", [10, 20])),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["use"]["r"] == {"first": 10, "flag": True}
+    assert gen_state["$in"]["cfg"] == {"on": True}
+    assert gen_state == _interp_out(run_result)

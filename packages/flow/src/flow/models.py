@@ -122,7 +122,9 @@ class WorkflowDef:
     edges: tuple[EdgeDef, ...]
     default_model: str = ""
     # Seed values exposed as the output ports of the reserved IN_NODE_ID source.
-    initial_state: tuple[tuple[str, str], ...] = field(default=())
+    # Values are type-native (str / int / float / bool / list / dict) to match the
+    # structured wire format.
+    initial_state: tuple[tuple[str, object], ...] = field(default=())
     # Custom tool manifest: (tool_name, "module:attr") pairs.  Each ref is loaded
     # at run/generate time (like a script node's ``run``) and registered into the
     # tool registry under ``tool_name``, so agent nodes can name it in ``tools``.

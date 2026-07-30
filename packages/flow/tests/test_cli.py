@@ -120,7 +120,21 @@ _AGENT_CALC = str(Path(__file__).parent.parent / "examples" / "agent_calculator.
 def test_parse_inputs_basic() -> None:
     from flow.cli import _parse_inputs
 
-    assert _parse_inputs(["a=3", "b=4"]) == {"a": "3", "b": "4"}
+    # values are parsed as JSON when possible, so numbers become type-native
+    assert _parse_inputs(["a=3", "b=4"]) == {"a": 3, "b": 4}
+
+
+def test_parse_inputs_bare_word_stays_string() -> None:
+    from flow.cli import _parse_inputs
+
+    # a value that is not valid JSON is kept as the raw string
+    assert _parse_inputs(["name=ada", "topic=ship it"]) == {"name": "ada", "topic": "ship it"}
+
+
+def test_parse_inputs_structured() -> None:
+    from flow.cli import _parse_inputs
+
+    assert _parse_inputs(['xs=[1, 2]', 'cfg={"a": 1}']) == {"xs": [1, 2], "cfg": {"a": 1}}
 
 
 def test_parse_inputs_value_with_equals() -> None:

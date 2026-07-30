@@ -72,41 +72,122 @@ _COERCE_TRUE = {"true", "1", "yes", "on"}
 _COERCE_FALSE = {"false", "0", "no", "off", ""}
 
 
-def to_python(value: str, json_type: str) -> Any:
-    """Coerce a state string *value* into the Python type named by *json_type*."""
-    if json_type == "string":
+def port_str(value: object) -> str:
+    """Project a stored port *value* to its canonical string form (verbatim str or sorted JSON)."""
+    if isinstance(value, str):
         return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    low = str(value).strip().lower()
+    if low in _COERCE_TRUE:
+        return True
+    if low in _COERCE_FALSE:
+        return False
+    raise ValueError(f"cannot coerce {value!r} to boolean")
+
+
+def resolve_path(value: object, segments: list[str]) -> object:
+    """Walk *segments* into a structured *value*; return None on any miss."""
+    cur = value
+    for seg in segments:
+        if isinstance(cur, dict):
+            if seg not in cur:
+                return None
+            cur = cur[seg]
+        elif isinstance(cur, (list, tuple)):
+            if not seg.isdigit():
+                return None
+            idx = int(seg)
+            if not 0 <= idx < len(cur):
+                return None
+            cur = cur[idx]
+        else:
+            return None
+    return cur
+
+
+def interp_path(state: dict[str, object], path: str) -> str:
+    """Resolve a dotted ``{{path}}`` against *state* and project to text ('' on miss)."""
+    head, *rest = path.split(".")
+    if head not in state:
+        return ""
+    resolved = resolve_path(state[head], rest) if rest else state[head]
+    if resolved is None:
+        return ""
+    return port_str(resolved)
+
+
+def to_python(value: object, json_type: str) -> Any:
+    """Coerce a stored wire *value* into the Python type named by *json_type* (tolerant)."""
+    if json_type == "string":
+        return value if isinstance(value, str) else port_str(value)
     if json_type == "integer":
-        return int(value) if value.strip() != "" else 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        s = str(value).strip()
+        return int(s) if s != "" else 0
     if json_type == "number":
-        return float(value) if value.strip() != "" else 0.0
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        return float(s) if s != "" else 0.0
     if json_type == "boolean":
-        low = value.strip().lower()
-        if low in _COERCE_TRUE:
-            return True
-        if low in _COERCE_FALSE:
-            return False
-        raise ValueError(f"cannot coerce {value!r} to boolean")
+        return _to_bool(value)
     if json_type in ("array", "object"):
-        if value.strip() == "":
-            return [] if json_type == "array" else {}
-        parsed = json.loads(value)
-        if json_type == "array" and not isinstance(parsed, list):
-            raise ValueError(f"expected a JSON array, got {type(parsed).__name__}")
-        if json_type == "object" and not isinstance(parsed, dict):
-            raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
-        return parsed
+        if isinstance(value, str):
+            if value.strip() == "":
+                return [] if json_type == "array" else {}
+            value = json.loads(value)
+        if isinstance(value, tuple):
+            value = list(value)
+        if json_type == "array" and not isinstance(value, list):
+            raise ValueError(f"expected a JSON array, got {type(value).__name__}")
+        if json_type == "object" and not isinstance(value, dict):
+            raise ValueError(f"expected a JSON object, got {type(value).__name__}")
+        return value
     raise ValueError(f"unknown json type {json_type!r}")
 
 
-def to_state(value: Any, json_type: str) -> str:
-    """Coerce a script's return *value* back into a string for state storage."""
+def to_state(value: object, json_type: str) -> object:
+    """Coerce a script's return *value* into the stored wire value (type-native)."""
     if json_type == "string":
-        return value if isinstance(value, str) else str(value)
-    if json_type in ("integer", "number", "boolean"):
-        return str(value)
+        return value if isinstance(value, str) else port_str(value)
+    if json_type == "integer":
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        return int(str(value).strip() or "0")
+    if json_type == "number":
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(str(value).strip() or "0")
+    if json_type == "boolean":
+        return _to_bool(value)
     if json_type in ("array", "object"):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, str):
+            value = json.loads(value) if value.strip() != "" else ([] if json_type == "array" else {})
+        if isinstance(value, tuple):
+            value = list(value)
+        if json_type == "array" and not isinstance(value, list):
+            raise ValueError(f"expected a JSON array, got {type(value).__name__}")
+        if json_type == "object" and not isinstance(value, dict):
+            raise ValueError(f"expected a JSON object, got {type(value).__name__}")
+        return value
     raise ValueError(f"unknown json type {json_type!r}")
 
 
@@ -196,10 +277,10 @@ def bind_tool(obj: object, name: str) -> AgentTool:
 
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
-_OUT: dict[str, dict[str, str]] = $in_seed
+_OUT: dict[str, dict[str, object]] = $in_seed
 # Per-node execution trace (delta frames) and the collected workflow output.
 _STACK: list[dict[str, object]] = []
-_OUTPUT: dict[str, str] = {}
+_OUTPUT: dict[str, object] = {}
 # Completed node ids (used for checkpoint/resume).
 _COMPLETED: set[str] = set()
 # Isolation tracking: nodes whose failure was captured (on_error="isolate").
@@ -208,7 +289,7 @@ _FAILED: dict[str, str] = {}
 _TOKENS_USED: int = 0
 _MAX_TOKENS: int | None = None
 # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
-_MEMO: dict[str, dict[str, str]] = {}
+_MEMO: dict[str, dict[str, object]] = {}
 # Signals delivered to this run (human nodes check against this set).
 $signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
@@ -294,10 +375,10 @@ async def _run_agent(
     tools: tuple[AgentTool, ...] = (),
     output_schema: tuple[tuple[str, str], ...] = (),
     web_search_model: str | None = None,
-) -> tuple[str, int]:
+) -> tuple[object, int]:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
     # Structured output: register submit_result + a result sink, and instruct the
-    # agent to call it.  The submitted object becomes the node's JSON output.
+    # agent to call it.  The submitted object becomes the node's structured output.
     _sink: dict[str, object] = {}
     _tool_ctx: dict[str, object] | None = None
     _sys = system_prompt
@@ -338,7 +419,8 @@ async def _run_agent(
         _result_obj = _sink.get("result")
         if _result_obj is None:
             raise WorkflowExecutionError("agent did not submit a result via submit_result")
-        return json.dumps(_result_obj, ensure_ascii=False, sort_keys=True), _node_tokens
+        # Keep the submitted object structured — do NOT flatten to a JSON string.
+        return _result_obj, _node_tokens
     return "".join(accumulated), _node_tokens
 
 

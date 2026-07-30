@@ -9,13 +9,13 @@ from flow.loader import load_workflow, parse_workflow
 from flow.models import NodeDef, WorkflowDef
 
 
-def _run(wf: WorkflowDef, base_dir: pathlib.Path | None = None) -> dict[str, str]:
+def _run(wf: WorkflowDef, base_dir: pathlib.Path | None = None) -> dict[str, object]:
     import asyncio
 
     result = asyncio.run(execute(wf, base_dir=base_dir))
     # Flatten the nested real-node outputs into a single name->value view, the way
     # the old flat final_state read.
-    flat: dict[str, str] = {}
+    flat: dict[str, object] = {}
     for ports in result.runtime["state"].values():
         flat.update(ports)
     return flat
@@ -38,7 +38,8 @@ def test_inline_typed_add_coerces() -> None:
         "edges": [{"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}}],
     })
     fs = _run(wf)
-    assert fs["sum"] == "7"
+    # integer port is type-native: 3 + 4 = 7 (int), not "34" or "7"
+    assert fs["sum"] == 7
 
 
 def test_inline_async_script() -> None:
@@ -95,9 +96,8 @@ def test_object_output_serialized() -> None:
         }],
         "edges": [],
     })
-    import json
-
-    assert json.loads(_run(wf)["d"]) == {"a": 1, "b": 2}
+    # object port keeps structure — a live dict, not a JSON string
+    assert _run(wf)["d"] == {"a": 1, "b": 2}
 
 
 def test_ref_imports_from_workflow_dir(tmp_path: pathlib.Path) -> None:

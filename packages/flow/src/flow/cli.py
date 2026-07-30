@@ -67,19 +67,24 @@ def _dry_run_stream_fn_factory(model: str) -> StreamFn:
 # ---------------------------------------------------------------------------
 
 
-def _parse_inputs(pairs: list[str]) -> dict[str, str]:
+def _parse_inputs(pairs: list[str]) -> dict[str, object]:
     """Parse ``--input K=V`` flags into a dict; split on the first ``=`` only.
 
     Values may themselves contain ``=`` (e.g. ``note=x=y``).  A pair without any
-    ``=`` is a usage error.
+    ``=`` is a usage error.  Each value is parsed as JSON when possible so a
+    structured seed (``items=[1,2]``, ``cfg={"a":1}``, ``n=5``) is expressible;
+    a value that is not valid JSON (a bare word) is kept as the raw string.
     """
-    out: dict[str, str] = {}
+    out: dict[str, object] = {}
     for pair in pairs:
         key, sep, value = pair.partition("=")
         if not sep:
             print(f"error: --input expects K=V, got {pair!r}")
             raise SystemExit(2)
-        out[key] = value
+        try:
+            out[key] = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            out[key] = value
     return out
 
 
@@ -99,7 +104,7 @@ async def _cmd_run(
     provider: str | None,
     dry_run: bool,
     timeout: float = 120.0,
-    inputs: dict[str, str] | None = None,
+    inputs: dict[str, object] | None = None,
 ) -> None:
     """Execute a workflow and print its outputs ($output) as JSON."""
     try:

@@ -15,12 +15,14 @@ import importlib.resources
 import re
 import string
 from collections import defaultdict
-from collections.abc import Callable
 
 from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef
 
-# A PortExpr resolves a referenced port name to a Python expression string.
-PortExpr = Callable[[str], str]
+# A ContainerExpr is a Python expression string evaluating to the state dict
+# (``dict[str, object]``) that a ``{{path}}`` placeholder is resolved against.
+ContainerExpr = str
+# Placeholder grammar: a dotted path of \w+ segments (mirrors flow.interpolate).
+_PLACEHOLDER = re.compile(r"\{\{\s*(\w+(?:\.\w+)*)\s*\}\}")
 
 
 def _safe_id(node_id: str) -> str:
@@ -58,80 +60,93 @@ def _render_in_seed(wf: WorkflowDef) -> str:
     """Render the full ``_OUT`` seed dict literal: ``{'$in': {<initial_state>}}``.
 
     repr() escapes backslashes/quotes/newlines so the emitted literal is faithful.
-    The assignment line is ``_OUT: dict[str, dict[str, str]] = <literal>`` (prefix
-    34 chars); a long initial state can exceed 120, so a whole-line noqa is
+    The assignment line is ``_OUT: dict[str, dict[str, object]] = <literal>`` (prefix
+    37 chars); a long initial state can exceed 120, so a whole-line noqa is
     appended to keep the generated module ruff-clean.
     """
     pairs = ", ".join(f"{k!r}: {v!r}" for k, v in wf.initial_state)
     literal = "{" + f"{IN_NODE_ID!r}: {{{pairs}}}" + "}"
-    if 34 + len(literal) > 120:
+    if 37 + len(literal) > 120:
         return literal + "  # noqa: E501"
     return literal
 
 
-def _render_prompt(prompt: str, port_expr: PortExpr) -> str:
-    """Emit *prompt* with each ``{{port}}`` replaced by *port_expr(port)* in an f-string."""
-    pattern = re.compile(r"\{\{\s*(\w+)\s*\}\}")
-    if not pattern.search(prompt):
-        return repr(prompt)
-    fstr_body = pattern.sub(lambda m: "{" + port_expr(m.group(1)) + "}", prompt)
-    escaped = fstr_body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
-    return 'f"""' + escaped + '"""'
+def _interp_expr(template: str, container: ContainerExpr) -> str:
+    """Compile an interpolated *template* to a Python str expression.
+
+    Each ``{{path}}`` becomes ``interp_path(<container>, "path")`` — the SAME
+    inlined helper the interpreter uses — so a structured value is projected to
+    canonical JSON identically in both engines.  Literal spans are ``repr``'d and
+    concatenated.  A template with no placeholder is just its ``repr``.
+    """
+    parts: list[str] = []
+    pos = 0
+    for m in _PLACEHOLDER.finditer(template):
+        if m.start() > pos:
+            parts.append(repr(template[pos : m.start()]))
+        parts.append(f"interp_path({container}, {m.group(1)!r})")
+        pos = m.end()
+    if pos < len(template):
+        parts.append(repr(template[pos:]))
+    if not parts:
+        return repr(template)
+    return " + ".join(parts)
 
 
-def _str_expr(s: str, port_expr: PortExpr) -> str:
-    """Convert a possibly-interpolated condition operand to a Python expression."""
-    single = re.compile(r"^\{\{\s*(\w+)\s*\}\}$")
-    m = single.match(s.strip())
-    if m:
-        return port_expr(m.group(1))
-    inter = re.compile(r"\{\{\s*(\w+)\s*\}\}")
-    if inter.search(s):
-        body = inter.sub(lambda x: "{" + port_expr(x.group(1)) + "}", s)
-        escaped = body.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
-        return 'f"""' + escaped + '"""'
-    return repr(s)
+def _render_prompt(prompt: str, container: ContainerExpr) -> str:
+    """Emit *prompt* as a Python str expression with ``{{path}}`` interpolated."""
+    return _interp_expr(prompt, container)
 
 
-def _condition_to_expr(cond: Condition, port_expr: PortExpr) -> str:
-    """Translate a Condition tree to a Python boolean expression (ports via *port_expr*)."""
+def _str_expr(s: str, container: ContainerExpr) -> str:
+    """Compile a condition operand to a projected-string Python expression.
+
+    Both a bare ``{{x}}`` and an embedded placeholder go through ``interp_path``,
+    so a condition always compares the canonical string projection on both sides —
+    matching the interpreter, which routes every operand through ``interpolate``.
+    """
+    return _interp_expr(s, container)
+
+
+def _condition_to_expr(cond: Condition, container: ContainerExpr) -> str:
+    """Translate a Condition tree to a Python boolean expression (ports via *container*)."""
     if cond.op == "equals":
-        return f"{_str_expr(cond.value or '', port_expr)} == {_str_expr(cond.text or '', port_expr)}"
+        return f"{_str_expr(cond.value or '', container)} == {_str_expr(cond.text or '', container)}"
     if cond.op == "contains":
-        return f"{_str_expr(cond.text or '', port_expr)} in {_str_expr(cond.value or '', port_expr)}"
+        return f"{_str_expr(cond.text or '', container)} in {_str_expr(cond.value or '', container)}"
     if cond.op == "not":
-        return f"not ({_condition_to_expr(cond.children[0], port_expr)})"
+        return f"not ({_condition_to_expr(cond.children[0], container)})"
     if cond.op == "and":
-        return " and ".join(f"({_condition_to_expr(c, port_expr)})" for c in cond.children)
+        return " and ".join(f"({_condition_to_expr(c, container)})" for c in cond.children)
     if cond.op == "or":
-        return " or ".join(f"({_condition_to_expr(c, port_expr)})" for c in cond.children)
+        return " or ".join(f"({_condition_to_expr(c, container)})" for c in cond.children)
     return "True"
 
 
-def _condition_to_negated_expr(cond: Condition, port_expr: PortExpr) -> str:
+def _condition_to_negated_expr(cond: Condition, container: ContainerExpr) -> str:
     """Negation of :func:`_condition_to_expr`, emitted directly (ruff-clean break)."""
     if cond.op == "equals":
-        return f"{_str_expr(cond.value or '', port_expr)} != {_str_expr(cond.text or '', port_expr)}"
+        return f"{_str_expr(cond.value or '', container)} != {_str_expr(cond.text or '', container)}"
     if cond.op == "contains":
-        return f"{_str_expr(cond.text or '', port_expr)} not in {_str_expr(cond.value or '', port_expr)}"
+        return f"{_str_expr(cond.text or '', container)} not in {_str_expr(cond.value or '', container)}"
     if cond.op == "not":
-        return _condition_to_expr(cond.children[0], port_expr)
+        return _condition_to_expr(cond.children[0], container)
     if cond.op == "and":
-        return " or ".join(f"({_condition_to_negated_expr(c, port_expr)})" for c in cond.children)
+        return " or ".join(f"({_condition_to_negated_expr(c, container)})" for c in cond.children)
     if cond.op == "or":
-        return " and ".join(f"({_condition_to_negated_expr(c, port_expr)})" for c in cond.children)
+        return " and ".join(f"({_condition_to_negated_expr(c, container)})" for c in cond.children)
     return "False"
 
 
-def _src_port_expr(safe_ids: dict[str, str], src: str) -> PortExpr:
-    """Port resolver for an edge condition: reads the SOURCE node's output ports.
+def _src_container_expr(safe_ids: dict[str, str], src: str) -> ContainerExpr:
+    """State container for an edge condition: the SOURCE node's output ports.
 
     Uses ``_OUT.get(node, {})`` so a guard that references a node which has not
-    run yet (e.g. a self-loop's first-iteration check) yields '' instead of a
-    ``KeyError``.
+    run yet (e.g. a self-loop's first-iteration check) resolves to '' instead of
+    a ``KeyError``.
     """
     key = IN_NODE_ID if src == IN_NODE_ID else src
-    return lambda port: f"_OUT.get({key!r}, {{}}).get({port!r}, '')"
+    return f"_OUT.get({key!r}, {{}})"
 
 
 def _wrap_string_expr(expr: str, indent: int = 4) -> str:
@@ -170,7 +185,7 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
     """
     if not node.input_ports:
         return []
-    lines = ["    ins: dict[str, str] = {}"]
+    lines = ["    ins: dict[str, object] = {}"]
     for edge in _incoming(node.id, wf):
         src = IN_NODE_ID if edge.src == IN_NODE_ID else edge.src
         for sport, dport in edge.mapping:
@@ -181,7 +196,7 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
             continue
         src = edge.src
         guard = (
-            _condition_to_expr(edge.when, _src_port_expr({}, src)) if edge.when is not None else "True"
+            _condition_to_expr(edge.when, _src_container_expr({}, src)) if edge.when is not None else "True"
         )
         for sport, dport in edge.mapping:
             lines.append(f"    if ({guard}) and {sport!r} in _OUT.get({src!r}, {{}}):")
@@ -206,11 +221,11 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
     if len(frame_line) > 120:
         frame_line += "  # noqa: E501"
     lines = [frame_line]
-    out_port_expr: PortExpr = lambda port: f"_OUT[{node.id!r}].get({port!r}, '')"  # noqa: E731
+    out_container: ContainerExpr = f"_OUT[{node.id!r}]"
     for edge in wf.edges:
         if edge.dst != OUT_NODE_ID or edge.src != node.id:
             continue
-        guard = _condition_to_expr(edge.when, out_port_expr) if edge.when is not None else None
+        guard = _condition_to_expr(edge.when, out_container) if edge.when is not None else None
         for sport, okey in edge.mapping:
             cond = f"{sport!r} in _OUT[{node.id!r}]"
             if guard is not None:
@@ -452,9 +467,9 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
 
     # agent node — prompts are PORT-LOCAL: {{x}} reads ins['x'].
     model = node.model or wf.default_model
-    ins_expr: PortExpr = lambda port: f"ins.get({port!r}, '')"  # noqa: E731
-    sys_prompt = _render_prompt(node.system_prompt, ins_expr)
-    user_prompt = _render_prompt(node.prompt, ins_expr)
+    ins_container: ContainerExpr = "ins" if node.input_ports else "{}"
+    sys_prompt = _render_prompt(node.system_prompt, ins_container)
+    user_prompt = _render_prompt(node.prompt, ins_container)
 
     lines = [f"async def {fn_name}(provider: object) -> None:"]
     lines += _entry_guards(node.id)
@@ -540,7 +555,11 @@ def _node_guard(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str 
         return None
     if any(e.when is None for e in edges):
         return None
-    exprs = [f"({_condition_to_expr(e.when, _src_port_expr(safe_ids, e.src))})" for e in edges if e.when is not None]
+    exprs = [
+        f"({_condition_to_expr(e.when, _src_container_expr(safe_ids, e.src))})"
+        for e in edges
+        if e.when is not None
+    ]
     return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
 
 
@@ -553,7 +572,7 @@ def _node_run_gate(node_id: str, wf: WorkflowDef, fwd_preds: dict[str, list[str]
     clauses: list[str] = [f"'{_ESC(p)}' in _ran" for p in dict.fromkeys(preds)]
     if not any(e.when is None for e in edges):
         guards = [
-            f"({_condition_to_expr(e.when, _src_port_expr(safe_ids, e.src))})" for e in edges if e.when is not None
+            f"({_condition_to_expr(e.when, _src_container_expr(safe_ids, e.src))})" for e in edges if e.when is not None
         ]
         clauses.append(f"({' or '.join(guards)})" if len(guards) > 1 else guards[0])
     return " and ".join(clauses) if clauses else "True"
@@ -582,7 +601,7 @@ def _loop_maps(
         entry_map[le.dst] = (le.src, le.loop_max)
         exit_set.add(le.src)
         exit_break[le.src] = (
-            _condition_to_negated_expr(le.when, _src_port_expr(safe_ids, le.src)) if le.when is not None else None
+            _condition_to_negated_expr(le.when, _src_container_expr(safe_ids, le.src)) if le.when is not None else None
         )
     return entry_map, exit_set, exit_break
 

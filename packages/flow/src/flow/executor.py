@@ -57,7 +57,7 @@ async def _retry_wait(node_id: str, attempt: int, max_attempts: int, backoff: fl
     await asyncio.sleep(delay)
 
 
-def _memo_key(node_id: str, ins: dict[str, str]) -> str:
+def _memo_key(node_id: str, ins: dict[str, object]) -> str:
     """Return a deterministic memo key for (node_id, input namespace).
 
     codegen emits an equivalent inline f-string (see ``_memo_hit_block``); the two
@@ -126,7 +126,7 @@ async def execute(
     tool_registry: ToolRegistry | None = None,
     script_resolver: ScriptResolver | None = None,
     base_dir: Path | None = None,
-    inputs: Mapping[str, str] | None = None,
+    inputs: Mapping[str, object] | None = None,
     web_search_fn_factory: Callable[[str], Callable[[str], Awaitable[str]]] | None = None,
     checkpoint: CheckpointStore | None = None,
     run_id: str | None = None,
@@ -204,10 +204,10 @@ async def execute(
     # the reserved $in source carrying the workflow's initial values; run-time
     # ``inputs`` override those defaults key-by-key.  Only modified while holding
     # _state_lock or before/after concurrency.
-    seed = dict(wf.initial_state)
+    seed: dict[str, object] = dict(wf.initial_state)
     if inputs:
         seed.update(inputs)
-    outputs: dict[str, dict[str, str]] = {IN_NODE_ID: seed}
+    outputs: dict[str, dict[str, object]] = {IN_NODE_ID: seed}
     _state_lock = asyncio.Lock()
     _signals: set[str] = signals if signals is not None else set()
     tokens_used = 0
@@ -222,7 +222,7 @@ async def execute(
     step_counter = 0
     # Live workflow output: updated the moment a node feeding ``$output`` finishes,
     # so a looped writer's latest value wins and the result is progressive.
-    out_live: dict[str, str] = {}
+    out_live: dict[str, object] = {}
 
     node_map = {n.id: n for n in wf.nodes}
 
@@ -234,18 +234,18 @@ async def execute(
         edges_from[edge.src].append(edge)
         in_edges[edge.dst].append(edge)
 
-    def _source_ports(node_id: str) -> dict[str, str]:
+    def _source_ports(node_id: str) -> dict[str, object]:
         """Output ports available for reading from *node_id* (empty if not yet run)."""
         return outputs.get(node_id, {})
 
-    def _build_inputs(node_id: str) -> dict[str, str]:
+    def _build_inputs(node_id: str) -> dict[str, object]:
         """Assemble a node's input namespace from its incoming edge mappings.
 
         Walks in edge-declaration order; a later edge writing the same input port
         wins (only conditional/loop edges may legitimately share a port).  Loop
         back-edges only supply data while their condition holds.
         """
-        ins: dict[str, str] = {}
+        ins: dict[str, object] = {}
         for edge in in_edges.get(node_id, []):
             if edge.loop_max is not None and edge.when is not None and not evaluate(edge.when, _source_ports(edge.src)):
                 continue
@@ -260,7 +260,7 @@ async def execute(
     # Per-edge loop fire counter (loop_max edges only)
     loop_counters: dict[EdgeDef, int] = {}
     # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
-    memo: dict[str, dict[str, str]] = {}
+    memo: dict[str, dict[str, object]] = {}
 
     # -----------------------------------------------------------------------
     # Checkpoint restore — only when both checkpoint store and run_id given.
@@ -318,7 +318,7 @@ async def execute(
             step_counter += 1
         return step
 
-    async def _record_frame(node_id: str, ins: dict[str, str], step: int) -> None:
+    async def _record_frame(node_id: str, ins: dict[str, object], step: int) -> None:
         """Append a delta trace frame for a just-run node, and flush its outputs.
 
         Records the node's step, assembled input namespace, and its output ports.
@@ -533,18 +533,20 @@ async def execute(
             ))
             raise agent_last_exc
 
+        output_value: object
         if node.output_schema:
             result_obj = sink.get("result")
             if result_obj is None:
                 raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
-            output_text = json.dumps(result_obj, ensure_ascii=False, sort_keys=True)
+            # Keep the submitted object structured — do NOT flatten to a JSON string.
+            output_value = result_obj
         else:
-            output_text = "".join(accumulated)
+            output_value = "".join(accumulated)
 
         # Agent nodes write their single output port (if declared).
         if node.output_ports:
             async with _state_lock:
-                outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_text
+                outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
 
         await _record_frame(node_id, ins, agent_step)
         async with _state_lock:
@@ -566,7 +568,7 @@ async def execute(
     async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
         """Coerce a script's return value into the node's output port(s)."""
         ports = node.output_ports
-        stored: dict[str, str]
+        stored: dict[str, object]
         if len(ports) <= 1:
             if not ports:
                 return

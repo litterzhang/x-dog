@@ -10,7 +10,6 @@ run container; ``runtime["state"][node_id][port]`` holds real-node outputs,
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
@@ -573,8 +572,9 @@ async def test_output_sink_collects_declared_outputs() -> None:
 
     # $in / $output kept separate from the real-node state map
     assert result.runtime["in"] == {"a": "5"}
-    assert result.runtime["state"] == {"mk": {"doubled": "10"}}
-    assert result.runtime["out"] == {"result": "10"}
+    # integer ports are type-native: doubled is 10 (int), not "10"
+    assert result.runtime["state"] == {"mk": {"doubled": 10}}
+    assert result.runtime["out"] == {"result": 10}
 
 
 # ---------------------------------------------------------------------------
@@ -800,8 +800,8 @@ async def test_output_schema_success() -> None:
     result = await execute(wf, stream_fn_factory=factory)
 
     assert "out" in result.runtime["state"]["n1"]
-    parsed = json.loads(result.runtime["state"]["n1"]["out"])
-    assert parsed == valid_obj
+    # output_schema keeps the submitted object structured — a live dict, not a JSON string
+    assert result.runtime["state"]["n1"]["out"] == valid_obj
 
 
 async def test_output_schema_missing_submission() -> None:

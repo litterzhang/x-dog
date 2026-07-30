@@ -173,9 +173,11 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
     default_model = str(data.get("defaults", {}).get("model", ""))
 
     raw_state = data.get("state", {})
-    initial_state: tuple[tuple[str, str], ...]
+    initial_state: tuple[tuple[str, object], ...]
     if isinstance(raw_state, dict):
-        initial_state = tuple((k, str(v)) for k, v in raw_state.items())
+        # Keep seed values type-native (a structured seed stays a dict/list, not a
+        # Python repr); the wire format carries them through unchanged.
+        initial_state = tuple((str(k), v) for k, v in raw_state.items())
     else:
         initial_state = ()
 

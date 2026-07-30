@@ -1,10 +1,19 @@
-"""flow.coerce — convert between the string-typed workflow state and JSON types.
+"""flow.coerce — convert between the typed workflow wire format and JSON types.
 
-Workflow state is a flat ``dict[str, str]``.  Typed script nodes declare their
-inputs/output with JSON types (``string``/``integer``/``number``/``boolean``/
-``array``/``object``); this module converts a stored string INTO the declared
-Python type before a script runs (:func:`to_python`) and the script's return
-value BACK into a string for storage (:func:`to_state`).
+Workflow state is a flat ``dict[str, object]``: a port value is the type-native
+Python value named by its JSON type (``string`` → str, ``integer`` → int,
+``number`` → float, ``boolean`` → bool, ``array`` → list, ``object`` → dict).
+
+Three conversions keep the interpreter and the generated module in agreement:
+
+* :func:`to_python` — the stored wire value INTO the Python value a script sees.
+  It is tolerant: an already-typed value passes through, and a ``str`` is parsed
+  (so a string-seeded ``$in`` or an old string-format checkpoint still loads).
+* :func:`to_state` — a script's return value INTO the stored wire value, keeping
+  structure (an ``object`` port stores a live dict, not a JSON string).
+* :func:`port_str` — the canonical string projection used whenever a structured
+  value must become text (prompt interpolation, string conditions).  Both engines
+  call the SAME projection, so ``interpret == compile`` holds under structure.
 """
 
 from __future__ import annotations
@@ -18,39 +27,103 @@ _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off", ""}
 
 
-def to_python(value: str, json_type: str) -> Any:
-    """Coerce a state string *value* into the Python type named by *json_type*."""
-    if json_type == "string":
+def port_str(value: object) -> str:
+    """Project a stored port *value* to its canonical string form.
+
+    A ``str`` is returned verbatim (no JSON quoting), so a plain string port
+    interpolates as-is.  Any structured value is rendered as canonical,
+    sorted-key JSON — identical in the interpreter and the generated module.
+    """
+    if isinstance(value, str):
         return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _to_bool(value: object) -> bool:
+    """Coerce a bool-or-string *value* to bool via the truthy/falsey word sets."""
+    if isinstance(value, bool):
+        return value
+    low = str(value).strip().lower()
+    if low in _TRUE:
+        return True
+    if low in _FALSE:
+        return False
+    raise ValueError(f"cannot coerce {value!r} to boolean")
+
+
+def to_python(value: object, json_type: str) -> Any:
+    """Coerce a stored wire *value* into the Python type named by *json_type*.
+
+    Tolerant of both the type-native value (passed through) and a ``str`` form
+    (parsed) so string-seeded ``$in`` values and old checkpoints still load.
+    """
+    if json_type == "string":
+        return value if isinstance(value, str) else port_str(value)
     if json_type == "integer":
-        return int(value) if value.strip() != "" else 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        s = str(value).strip()
+        return int(s) if s != "" else 0
     if json_type == "number":
-        return float(value) if value.strip() != "" else 0.0
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        return float(s) if s != "" else 0.0
     if json_type == "boolean":
-        low = value.strip().lower()
-        if low in _TRUE:
-            return True
-        if low in _FALSE:
-            return False
-        raise ValueError(f"cannot coerce {value!r} to boolean")
+        return _to_bool(value)
     if json_type in ("array", "object"):
-        if value.strip() == "":
-            return [] if json_type == "array" else {}
-        parsed = json.loads(value)
-        if json_type == "array" and not isinstance(parsed, list):
-            raise ValueError(f"expected a JSON array, got {type(parsed).__name__}")
-        if json_type == "object" and not isinstance(parsed, dict):
-            raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
-        return parsed
+        if isinstance(value, str):
+            if value.strip() == "":
+                return [] if json_type == "array" else {}
+            value = json.loads(value)
+        if isinstance(value, tuple):
+            value = list(value)
+        if json_type == "array" and not isinstance(value, list):
+            raise ValueError(f"expected a JSON array, got {type(value).__name__}")
+        if json_type == "object" and not isinstance(value, dict):
+            raise ValueError(f"expected a JSON object, got {type(value).__name__}")
+        return value
     raise ValueError(f"unknown json type {json_type!r}")
 
 
-def to_state(value: Any, json_type: str) -> str:
-    """Coerce a script's return *value* back into a string for state storage."""
+def to_state(value: object, json_type: str) -> object:
+    """Coerce a script's return *value* into the stored wire value (type-native).
+
+    Structure is preserved: an ``array``/``object`` port stores a live list/dict,
+    not a JSON string.  Scalars are normalised to their canonical Python type.
+    """
     if json_type == "string":
-        return value if isinstance(value, str) else str(value)
-    if json_type in ("integer", "number", "boolean"):
-        return str(value)
+        return value if isinstance(value, str) else port_str(value)
+    if json_type == "integer":
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        return int(str(value).strip() or "0")
+    if json_type == "number":
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(str(value).strip() or "0")
+    if json_type == "boolean":
+        return _to_bool(value)
     if json_type in ("array", "object"):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, str):
+            value = json.loads(value) if value.strip() != "" else ([] if json_type == "array" else {})
+        if isinstance(value, tuple):
+            value = list(value)
+        if json_type == "array" and not isinstance(value, list):
+            raise ValueError(f"expected a JSON array, got {type(value).__name__}")
+        if json_type == "object" and not isinstance(value, dict):
+            raise ValueError(f"expected a JSON object, got {type(value).__name__}")
+        return value
     raise ValueError(f"unknown json type {json_type!r}")

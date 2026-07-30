@@ -9,7 +9,7 @@ from flow.interpolate import interpolate
 from flow.models import Condition
 
 
-def evaluate(cond: Condition, state: Mapping[str, str]) -> bool:
+def evaluate(cond: Condition, state: Mapping[str, object]) -> bool:
     """Evaluate a Condition against state.
 
     Supported ops:

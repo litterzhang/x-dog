@@ -108,7 +108,7 @@ def test_bundle_runs_without_the_flow_package(tmp_path: Path) -> None:
         assert importlib.util.find_spec("flow") is None, "flow must not be importable"
         import workflow
         asyncio.run(workflow.main())
-        assert workflow._OUT["s"]["o"] == "42", workflow._OUT
+        assert workflow._OUT["s"]["o"] == 42, workflow._OUT
         print("OK")
         """
     )
