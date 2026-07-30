@@ -1,0 +1,62 @@
+{
+  "name": "trip-planner",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "entry": "plan",
+  "state": {
+    "destination": "Kyoto, Japan",
+    "days": 3,
+    "budget_usd": 1200
+  },
+  "nodes": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "inputs": ["destination", "days", "budget_usd"],
+      "system_prompt": "You are a meticulous travel planner. Given a destination, a number of days, and a budget in USD, produce a realistic day-by-day plan.",
+      "prompt": "Plan a trip.\nDestination: {{destination}}\nDays: {{days}}\nBudget (USD): {{budget_usd}}\n\nWhen finished, call submit_result with:\n- summary: one sentence describing the trip\n- daily_plan: an array with exactly {{days}} strings, one per day (e.g. 'Day 1: ...')\n- est_cost_usd: your estimated total cost as a number\n- highlight: the single must-do experience",
+      "outputs": ["plan"],
+      "output_schema": {
+        "summary": "string",
+        "daily_plan": "array",
+        "est_cost_usd": "number",
+        "highlight": "string"
+      }
+    },
+    {
+      "id": "budget_check",
+      "type": "script",
+      "inputs": [
+        {"name": "plan", "type": "object"},
+        {"name": "budget_usd", "type": "number"}
+      ],
+      "code": "def budget_check(ctx, plan, budget_usd):\n    est = float(plan['est_cost_usd'])\n    verdict = {}\n    verdict['within_budget'] = est <= budget_usd\n    verdict['delta_usd'] = round(budget_usd - est, 2)\n    verdict['day_count'] = len(plan['daily_plan'])\n    return verdict",
+      "outputs": [
+        {"name": "verdict", "type": "object"}
+      ]
+    },
+    {
+      "id": "brief",
+      "type": "agent",
+      "inputs": [
+        {"name": "plan", "type": "object"},
+        {"name": "verdict", "type": "object"}
+      ],
+      "system_prompt": "You write short, friendly trip briefs for a traveler.",
+      "prompt": "Write a 3-sentence brief.\n\nTrip summary: {{plan.summary}}\nMust-do: {{plan.highlight}}\nDay 1: {{plan.daily_plan.0}}\n\nBudget check: within_budget={{verdict.within_budget}}, delta_usd={{verdict.delta_usd}}, days={{verdict.day_count}}.\n\nMention whether the plan fits the budget. Reply with ONLY the brief text.",
+      "outputs": ["brief"]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "plan", "map": {"destination": "destination", "days": "days", "budget_usd": "budget_usd"}},
+    {"from": "$in", "to": "budget_check", "map": {"budget_usd": "budget_usd"}},
+    {"from": "plan", "to": "budget_check", "map": {"plan": "plan"}},
+    {"from": "plan", "to": "brief", "map": {"plan": "plan"}},
+    {"from": "budget_check", "to": "brief", "map": {"verdict": "verdict"}},
+    {"from": "plan", "to": "$output", "map": {"plan": "itinerary"}},
+    {"from": "budget_check", "to": "$output", "map": {"verdict": "budget"}},
+    {"from": "brief", "to": "$output", "map": {"brief": "brief"}}
+  ]
+}
