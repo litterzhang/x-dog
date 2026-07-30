@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
+from flow.coerce import VALID_TYPES
 from flow.errors import WorkflowValidationError
 from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
@@ -303,6 +304,14 @@ def validate_workflow(wf: WorkflowDef) -> None:
     known_tools = default_registry().names() | manifest_names
 
     for node in wf.nodes:
+        # Every declared port type must be one of the known JSON types, so a typo
+        # like "int" fails at load time instead of surfacing later in to_python.
+        for _port in (*node.input_ports, *node.output_ports):
+            if _port.type not in VALID_TYPES:
+                raise WorkflowValidationError(
+                    f"Node {node.id!r}: port {_port.name!r} has unknown type {_port.type!r}; "
+                    f"expected one of {', '.join(VALID_TYPES)}"
+                )
         for tool in node.tools:
             if not tool:
                 raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
@@ -318,6 +327,22 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+            if len(node.output_ports) > 1:
+                # A multi-output agent fans its submitted object out to each port by
+                # field name, so it must declare a schema and every port must name a
+                # schema field.
+                if not node.output_schema:
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r}: a multi-output agent (>1 output port) "
+                        f"must declare 'output_schema'"
+                    )
+                schema_fields = {f for f, _ in node.output_schema}
+                unknown = [p.name for p in node.output_ports if p.name not in schema_fields]
+                if unknown:
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r}: output port(s) {sorted(unknown)} are not "
+                        f"fields of output_schema {sorted(schema_fields)}"
+                    )
         elif node.type == "human":
             if not node.signal:
                 raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")

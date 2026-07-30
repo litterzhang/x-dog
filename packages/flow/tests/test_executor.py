@@ -830,6 +830,70 @@ async def test_output_schema_missing_submission() -> None:
         await execute(wf, stream_fn_factory=factory)
 
 
+async def test_output_schema_multi_port_fans_out() -> None:
+    """An output_schema agent with >1 declared port stores each field in its own port."""
+    result_obj = {"summary": "do it", "tasks": ["a", "b"], "cost": 42.5}
+
+    wf = WorkflowDef(
+        name="multi_out",
+        provider="fake",
+        entry="n1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="n1",
+                model="m",
+                prompt="plan",
+                output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
+                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
+            ),
+        ),
+        edges=(),
+    )
+
+    result = await execute(wf, stream_fn_factory=_make_submit_result_factory(result_obj))
+    ports = result.runtime["state"]["n1"]
+    # Each field landed in its own port, type-native.
+    assert ports["summary"] == "do it"
+    assert ports["tasks"] == ["a", "b"]
+    assert ports["cost"] == 42.5
+    assert isinstance(ports["tasks"], list)
+    assert isinstance(ports["cost"], float)
+
+
+async def test_output_schema_multi_port_incomplete_submission_rejected() -> None:
+    """submit_result validates the schema, so an incomplete object never populates a port.
+
+    The submit_result tool rejects a result missing a declared schema field, so the
+    sink stays empty and the run fails as 'did not submit a result' — a multi-output
+    agent therefore can never leave one of its ports unfilled.
+    """
+    import pytest
+
+    # result omits the 'cost' field declared in both the schema and the ports
+    result_obj = {"summary": "do it", "tasks": ["a"]}
+
+    wf = WorkflowDef(
+        name="multi_out_missing",
+        provider="fake",
+        entry="n1",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="n1",
+                model="m",
+                prompt="plan",
+                output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
+                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
+            ),
+        ),
+        edges=(),
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="did not submit a result"):
+        await execute(wf, stream_fn_factory=_make_submit_result_factory(result_obj))
+
+
 # ---------------------------------------------------------------------------
 # web_search (agent builtin, enabled per-node)
 # ---------------------------------------------------------------------------

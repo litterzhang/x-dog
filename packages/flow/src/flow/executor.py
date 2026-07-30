@@ -543,10 +543,29 @@ async def execute(
         else:
             output_value = "".join(accumulated)
 
-        # Agent nodes write their single output port (if declared).
+        # Store the agent's output ports.  With output_schema + multiple declared
+        # ports, fan the submitted object out by field name (each port coerced to
+        # its declared type) — mirroring the multi-output script path.  Otherwise
+        # the single port carries the whole value (object or text).
         if node.output_ports:
-            async with _state_lock:
-                outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
+            if node.output_schema and len(node.output_ports) > 1:
+                if not isinstance(output_value, dict):
+                    raise WorkflowExecutionError(
+                        f"Node {node.id!r}: multi-output agent must submit an object, "
+                        f"got {type(output_value).__name__}"
+                    )
+                stored: dict[str, object] = {}
+                for p in node.output_ports:
+                    if p.name not in output_value:
+                        raise WorkflowExecutionError(
+                            f"Node {node.id!r}: submitted result is missing field {p.name!r}"
+                        )
+                    stored[p.name] = to_state(output_value[p.name], p.type)
+                async with _state_lock:
+                    outputs.setdefault(node_id, {}).update(stored)
+            else:
+                async with _state_lock:
+                    outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
 
         await _record_frame(node_id, ins, agent_step)
         async with _state_lock:

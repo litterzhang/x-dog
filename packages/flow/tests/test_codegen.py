@@ -1139,3 +1139,106 @@ async def test_structured_initial_state_parity() -> None:
     assert gen_state["use"]["r"] == {"first": 10, "flag": True}
     assert gen_state["$in"]["cfg"] == {"on": True}
     assert gen_state == _interp_out(run_result)
+
+
+def _make_multi_output_agent_wf() -> WorkflowDef:
+    """An output_schema agent that fans its fields out to SEPARATE output ports."""
+    return WorkflowDef(
+        name="multi-out-agent",
+        provider="copilot",
+        entry="plan",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="plan",
+                model="m",
+                system_prompt="Plan.",
+                prompt="plan {{topic}}",
+                input_ports=(Port("topic"),),
+                # THREE declared output ports, each typed, each named after a schema field.
+                output_ports=(
+                    Port("summary", "string"),
+                    Port("tasks", "array"),
+                    Port("cost", "number"),
+                ),
+                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="plan", mapping=(("topic", "topic"),)),),
+        initial_state=(("topic", "ship"),),
+    )
+
+
+def _multi_field_submit_stream_fn(result_obj: dict[str, object]) -> object:
+    """Build a stub stream_fn that submits *result_obj* via submit_result once."""
+    import asyncio as _asyncio
+
+    from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
+    from ai.utils.event_stream import EventStream as AiEventStream
+
+    def _fn(model_id: object, context: object, options: object = None) -> "AiEventStream[AssistantMessage]":
+        stream: AiEventStream[AssistantMessage] = AiEventStream()
+        if not getattr(_fn, "_called", False):
+            _fn._called = True  # type: ignore[attr-defined]
+            call = ToolCall(id="tc-1", name="submit_result", arguments={"result": result_obj})
+            msg = AssistantMessage(content=(call,), stop_reason="toolUse")
+        else:
+            msg = AssistantMessage(content=(TextContent(text="done"),), stop_reason="stop")
+
+        async def _push() -> None:
+            await _asyncio.sleep(0)
+            await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+            stream.set_result(msg)
+            await stream.close()
+
+        _asyncio.ensure_future(_push())  # noqa: RUF006
+        return stream
+
+    return _fn
+
+
+async def test_generate_multi_output_agent_parity() -> None:
+    """A multi-port output_schema agent fans fields to separate, type-native ports.
+
+    Both engines must store ``plan.summary`` (str), ``plan.tasks`` (list), and
+    ``plan.cost`` (float) as INDEPENDENT ports — not one packed object.
+    """
+    import types
+
+    import agent.helpers as _agent_helpers
+    import ai as _ai
+    from flow.executor import execute
+
+    result_obj: dict[str, object] = {"summary": "do it", "tasks": ["a", "b"], "cost": 42.5}
+    wf = _make_multi_output_agent_wf()
+    src = generate(wf)
+
+    stub = _multi_field_submit_stream_fn(result_obj)
+    original_sfp = _agent_helpers.stream_fn_from_provider
+    original_ai_provider = _ai.provider
+    _agent_helpers.stream_fn_from_provider = lambda _p: stub  # type: ignore[assignment]
+    _ai.provider = lambda _name: object()  # type: ignore[assignment]
+    gen_module = types.ModuleType("_multi_out_module")
+    try:
+        stub._called = False  # type: ignore[attr-defined]
+        exec(compile(src, "<multi_out>", "exec"), gen_module.__dict__)  # noqa: S102
+        await gen_module.main()  # type: ignore[attr-defined]
+        gen_state = {k: dict(v) for k, v in gen_module._OUT.items()}  # type: ignore[attr-defined]
+
+        def _factory(model: str) -> object:
+            stub._called = False  # type: ignore[attr-defined]
+            return stub
+
+        interp = await execute(wf, stream_fn_factory=_factory)  # type: ignore[arg-type]
+    finally:
+        _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
+        _ai.provider = original_ai_provider  # type: ignore[assignment]
+
+    # Each field landed in its OWN port, type-native.
+    assert gen_state["plan"]["summary"] == "do it"
+    assert gen_state["plan"]["tasks"] == ["a", "b"]
+    assert gen_state["plan"]["cost"] == 42.5
+    assert isinstance(gen_state["plan"]["tasks"], list)
+    assert isinstance(gen_state["plan"]["cost"], float)
+    # interpret == compile.
+    assert gen_state == _interp_out(interp)

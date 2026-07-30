@@ -499,7 +499,23 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         lines.append("    " + cl)
     lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
-        lines.append(f"        _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
+        if node.output_schema and len(node.output_ports) > 1:
+            # Multi-output agent: fan the submitted object out to each declared
+            # port by field name, coerced to the port's type (mirrors the
+            # interpreter's multi-port store).
+            _not_obj_msg = f"Node {node.id!r}: multi-output agent must submit an object"
+            lines.append("        if not isinstance(result, dict):")
+            lines.append(f"            raise WorkflowExecutionError({_not_obj_msg!r})")
+            for p in node.output_ports:
+                _miss_msg = f"Node {node.id!r}: submitted result is missing field {p.name!r}"
+                lines.append(f"        if {p.name!r} not in result:")
+                lines.append(f"            raise WorkflowExecutionError({_miss_msg!r})")
+                store = f"        _OUT[{node.id!r}][{p.name!r}] = to_state(result[{p.name!r}], {p.type!r})"
+                if len(store) > 120:
+                    store += "  # noqa: E501"
+                lines.append(store)
+        else:
+            lines.append(f"        _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
     for tl in _render_node_tail(node, wf):
         lines.append("    " + tl)
     lines.append("        global _TOKENS_USED")

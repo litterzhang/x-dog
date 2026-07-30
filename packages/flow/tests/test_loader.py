@@ -705,3 +705,60 @@ def test_validate_empty_manifest_name_fails() -> None:
     wf = parse_workflow(_wf_with_tools({"": "mytools:make_reverse"}, []))
     with pytest.raises(WorkflowValidationError, match="tool name must be non-empty"):
         validate_workflow(wf)
+
+
+# --- Multi-output agent validation + port-type whitelist -------------------
+
+
+def _agent_wf(node: dict[str, object]) -> dict[str, object]:
+    """A minimal single-agent workflow around *node* (seeded with a topic input)."""
+    return {
+        "name": "agent-wf",
+        "provider": "copilot",
+        "entry": "n1",
+        "defaults": {"model": "m"},
+        "state": {"topic": "x"},
+        "nodes": [node],
+        "edges": [{"from": "$in", "to": "n1", "map": {"topic": "topic"}}],
+    }
+
+
+def test_validate_multi_output_agent_without_schema_fails() -> None:
+    node = {
+        "id": "n1", "type": "agent", "inputs": ["topic"],
+        "prompt": "go", "outputs": ["a", "b"],
+    }
+    wf = parse_workflow(_agent_wf(node))
+    with pytest.raises(WorkflowValidationError, match="must declare 'output_schema'"):
+        validate_workflow(wf)
+
+
+def test_validate_multi_output_agent_port_not_in_schema_fails() -> None:
+    node = {
+        "id": "n1", "type": "agent", "inputs": ["topic"], "prompt": "go",
+        "outputs": [{"name": "a", "type": "string"}, {"name": "zzz", "type": "string"}],
+        "output_schema": {"a": "string", "b": "string"},
+    }
+    wf = parse_workflow(_agent_wf(node))
+    with pytest.raises(WorkflowValidationError, match="not"):
+        validate_workflow(wf)
+
+
+def test_validate_multi_output_agent_ok() -> None:
+    node = {
+        "id": "n1", "type": "agent", "inputs": ["topic"], "prompt": "go",
+        "outputs": [{"name": "a", "type": "string"}, {"name": "b", "type": "array"}],
+        "output_schema": {"a": "string", "b": "array"},
+    }
+    wf = parse_workflow(_agent_wf(node))
+    validate_workflow(wf)  # no raise
+
+
+def test_validate_bad_port_type_fails_fast() -> None:
+    node = {
+        "id": "n1", "type": "script", "inputs": [{"name": "topic", "type": "strng"}],
+        "code": "def n1(ctx, topic):\n    return topic", "outputs": ["out"],
+    }
+    wf = parse_workflow(_agent_wf(node))
+    with pytest.raises(WorkflowValidationError, match="unknown type 'strng'"):
+        validate_workflow(wf)
