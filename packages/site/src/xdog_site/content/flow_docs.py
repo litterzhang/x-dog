@@ -106,6 +106,24 @@ _ROADMAP = (
         "default) always run.",
         "Implemented by the tools/autoenrich workflow itself; codegen mirrors it.",
     ), done=True),
+    Phase("P5", "Expressiveness — what the graph can say", (
+        "Planned: the runtime-resilience roadmap is done, so the next axis is what "
+        "the workflow model can even express. Three tiers, smallest first.",
+        "Correctness & ergonomics (small, low risk): numeric condition ops "
+        "(gt/gte/lt/lte) so a loop can branch on a score, not just a string; and "
+        "strict interpolation — because ports are declared, every {{key}} in a "
+        "prompt is checked against the node's inputs at load time, turning a silent "
+        "typo (missing key → empty string → degraded prompt) into a fail-fast.",
+        "Sub-workflows: a type:\"subflow\" node that runs another workflow JSON as a "
+        "single node, so a common draft→critic→revise triad is reused, not copied.",
+        "Dynamic fan-out (the one real capability gap, own design doc first): map a "
+        "node over a runtime-sized list and gather the results — scatter/gather that "
+        "today needs a compile-time constant. Single-machine parallelism through the "
+        "existing semaphore; NOT a reopening of the distributed non-goal.",
+        "Every item ships with interpreter + codegen + a cross-engine parity test, so "
+        "interpret == compile holds at each step. See docs/expressiveness.md and the "
+        "blog post 'The Edges of a Static Graph'.",
+    )),
     Phase("2026", "Beyond the kernel — as a library, not a platform", (
         "Deeper host-integration examples: run a flow graph as one activity inside a "
         "durable engine (e.g. Temporal) for cross-machine scale.",
@@ -122,8 +140,11 @@ DOCS = PackageDocs(
     feature_categories=_FEATURE_CATEGORIES,
     features=_FEATURES,
     roadmap_intro="The runtime-resilience roadmap (P1–P4) is complete — each phase implemented by "
-                  "flow's own auto-enrich workflow and mirrored in codegen. flow is a single-machine, "
-                  "compilable kernel by design; what remains (below) is scoped by that positioning, "
-                  "not unfinished work. See Design for the non-goals.",
+                  "flow's own auto-enrich workflow and mirrored in codegen. The next axis is P5: "
+                  "expressiveness — what the workflow model can say (numeric conditions, strict "
+                  "interpolation, sub-workflows, and dynamic fan-out), each landing with a "
+                  "cross-engine parity test so interpret == compile holds. flow stays a "
+                  "single-machine, compilable kernel by design; distributed execution remains a "
+                  "deliberate non-goal. See Design for the non-goals.",
     roadmap=_ROADMAP,
 )
