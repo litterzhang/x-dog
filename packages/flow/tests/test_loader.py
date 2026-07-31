@@ -762,3 +762,178 @@ def test_validate_bad_port_type_fails_fast() -> None:
     wf = parse_workflow(_agent_wf(node))
     with pytest.raises(WorkflowValidationError, match="unknown type 'strng'"):
         validate_workflow(wf)
+
+
+# --- Cycle detection (#4) --------------------------------------------------
+
+
+def test_validate_unbounded_cycle_fails() -> None:
+    """A -> B -> A with no loop.max is an unbounded cycle and must be rejected."""
+    data = {
+        "name": "cyc",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script",
+             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
+             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
+            {"id": "b", "type": "script", "inputs": [{"name": "oa", "type": "string"}],
+             "code": "def b(ctx, oa):\n    return oa", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": "b", "map": {"oa": "oa"}},
+            {"from": "b", "to": "a", "map": {"ob": "back"}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="cycle with no bounded loop"):
+        validate_workflow(wf)
+
+
+def test_validate_bounded_loop_not_flagged_as_cycle() -> None:
+    """The same back-edge WITH loop.max is a legal bounded loop, not a cycle."""
+    data = {
+        "name": "loop-ok",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script",
+             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
+             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
+            {"id": "b", "type": "script", "inputs": [{"name": "oa", "type": "string"}],
+             "code": "def b(ctx, oa):\n    return oa", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": "b", "map": {"oa": "oa"}},
+            {"from": "b", "to": "a", "map": {"ob": "back"}, "loop": {"max": 2}},
+        ],
+    }
+    wf = parse_workflow(data)
+    validate_workflow(wf)  # no raise
+
+
+def test_validate_self_loop_unbounded_fails() -> None:
+    """A self-edge without loop.max is a 1-node cycle."""
+    data = {
+        "name": "self-cyc",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script",
+             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
+             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": "a", "map": {"oa": "back"}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="cycle with no bounded loop"):
+        validate_workflow(wf)
+
+
+# --- Edge type consistency (2a) --------------------------------------------
+
+
+def _typed_two_node_wf(src_out_type: str, dst_in_type: str) -> dict[str, object]:
+    """A -> B where A's output port and B's input port carry the given types."""
+    return {
+        "name": "typed",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
+             "code": "def a(ctx, seed):\n    return seed", "outputs": [{"name": "oa", "type": src_out_type}]},
+            {"id": "b", "type": "script", "inputs": [{"name": "ib", "type": dst_in_type}],
+             "code": "def b(ctx, ib):\n    return ib", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": "b", "map": {"oa": "ib"}},
+        ],
+    }
+
+
+def test_validate_edge_type_mismatch_fails() -> None:
+    wf = parse_workflow(_typed_two_node_wf("array", "integer"))
+    with pytest.raises(WorkflowValidationError, match="type mismatch"):
+        validate_workflow(wf)
+
+
+def test_validate_edge_type_match_ok() -> None:
+    wf = parse_workflow(_typed_two_node_wf("object", "object"))
+    validate_workflow(wf)  # no raise
+
+
+def test_validate_edge_from_in_is_type_exempt() -> None:
+    """$in seeds are untyped, so an edge out of $in is not type-checked."""
+    data = {
+        "name": "in-exempt",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"n": 5},
+        "nodes": [
+            {"id": "a", "type": "script", "inputs": [{"name": "n", "type": "integer"}],
+             "code": "def a(ctx, n):\n    return n", "outputs": ["oa"]},
+        ],
+        "edges": [{"from": "$in", "to": "a", "map": {"n": "n"}}],
+    }
+    wf = parse_workflow(data)
+    validate_workflow(wf)  # no raise despite $in having no declared type
+
+
+# --- Sub-field mapping validation (2b-1) -----------------------------------
+
+
+def _subfield_wf(map_obj: dict[str, str], dst: str = "b") -> dict[str, object]:
+    """A (object port 'plan') -> B, with the given edge map (source keys may be dotted)."""
+    return {
+        "name": "subfield",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
+             "code": "def a(ctx, seed):\n    return {'owner': seed}",
+             "outputs": [{"name": "plan", "type": "object"}]},
+            {"id": "b", "type": "script", "inputs": [{"name": "who", "type": "string"}],
+             "code": "def b(ctx, who):\n    return who", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": dst, "map": map_obj},
+        ],
+    }
+
+
+def test_validate_subfield_head_must_exist() -> None:
+    # 'nope.owner' — head port 'nope' doesn't exist on the source
+    wf = parse_workflow(_subfield_wf({"nope.owner": "who"}))
+    with pytest.raises(WorkflowValidationError, match="source has no output port 'nope'"):
+        validate_workflow(wf)
+
+
+def test_validate_subfield_ok() -> None:
+    # 'plan.owner' — head port 'plan' exists; sub-field type not checked (2b-2 deferred)
+    wf = parse_workflow(_subfield_wf({"plan.owner": "who"}))
+    validate_workflow(wf)  # no raise
+
+
+def test_validate_subfield_to_output_rejected() -> None:
+    data = _subfield_wf({"plan.owner": "who"}, dst="$output")
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="sub-field key"):
+        validate_workflow(wf)

@@ -16,7 +16,7 @@ import re
 import string
 from collections import defaultdict
 
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef
+from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef, entry_frontier
 
 # A ContainerExpr is a Python expression string evaluating to the state dict
 # (``dict[str, object]``) that a ``{{path}}`` placeholder is resolved against.
@@ -175,6 +175,28 @@ def _incoming_loops(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
     return [e for e in wf.edges if e.dst == node_id and e.loop_max is not None]
 
 
+def _emit_ins_assign(lines: list[str], src: str, sport: str, dport: str, guard: str | None) -> None:
+    """Emit the guarded ``ins[dport] = <source value>`` for one edge mapping.
+
+    A plain source key reads a whole output port; a dotted key (``plan.owner``)
+    resolves a nested field via the inlined ``resolve_path`` — mirroring the
+    interpreter's ``_build_inputs``.  *guard* is an extra condition (loop edges)
+    or None.
+    """
+    head, _dot, tail = sport.partition(".")
+    head_present = f"{head!r} in _OUT.get({src!r}, {{}})"
+    cond = f"({guard}) and {head_present}" if guard else head_present
+    if tail:
+        segs = tail.split(".")
+        lines.append(f"    if {cond}:")
+        lines.append(f"        _rv = resolve_path(_OUT[{src!r}][{head!r}], {segs!r})")
+        lines.append("        if _rv is not None:")
+        lines.append(f"            ins[{dport!r}] = _rv")
+    else:
+        lines.append(f"    if {cond}:")
+        lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{head!r}]")
+
+
 def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
     """Emit the ``ins`` dict assembling this node's input ports from incoming edges.
 
@@ -189,8 +211,7 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
     for edge in _incoming(node.id, wf):
         src = IN_NODE_ID if edge.src == IN_NODE_ID else edge.src
         for sport, dport in edge.mapping:
-            lines.append(f"    if {sport!r} in _OUT.get({src!r}, {{}}):")
-            lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{sport!r}]")
+            _emit_ins_assign(lines, src, sport, dport, None)
     for edge in _incoming_loops(node.id, wf):
         if not edge.mapping:
             continue
@@ -199,8 +220,7 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
             _condition_to_expr(edge.when, _src_container_expr({}, src)) if edge.when is not None else "True"
         )
         for sport, dport in edge.mapping:
-            lines.append(f"    if ({guard}) and {sport!r} in _OUT.get({src!r}, {{}}):")
-            lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{sport!r}]")
+            _emit_ins_assign(lines, src, sport, dport, guard)
     return lines
 
 
@@ -692,7 +712,7 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
     loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
 
     completed: set[str] = set()
-    pending: list[str] = [wf.entry]
+    pending: list[str] = list(entry_frontier(wf))
     lines: list[str] = []
     loop_depth = 0
 

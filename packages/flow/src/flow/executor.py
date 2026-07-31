@@ -27,8 +27,8 @@ from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowBudgetExceeded, WorkflowExecutionError, WorkflowPaused
 from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
-from flow.interpolate import interpolate
-from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef
+from flow.interpolate import interpolate, resolve_path
+from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef, entry_frontier
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -251,8 +251,18 @@ async def execute(
                 continue
             src_ports = _source_ports(edge.src)
             for sport, dport in edge.mapping:
-                if sport in src_ports:
-                    ins[dport] = src_ports[sport]
+                # A dotted source key reads a nested field of a structured port:
+                # ``plan.owner`` -> resolve_path(src_ports['plan'], ['owner']).
+                head, _dot, tail = sport.partition(".")
+                if head not in src_ports:
+                    continue
+                if tail:
+                    resolved = resolve_path(src_ports[head], tail.split("."))
+                    if resolved is None:
+                        continue  # sub-path absent -> treat as not fed (lenient)
+                    ins[dport] = resolved
+                else:
+                    ins[dport] = src_ports[head]
         return ins
 
     # Track which nodes have finished
@@ -679,10 +689,10 @@ async def execute(
         for node in wf.nodes:
             if node.id not in completed and _is_ready(node.id):
                 pending.add(node.id)
-        if not pending and wf.entry not in completed:
-            pending = {wf.entry}
+        if not pending:
+            pending = {n for n in entry_frontier(wf) if n not in completed}
     else:
-        pending = {wf.entry}
+        pending = set(entry_frontier(wf))
     in_flight: set[str] = set()
 
     # Isolation tracking: nodes whose failure was captured rather than propagated,

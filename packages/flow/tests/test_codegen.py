@@ -1242,3 +1242,97 @@ async def test_generate_multi_output_agent_parity() -> None:
     assert isinstance(gen_state["plan"]["cost"], float)
     # interpret == compile.
     assert gen_state == _interp_out(interp)
+
+
+async def test_generate_subfield_mapping_parity() -> None:
+    """An edge maps a NESTED field of a structured source port to a downstream input.
+
+    ``plan`` (script) emits an ``object`` port; the edge to ``use`` maps
+    ``plan.owner`` -> ``who`` and ``plan.tasks`` -> ``items``.  Both engines must
+    resolve the sub-fields identically.
+    """
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="subfield-map",
+        provider="copilot",
+        entry="plan",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="plan",
+                type="script",
+                code="def plan(ctx, topic):\n    return {'owner': 'ada', 'tasks': ['spec', topic]}",
+                input_ports=(Port("topic", "string"),),
+                output_ports=(Port("plan", "object"),),
+            ),
+            NodeDef(
+                id="use",
+                type="script",
+                code="def use(ctx, who, items):\n    return f\"{who}:{items[1]}\"",
+                input_ports=(Port("who", "string"), Port("items", "array")),
+                output_ports=(Port("line", "string"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="plan", mapping=(("topic", "topic"),)),
+            # Sub-field mapping: source keys carry a dotted path into the object port.
+            EdgeDef(src="plan", dst="use", mapping=(("plan.owner", "who"), ("plan.tasks", "items"))),
+        ),
+        initial_state=(("topic", "ship"),),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    assert gen_state["use"]["line"] == "ada:ship"
+    assert gen_state == _interp_out(run_result)
+
+
+async def test_generate_derived_entry_multi_parallel_parity() -> None:
+    """With no explicit entry, all $in-only nodes are entries and run in parallel."""
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="derived-entry",
+        provider="copilot",
+        entry="",  # no explicit entry -> derive from the $in frontier
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, n):\n    return n + 1",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("oa", "integer"),),
+            ),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, n):\n    return n * 10",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("ob", "integer"),),
+            ),
+            NodeDef(
+                id="c",
+                type="script",
+                code="def c(ctx, oa, ob):\n    return oa + ob",
+                input_ports=(Port("oa", "integer"), Port("ob", "integer")),
+                output_ports=(Port("oc", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="a", mapping=(("n", "n"),)),
+            EdgeDef(src=IN_NODE_ID, dst="b", mapping=(("n", "n"),)),
+            EdgeDef(src="a", dst="c", mapping=(("oa", "oa"),)),
+            EdgeDef(src="b", dst="c", mapping=(("ob", "ob"),)),
+        ),
+        initial_state=(("n", 5),),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    # a=6, b=50, c=56 — both a and b are entries (only depend on $in).
+    assert gen_state["c"]["oc"] == 56
+    assert gen_state == _interp_out(run_result)

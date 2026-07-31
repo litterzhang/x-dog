@@ -4,7 +4,6 @@
   "defaults": {
     "model": "claude-sonnet-4.6"
   },
-  "entry": "plan",
   "state": {
     "destination": "Kyoto, Japan",
     "days": 3,
@@ -50,10 +49,11 @@
         {"name": "summary", "type": "string"},
         {"name": "highlight", "type": "string"},
         {"name": "daily_plan", "type": "array"},
-        {"name": "verdict", "type": "object"}
+        {"name": "within_budget", "type": "boolean"},
+        {"name": "delta_usd", "type": "number"}
       ],
       "system_prompt": "You write short, friendly trip briefs for a traveler.",
-      "prompt": "Write a 3-sentence brief.\n\nTrip summary: {{summary}}\nMust-do: {{highlight}}\nDay 1: {{daily_plan.0}}\n\nBudget check: within_budget={{verdict.within_budget}}, delta_usd={{verdict.delta_usd}}, days={{verdict.day_count}}.\n\nMention whether the plan fits the budget. Reply with ONLY the brief text.",
+      "prompt": "Write a 3-sentence brief.\n\nTrip summary: {{summary}}\nMust-do: {{highlight}}\nDay 1: {{daily_plan.0}}\n\nBudget: within_budget={{within_budget}}, delta_usd={{delta_usd}}.\n\nMention whether the plan fits the budget. Reply with ONLY the brief text.",
       "outputs": ["brief"]
     }
   ],
@@ -62,7 +62,7 @@
     {"from": "$in", "to": "budget_check", "map": {"budget_usd": "budget_usd"}},
     {"from": "plan", "to": "budget_check", "map": {"daily_plan": "daily_plan", "est_cost_usd": "est_cost_usd"}},
     {"from": "plan", "to": "brief", "map": {"summary": "summary", "highlight": "highlight", "daily_plan": "daily_plan"}},
-    {"from": "budget_check", "to": "brief", "map": {"verdict": "verdict"}},
+    {"from": "budget_check", "to": "brief", "map": {"verdict.within_budget": "within_budget", "verdict.delta_usd": "delta_usd"}},
     {"from": "plan", "to": "$output", "map": {"summary": "trip_summary", "daily_plan": "itinerary", "est_cost_usd": "est_cost_usd", "highlight": "highlight"}},
     {"from": "budget_check", "to": "$output", "map": {"verdict": "budget"}},
     {"from": "brief", "to": "$output", "map": {"brief": "brief"}}

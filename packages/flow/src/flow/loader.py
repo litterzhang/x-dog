@@ -16,12 +16,23 @@ import ast
 import json
 import logging
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
 from flow.coerce import VALID_TYPES
 from flow.errors import WorkflowValidationError
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
+from flow.models import (
+    IN_NODE_ID,
+    OUT_NODE_ID,
+    Condition,
+    EdgeDef,
+    NodeDef,
+    Port,
+    RetryPolicy,
+    WorkflowDef,
+    entry_frontier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +272,60 @@ def _output_port_names(wf: WorkflowDef, node_id: str, in_ports: set[str]) -> set
     return set()
 
 
+def _output_port_types(wf: WorkflowDef, node_id: str) -> dict[str, str]:
+    """Map a node's output port name -> declared type.
+
+    ``$in`` seed values carry no declared type (state is authored untyped), so it
+    returns an empty map — edges out of ``$in`` are exempt from type checking.
+    """
+    for n in wf.nodes:
+        if n.id == node_id:
+            return {p.name: p.type for p in n.output_ports}
+    return {}
+
+
+def _detect_cycle(wf: WorkflowDef) -> list[str] | None:
+    """Return a cycle path over non-loop edges, or None if the graph is acyclic.
+
+    A legal bounded loop declares ``loop.max`` on its back-edge, so those edges
+    are excluded — only unbounded cycles (which would never terminate) are
+    reported.  ``$in``/``$output`` are excluded (a source and a sink).  Uses an
+    iterative white/grey/black DFS so a large graph can't blow the stack.
+    """
+    adj: dict[str, list[str]] = defaultdict(list)
+    for e in wf.edges:
+        if e.loop_max is not None:
+            continue  # bounded loop back-edge is legal
+        if e.src in (IN_NODE_ID, OUT_NODE_ID) or e.dst in (IN_NODE_ID, OUT_NODE_ID):
+            continue
+        adj[e.src].append(e.dst)
+
+    WHITE, GREY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n.id: WHITE for n in wf.nodes}
+    # (node, index-into-neighbours, path-so-far). path lets us report the cycle.
+    for start in (n.id for n in wf.nodes):
+        if color[start] != WHITE:
+            continue
+        stack: list[tuple[str, int, list[str]]] = [(start, 0, [start])]
+        color[start] = GREY
+        while stack:
+            node, idx, path = stack[-1]
+            neighbours = adj.get(node, ())
+            if idx < len(neighbours):
+                stack[-1] = (node, idx + 1, path)
+                nxt = neighbours[idx]
+                if color.get(nxt, BLACK) == GREY:
+                    # Found a back-edge into the current DFS stack — a cycle.
+                    return [*path[path.index(nxt):], nxt]
+                if color.get(nxt, BLACK) == WHITE:
+                    color[nxt] = GREY
+                    stack.append((nxt, 0, [*path, nxt]))
+            else:
+                color[node] = BLACK
+                stack.pop()
+    return None
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
     node_ids = [n.id for n in wf.nodes]
@@ -283,8 +348,27 @@ def validate_workflow(wf: WorkflowDef) -> None:
     node_by_id = {n.id: n for n in wf.nodes}
     in_ports = {k for k, _ in wf.initial_state}
 
-    if wf.entry not in node_by_id:
+    # Reject an unbounded cycle first (a loop without a declared loop.max would
+    # never terminate).  Bounded loops declare loop.max and are excluded.  Doing
+    # this before the entry check gives the more actionable error: a full cycle
+    # leaves an empty entry frontier, but "cycle" explains why.
+    cycle = _detect_cycle(wf)
+    if cycle is not None:
+        raise WorkflowValidationError(
+            f"Workflow has a cycle with no bounded loop: {' -> '.join(cycle)}. "
+            f"Add loop.max to a back-edge to make it a bounded loop."
+        )
+
+    # ``entry`` is optional: when set it names a single start node (must exist);
+    # when empty the entry frontier is derived from the nodes that depend only on
+    # ``$in``.  Either way at least one start node must exist.
+    if wf.entry and wf.entry not in node_by_id:
         raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes")
+    if not entry_frontier(wf):
+        raise WorkflowValidationError(
+            "Workflow has no entry node: it has no nodes, or every node has a predecessor so "
+            "nothing can start. Feed at least one node from $in (or set an explicit entry)."
+        )
 
     _run_re = re.compile(r"^[\w.]+:[\w]+$")
 
@@ -379,21 +463,50 @@ def validate_workflow(wf: WorkflowDef) -> None:
         # and it never needs to be "fed").
         if edge.dst == OUT_NODE_ID:
             for sport, _dport in edge.mapping:
-                if sport not in src_outputs:
+                head, _dot, subpath = sport.partition(".")
+                if subpath:
+                    # Sub-field mapping to the $output sink is not supported (only
+                    # node->node edges resolve sub-fields); map the whole port.
                     raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {sport!r}"
+                        f"Edge {edge.src!r}->{OUT_NODE_ID}: sub-field key {sport!r} is not "
+                        f"allowed into $output; map the whole port {head!r}"
+                    )
+                if head not in src_outputs:
+                    raise WorkflowValidationError(
+                        f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
                     )
             continue
 
         dst_inputs = set(node_by_id[edge.dst].input_names)
+        src_types = _output_port_types(wf, edge.src)  # empty for $in (untyped seed)
+        dst_types = {p.name: p.type for p in node_by_id[edge.dst].input_ports}
         for sport, dport in edge.mapping:
-            if sport not in src_outputs:
+            # A dotted source key (``plan.owner``) reads a nested field of a
+            # structured port; only its head must be a real output port. Sub-field
+            # TYPE checking is deferred (needs a nested type system), so a dotted
+            # key is exempt from the type-consistency check below.
+            head, _dot, subpath = sport.partition(".")
+            if head not in src_outputs:
                 raise WorkflowValidationError(
-                    f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {sport!r}"
+                    f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
                 )
             if dport not in dst_inputs:
                 raise WorkflowValidationError(
                     f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
+                )
+            # Edge type consistency: the source output port's type must match the
+            # destination input port's type.  $in seeds are untyped (absent from
+            # src_types) so edges out of $in are exempt; a dotted sub-field key is
+            # exempt (2b-2 deferred).
+            if (
+                not subpath
+                and head in src_types
+                and dport in dst_types
+                and src_types[head] != dst_types[dport]
+            ):
+                raise WorkflowValidationError(
+                    f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source port {head!r} is "
+                    f"{src_types[head]!r} but destination port {dport!r} is {dst_types[dport]!r}"
                 )
             fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
             if edge.when is None and edge.loop_max is None:

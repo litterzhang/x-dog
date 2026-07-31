@@ -130,3 +130,25 @@ class WorkflowDef:
     # tool registry under ``tool_name``, so agent nodes can name it in ``tools``.
     tool_refs: tuple[tuple[str, str], ...] = field(default=())
     max_concurrency: int = 0  # 0 (or negative) = unlimited (current behaviour)
+
+
+def entry_frontier(wf: WorkflowDef) -> tuple[str, ...]:
+    """The nodes execution starts from.
+
+    ``$in`` is the conceptual head: every node whose only non-loop predecessors
+    are ``$in`` (or none) is an entry, so a workflow naturally has multiple
+    parallel entries.  When ``wf.entry`` is explicitly set it takes precedence
+    (a single named start), preserving the older single-entry behaviour.
+
+    Returned in ``wf.nodes`` declaration order for deterministic scheduling.
+    """
+    if wf.entry:
+        return (wf.entry,)
+    has_real_pred: set[str] = set()
+    for e in wf.edges:
+        if e.loop_max is not None:
+            continue  # loop back-edges don't gate the initial frontier
+        if e.src == IN_NODE_ID or e.dst == OUT_NODE_ID:
+            continue
+        has_real_pred.add(e.dst)
+    return tuple(n.id for n in wf.nodes if n.id not in has_real_pred)
