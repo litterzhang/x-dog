@@ -100,7 +100,8 @@ def test_generate_linear_state_seed() -> None:
 
 
 def test_generate_linear_provider_name() -> None:
-    assert 'ai.provider("anthropic")' in generate(_make_linear_wf())
+    # The provider literal is the FLOW_PROVIDER default (override-aware).
+    assert 'ai.provider(os.environ.get("FLOW_PROVIDER") or "anthropic")' in generate(_make_linear_wf())
 
 
 def _make_parallel_wf() -> WorkflowDef:
@@ -1345,3 +1346,59 @@ async def test_generate_derived_entry_multi_parallel_parity() -> None:
     # a=6, b=50, c=56 — both a and b are entries (only depend on $in).
     assert gen_state["c"]["oc"] == 56
     assert gen_state == _interp_out(run_result)
+
+
+async def test_generate_flow_inputs_override_parity() -> None:
+    """FLOW_INPUTS overrides $in in the generated module exactly like execute(inputs=)."""
+    import json as _json
+    import os
+
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="override",
+        provider="copilot",
+        entry="dbl",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="dbl",
+                type="script",
+                code="def dbl(ctx, n):\n    return n * 2",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("out", "integer"),),
+            ),
+        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="dbl", mapping=(("n", "n"),)),),
+        initial_state=(("n", 5),),
+    )
+    override = {"n": 21}
+
+    # Generated: set FLOW_INPUTS, run the module.
+    src = generate(wf)
+    ok, msg = _ruff_clean(src)
+    assert ok, f"generated not ruff-clean:\n{msg}"
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(src)
+        tmp = Path(f.name)
+    _prev = os.environ.get("FLOW_INPUTS")
+    try:
+        os.environ["FLOW_INPUTS"] = _json.dumps(override)
+        spec = importlib.util.spec_from_file_location(f"gen_{uuid.uuid4().hex}", tmp)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        await mod.main()
+        gen_state = {k: dict(v) for k, v in mod._OUT.items()}
+    finally:
+        if _prev is None:
+            os.environ.pop("FLOW_INPUTS", None)
+        else:
+            os.environ["FLOW_INPUTS"] = _prev
+        tmp.unlink(missing_ok=True)
+
+    # Interpreter: same override via execute(inputs=).
+    interp = await execute(wf, inputs=override)
+
+    assert gen_state["dbl"]["out"] == 42  # 21 * 2, the override took effect
+    assert gen_state == _interp_out(interp)

@@ -515,7 +515,13 @@ $signals_main_init
     global _MAX_TOKENS, _TOKENS_USED
     _raw_max_tokens = os.environ.get("FLOW_MAX_TOKENS", "")
     _MAX_TOKENS = int(_raw_max_tokens) if _raw_max_tokens.strip().isdigit() else None
-    provider = ai.provider("$provider")
+    # Run-time overrides (parity with the interpreter's --input / --provider):
+    # FLOW_INPUTS is a JSON object merged into the initial state; FLOW_PROVIDER
+    # swaps the provider.
+    _raw_inputs = os.environ.get("FLOW_INPUTS", "")
+    if _raw_inputs.strip():
+        _OUT[$in_node_id].update(json.loads(_raw_inputs))
+    provider = ai.provider(os.environ.get("FLOW_PROVIDER") or "$provider")
     global _PROVIDER
     _PROVIDER = provider
 $main_body
