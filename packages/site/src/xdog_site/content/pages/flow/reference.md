@@ -11,14 +11,16 @@ compiled to Python — both agree field-for-field.
 
 ### Workflow (top level)
 
-A workflow is one JSON object. Only `entry` is effectively required — a run
-needs a first node — but a useful workflow also declares nodes and edges.
+A workflow is one JSON object. Nothing is strictly required, though a useful
+workflow declares nodes and edges. `entry` is optional — when omitted, the
+run starts from every node that depends only on `$in` (multi-entry, run in
+parallel).
 
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | default `""` | Human-readable workflow name; shown in diagrams and the runtime container. |
 | `provider` | default `""` | LLM provider id used to build the default agent stream (e.g. copilot). |
-| `entry` | required | Id of the first node to run. Must name a real node. |
+| `entry` | optional | Id of the first node to run; when unset, derived from the `$in` frontier (multi-entry). |
 | `defaults.model` | default `""` | Fallback model for any agent node that does not set its own model. |
 | `state` | default `{}` | Object of initial values, exposed as the output ports of the `$in` source. |
 | `nodes` | default `[]` | The list of node objects (see below). |
@@ -34,29 +36,30 @@ must set exactly one of them.
 | Field | Required | Meaning |
 |---|---|---|
 | `id` | required | Unique node id. `$in` and `$output` are reserved and rejected. |
-| `type` | default `"agent"` | `"agent"` or `"script"`. |
+| `type` | default `"agent"` | `"agent"`, `"script"`, or `"human"`. |
 | `model` | optional | Agent only: overrides `defaults.model` for this node. |
-| `system_prompt` | default `""` | Agent only: system prompt; `{{port}}` reads this node's inputs. |
-| `prompt` | default `""` | Agent only: user prompt; `{{port}}` is port-local to this node's inputs. |
+| `system_prompt` | default `""` | Agent only: system prompt; `{{ $.port }}` reads this node's inputs. |
+| `prompt` | default `""` | Agent only: user prompt; `{{ $.port }}` is a JSONPath into this node's inputs. |
 | `tools` | default `[]` | Agent only: names of built-in or manifest tools to expose. |
 | `web_search` | default `false` | Agent only: enable the built-in `web_search` tool. |
 | `web_search_model` | optional | Agent only: a distinct browsing model for `web_search`. |
-| `output_schema` | default `{}` | Agent only: `{field: jsontype}` — forces a `submit_result` call. |
 | `code` | optional | Script only: inline source defining exactly one ctx-first function. |
 | `run` | optional | Script only: a `"module.path:callable"` reference imported at run time. |
-| `inputs` | default `[]` | Input ports (bare name or `{name, type, optional}`). |
-| `outputs / output` | default `[]` | Output ports; `output` is singular sugar for one port. |
+| `inputs` | default `[]` | Input ports (bare name, `{name, type, required}`, or `{name, schema, required}`). |
+| `outputs / output` | default `[]` | Output ports; `output` is singular sugar for one port. For an agent, >1 port (or one non-string port) makes it a structured `submit_result` node — the schema is derived from the ports. |
 
 ### Port
 
-A port is a bare string (a string-typed port) or an object. Its type drives
-coercion between the string wire format and the Python value a script sees.
+A port is a bare string (a required `string` port) or an object. A structured
+output port lets an agent fan its `submit_result` result across several ports and
+lets an edge map a sub-field with a type check.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `name` | required | Port name; referenced by edge maps and `{{name}}` interpolation. |
-| `type` | default `"string"` | One of string, integer, number, boolean, array, object. |
-| `optional` | default `false` | Input only: exempt from the must-be-fed rule (loop-carried values). |
+| `name` | required | Port name; referenced by edge maps and `{{ $.name }}` interpolation. |
+| `type` | default `"string"` | Shorthand for a scalar schema — one of string, integer, number, boolean, array, object. |
+| `schema` | optional | A JSON Schema fragment (scalar or nested `{type, properties, items, required}`); an alternative to `type` for structured ports. |
+| `required` | default `true` | Input only: `false` exempts it from the must-be-fed rule (loop-carried values); replaces the old `optional`. |
 
 ### Edge
 
@@ -68,29 +71,41 @@ source-only; `$output` is sink-only.
 |---|---|---|
 | `from` | required | Source node id, or the reserved `$in` source. |
 | `to` | required | Destination node id, or the reserved `$output` sink. |
-| `map` | default `{}` | `{source_output_port: destination_input_port}` pairs. |
+| `map` | default `{}` | `{source_output_port: destination_input_port}` pairs. A source key may be a JSONPath into a structured port, e.g. `"$.verdict.within_budget"`. |
 | `when` | optional | A condition; the edge only fires (or feeds) when it holds. |
 | `loop.max` | optional | Marks a bounded back-edge; required when `to` is not strictly after `from`. |
 
 ## Type system
 
-Every port carries a JSON type. Values move on the wire as strings; a script
-node sees its inputs coerced to the Python value below, and its return value
-coerced back. An empty string always coerces to the type's zero-value.
+Every port carries a JSON type (via `type` shorthand or a full `schema`). The
+wire format is **type-native**: a port value is the live Python value — a script
+node reads its inputs as that value and returns the value directly, with no
+stringify/parse round-trip. An edge is type-checked at load time: the source and
+destination port types must match (a JSONPath sub-field is checked against the
+source schema when it can be resolved). `$in` seed values are untyped, so edges
+out of `$in` are exempt.
 
-| Type | Coercion | Empty → |
+| Type | Python value | Empty → |
 |---|---|---|
-| `string` | the string unchanged | `""` |
-| `integer` | `int(value)` | `0` |
-| `number` | `float(value)` | `0.0` |
-| `boolean` | true/1/yes/on → true; false/0/no/off/'' → false | `false` |
-| `array` | `json.loads`, must be a JSON array | `[]` |
-| `object` | `json.loads`, must be a JSON object | `{}` |
+| `string` | `str` | `""` |
+| `integer` | `int` | `0` |
+| `number` | `float` | `0.0` |
+| `boolean` | `bool` (true/1/yes/on → true) | `false` |
+| `array` | `list` | `[]` |
+| `object` | `dict` | `{}` |
+
+## Interpolation & conditions (JSONPath)
+
+A prompt or a condition operand may embed `{{ <jsonpath> }}` placeholders,
+resolved against the node's inputs (or, for an edge `when`, the source node's
+output ports): `{{ $.topic }}` for a whole port, `{{ $.plan.tasks[0] }}` for a
+nested field. An unresolved path yields the empty string. The same jsonpath-ng
+evaluator runs in both the interpreter and the generated module.
 
 ## Condition operators
 
 An edge's `when` is a condition tree evaluated against the source node's output
-ports. `value` and `text` support `{{port}}` interpolation.
+ports. `value` and `text` support `{{ $.port }}` JSONPath interpolation.
 
 | Op | JSON | Holds when |
 |---|---|---|
@@ -130,10 +145,22 @@ Every subcommand accepts a `.json` workflow or a `.svg` with the JSON embedded.
   - `-v / --verbose` — Show flow's DEBUG logs — node execution and loop firing.
 - **`xdog-flow generate <config>`** — Compile the workflow to a standalone Python module.
   - `-o / --output FILE` — Write to a file instead of stdout.
+  - `--portable -o DIR` — Emit a self-contained bundle (vendored `ai`/`agent`, pinned deps); `--offline` also downloads wheels for a no-network install.
 - **`xdog-flow graph <config>`** — Render the workflow graph.
   - `--mermaid` — Emit a Mermaid flowchart.
   - `--svg` — Emit an SVG document with the workflow JSON embedded.
 - **`xdog-flow build <config>`** — Open the interactive TUI builder (created if the file is missing).
+
+### Generated-module run-time overrides
+
+A generated module reads a few environment variables at run time, so a compiled
+workflow (or a `--portable` bundle run with `python .`) stays overridable without
+regenerating — parity with `run`'s flags:
+
+- `FLOW_INPUTS='{"days": 2}'` — a JSON object merged per-key into `$in` (mirrors `--input`).
+- `FLOW_PROVIDER=openai` — override the provider (mirrors `--provider`).
+- `FLOW_MAX_TOKENS=100000` — abort once cumulative agent tokens pass the ceiling.
+- `FLOW_RUN_ID` + `FLOW_CHECKPOINT_DIR` — enable checkpoint/resume.
 
 ## Validated before it runs
 
@@ -159,4 +186,4 @@ node executes. This is what lets diagrams and codegen trust the graph.
 | Source/destination has no such port | An edge map names a port a node doesn't declare. |
 | Back-edge must have `loop.max >= 1` | A back-edge (dst not strictly after src) is not a bounded loop. |
 | Input port is fed by N unconditional edges | Two always-on producers target one input (ambiguous). |
-| Input port is not fed by any edge mapping | A required (non-optional) input port has no feeder. |
+| Input port is not fed by any edge mapping | A `required` input port has no feeder. |

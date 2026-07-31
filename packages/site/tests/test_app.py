@@ -133,7 +133,7 @@ def test_flow_subpages_ok_with_breadcrumb(client: FlaskClient, path: str, crumb:
 def test_flow_reference_documents_schema_and_rules(client: FlaskClient) -> None:
     body = client.get("/packages/flow/reference").get_data(as_text=True)
     # the JSON schema, type system, conditions, runtime container, CLI, and validation rules
-    assert "output_schema" in body  # a NodeDef field
+    assert "submit_result" in body  # structured-output contract (derived from ports)
     assert "$output" in body  # the reserved sink
     assert "xdog-flow" in body  # the CLI section
     assert "not fed by any edge mapping" in body  # a validation rule

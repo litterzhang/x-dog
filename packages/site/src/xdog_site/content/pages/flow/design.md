@@ -48,39 +48,59 @@ frame per execution, so a looped node's refinement history is visible), `state`
 (real-node outputs only), `in` (`$in`), and `out` (`$output`). The CLI prints
 `out` by default, falling back to the full container.
 
+## Typed ports and JSON Schema
+
+Every port carries a **JSON Schema** — a scalar (`{"type": "integer"}`) or a
+nested object/array (`{"type": "object", "properties": {…}}`). The wire format is
+**type-native**: a port value is the live Python value (int, float, bool, list,
+dict), not a stringified form, so structure flows between nodes intact and a
+downstream node reads a real object. A script node sees its inputs coerced to the
+declared top-level type; nested structure is validated (by fastjsonschema), not
+re-stringified.
+
+An input port is `required` by default. Marking it `required: false` (the old
+`optional`) exempts it from the rule that every declared input must be fed by an
+edge — that is how a loop-carried value, absent on the first pass and supplied
+only by the back-edge, stays an internal port instead of leaking into the
+workflow's user-facing inputs.
+
+## JSONPath data flow
+
+A prompt reads a port — or a field inside one — with JSONPath:
+`{{ $.plan.tasks[0] }}` pulls the first task out of a structured `plan` port. An
+edge map can do the same on the source side: `"map": {"$.verdict.within_budget":
+"flag"}` wires a nested boolean straight into a downstream input, and the
+loader type-checks that sub-field against the source port's schema. Both the
+interpreter and the generated module resolve paths through one shared
+`jsonpath-ng` evaluator, so interpolation and conditions mean exactly the same
+thing on both run paths.
+
 ## Two ways to run: interpret or compile
 
 The same JSON can be executed directly by the runtime, or compiled with codegen
-into a single self-contained Python module. The generated code keeps node
-outputs in the same nested port structure the interpreter uses and builds the
-identical runtime container, so the two forms agree node-for-node — and the
-emitted module passes the same ruff and mypy `--strict` gate as hand-written
-code.
+into a single self-contained Python module. In both engines a node is a **pure
+function** — `node(provider, ctx, inputs) → outputs` — and a generic **driver**
+owns the cross-cutting work (entry guards, input assembly, the retry loop,
+output storage, the memo fast-path, the token budget, checkpointing, and
+isolation). The generated code keeps node outputs in the same nested port
+structure the interpreter uses and builds the identical runtime container, so
+the two forms agree node-for-node — enforced by a cross-engine parity suite.
 
 Linear and parallel graphs compile to BFS waves (a lone await, or
 `asyncio.gather` for a fan-out); bounded loops become a for-range; and a
 workflow with forward conditionals compiles to a topologically-ordered,
-guard-gated body instead. The interpreter's port-local prompt interpolation and
-source-node condition evaluation are reproduced exactly.
-
-## Typed ports and optional inputs
-
-Every port carries a JSON type (string, integer, number, boolean, array,
-object). A script node sees its inputs coerced to Python values by that type and
-returns values coerced back to the string wire format; agent ports are almost
-always strings. An empty value coerces to the type's zero-value (0, 0.0, false,
-[], {}).
-
-An input port can be marked optional, which exempts it from the rule that every
-declared input must be fed by an edge. That is how a loop-carried value — absent
-on the first pass and supplied only by the back-edge — stays an internal port
-instead of leaking into the workflow's user-facing inputs.
+guard-gated body instead. The generated module also honours `FLOW_INPUTS` and
+`FLOW_PROVIDER` env overrides — parity with the interpreter's `--input` and
+`--provider`.
 
 ## Structured output and web search
 
-An agent node can declare an `output_schema`: the engine adds a `submit_result`
-tool and a directive, and the validated JSON the agent submits becomes the
-node's output port — no brittle parsing of free-form text.
+An agent's structured output is **derived from its output ports** — no separate
+schema to maintain. When an agent declares more than one output port (or a single
+non-string port), the engine adds a `submit_result` tool and a directive, derives
+a JSON Schema from those ports, validates the submitted object with
+fastjsonschema, and fans each field into its own typed port. A plain single
+`string` port keeps the agent's reply text verbatim.
 
 An agent node can also enable a built-in `web_search` tool, optionally naming a
 distinct browsing model (some models don't browse, so a workflow can run the
