@@ -885,7 +885,8 @@ def test_validate_subfield_head_must_exist() -> None:
 
 
 def test_validate_subfield_ok() -> None:
-    # 'plan.owner' — head port 'plan' exists; sub-field type not checked (2b-2 deferred)
+    # 'plan.owner' — head port 'plan' is a bare object (no declared properties),
+    # so the sub-field type is un-typable and left lenient (2b-2).
     wf = parse_workflow(_subfield_wf({"plan.owner": "who"}))
     validate_workflow(wf)  # no raise
 
@@ -895,3 +896,79 @@ def test_validate_subfield_to_output_rejected() -> None:
     wf = parse_workflow(data)
     with pytest.raises(WorkflowValidationError, match="sub-field key"):
         validate_workflow(wf)
+
+
+# --- Sub-field TYPE checking (2b-2) ----------------------------------------
+
+
+def _typed_subfield_wf(plan_schema: dict[str, object], src_key: str, dst_type: str) -> dict[str, object]:
+    """A (structured port 'plan') -> B, mapping *src_key* into a *dst_type* input."""
+    return {
+        "name": "typed-subfield",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"seed": "x"},
+        "nodes": [
+            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
+             "code": "def a(ctx, seed):\n    return {}",
+             "outputs": [{"name": "plan", "schema": plan_schema}]},
+            {"id": "b", "type": "script", "inputs": [{"name": "s", "type": dst_type}],
+             "code": "def b(ctx, s):\n    return s", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"seed": "seed"}},
+            {"from": "a", "to": "b", "map": {src_key: "s"}},
+        ],
+    }
+
+
+_OBJ_SCHEMA: dict[str, object] = {"type": "object", "properties": {"n": {"type": "integer"}}}
+_ARR_SCHEMA: dict[str, object] = {"type": "array", "items": {"type": "string"}}
+
+
+def test_validate_subfield_type_mismatch_fails() -> None:
+    # plan.n is integer; wired into a string input -> mismatch
+    wf = parse_workflow(_typed_subfield_wf(_OBJ_SCHEMA, "$.plan.n", "string"))
+    with pytest.raises(WorkflowValidationError, match="type mismatch"):
+        validate_workflow(wf)
+
+
+def test_validate_subfield_type_match_ok() -> None:
+    wf = parse_workflow(_typed_subfield_wf(_OBJ_SCHEMA, "$.plan.n", "integer"))
+    validate_workflow(wf)  # no raise
+
+
+def test_validate_subfield_array_element_type() -> None:
+    # plan[0] is a string element
+    ok = parse_workflow(_typed_subfield_wf(_ARR_SCHEMA, "$.plan[0]", "string"))
+    validate_workflow(ok)  # no raise
+    bad = parse_workflow(_typed_subfield_wf(_ARR_SCHEMA, "$.plan[0]", "integer"))
+    with pytest.raises(WorkflowValidationError, match="type mismatch"):
+        validate_workflow(bad)
+
+
+def test_validate_subfield_untypable_path_is_lenient() -> None:
+    # A wildcard element ([*] = all elements, ambiguous) and a missing property
+    # are both un-typable -> no raise.
+    validate_workflow(parse_workflow(_typed_subfield_wf(_ARR_SCHEMA, "$.plan[*]", "integer")))
+    validate_workflow(parse_workflow(_typed_subfield_wf(_OBJ_SCHEMA, "$.plan.missing", "integer")))
+    # A bare object port with no declared properties is un-typable too.
+    validate_workflow(parse_workflow(_typed_subfield_wf({"type": "object"}, "$.plan.n", "integer")))
+
+
+def test_validate_subfield_from_in_exempt() -> None:
+    """A sub-field key rooted at an untyped $in seed is exempt (no schema)."""
+    data = {
+        "name": "in-subfield",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"cfg": {"n": 1}},
+        "nodes": [
+            {"id": "a", "type": "script", "inputs": [{"name": "s", "type": "string"}],
+             "code": "def a(ctx, s):\n    return s", "outputs": ["oa"]},
+        ],
+        "edges": [{"from": "$in", "to": "a", "map": {"$.cfg.n": "s"}}],
+    }
+    validate_workflow(parse_workflow(data))  # no raise ($in untyped)

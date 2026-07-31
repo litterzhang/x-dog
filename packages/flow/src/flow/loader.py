@@ -293,6 +293,87 @@ def _jsonpath_root(key: str) -> tuple[str, bool]:
     return root, has_sub
 
 
+# A JSONPath tail step: a ``.field`` name, or an ``[index]``/``[*]`` bracket.
+_JSONPATH_STEP = re.compile(r"\.(\w+)|\[([^\]]*)\]")
+
+
+def _jsonpath_tail_steps(key: str) -> list[str] | None:
+    """Parse the tail of a mapping JSONPath into ordered descent steps.
+
+    Returns a list where a field step is its name and a plain-index step is the
+    marker ``"[]"``.  Returns None when the tail contains a construct we can't
+    statically type (a wildcard ``[*]``, a filter ``[?(...)]``, recursive ``..``,
+    a union) — the caller then leaves the path un-typed (lenient).
+    """
+    body = key[2:] if key.startswith("$.") else (key[1:] if key.startswith("$") else key)
+    # Everything after the root token (the name up to the first '.' or '[').
+    root_len = len(re.split(r"[.\[]", body, maxsplit=1)[0])
+    tail_src = body[root_len:]
+    if not tail_src:
+        return []
+    if ".." in tail_src:
+        return None  # recursive descent — not statically typable
+    steps: list[str] = []
+    pos = 0
+    for m in _JSONPATH_STEP.finditer(tail_src):
+        if m.start() != pos:  # a gap means an unparsed construct
+            return None
+        pos = m.end()
+        field, bracket = m.group(1), m.group(2)
+        if field is not None:
+            steps.append(field)
+        elif bracket is not None:
+            # Only a plain integer index descends to the item type.  A wildcard
+            # ``[*]`` (all elements), a filter, or a quoted key is not statically
+            # typable -> leave the whole path un-typed.
+            b = bracket.strip()
+            if b.lstrip("-").isdigit():
+                steps.append("[]")
+            else:
+                return None
+    if pos != len(tail_src):
+        return None
+    return steps
+
+
+def _schema_subtype(schema: dict[str, object], steps: list[str]) -> str | None:
+    """Descend *schema* along *steps*; return the leaf ``type`` name, or None.
+
+    A ``field`` step reads ``schema["properties"][field]``; an ``"[]"`` step reads
+    ``schema["items"]``.  Any step the schema doesn't describe (no ``properties``/
+    ``items``, missing field) yields None — the path is left un-typed (lenient).
+    """
+    cur: object = schema
+    for step in steps:
+        if not isinstance(cur, dict):
+            return None
+        if step == "[]":
+            cur = cur.get("items")
+        else:
+            props = cur.get("properties")
+            if not isinstance(props, dict):
+                return None
+            cur = props.get(step)
+        if cur is None:
+            return None
+    if not isinstance(cur, dict):
+        return None
+    t = cur.get("type")
+    return t if isinstance(t, str) else None
+
+
+def _output_port_schemas(wf: WorkflowDef, node_id: str) -> dict[str, dict[str, object]]:
+    """Map a node's output port name -> its full JSON Schema.
+
+    ``$in`` seed values carry no declared schema (untyped state), so it returns an
+    empty map — sub-field keys out of ``$in`` are exempt from type checking.
+    """
+    for n in wf.nodes:
+        if n.id == node_id:
+            return {p.name: p.schema for p in n.output_ports}
+    return {}
+
+
 def _output_port_types(wf: WorkflowDef, node_id: str) -> dict[str, str]:
     """Map a node's output port name -> declared type.
 
@@ -484,12 +565,11 @@ def validate_workflow(wf: WorkflowDef) -> None:
 
         dst_inputs = set(node_by_id[edge.dst].input_names)
         src_types = _output_port_types(wf, edge.src)  # empty for $in (untyped seed)
+        src_schemas = _output_port_schemas(wf, edge.src)  # for sub-field type checks
         dst_types = {p.name: p.type for p in node_by_id[edge.dst].input_ports}
         for sport, dport in edge.mapping:
             # A JSONPath source key (``$.plan.owner``) reads a nested field of a
-            # structured port; only its root must be a real output port. Sub-field
-            # TYPE checking is deferred (needs a nested type system), so a sub-field
-            # key is exempt from the type-consistency check below.
+            # structured port; its root must be a real output port.
             head, subpath = _jsonpath_root(sport)
             if head not in src_outputs:
                 raise WorkflowValidationError(
@@ -499,20 +579,27 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(
                     f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
                 )
-            # Edge type consistency: the source output port's type must match the
-            # destination input port's type.  $in seeds are untyped (absent from
-            # src_types) so edges out of $in are exempt; a dotted sub-field key is
-            # exempt (2b-2 deferred).
-            if (
-                not subpath
-                and head in src_types
-                and dport in dst_types
-                and src_types[head] != dst_types[dport]
-            ):
-                raise WorkflowValidationError(
-                    f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source port {head!r} is "
-                    f"{src_types[head]!r} but destination port {dport!r} is {dst_types[dport]!r}"
-                )
+            # Edge type consistency: the resolved source type must match the
+            # destination input type.  $in seeds are untyped (absent from
+            # src_types/src_schemas) so edges out of $in are exempt.
+            if dport in dst_types and (head in src_types or head in src_schemas):
+                if not subpath:
+                    src_type: str | None = src_types.get(head)
+                else:
+                    # 2b-2: descend the source port's schema along the JSONPath tail
+                    # to find the sub-field type.  An un-typable path (wildcard,
+                    # filter, scalar interior, missing field) yields None -> lenient.
+                    steps = _jsonpath_tail_steps(sport)
+                    src_type = (
+                        _schema_subtype(src_schemas[head], steps)
+                        if steps is not None and head in src_schemas
+                        else None
+                    )
+                if src_type is not None and src_type != dst_types[dport]:
+                    raise WorkflowValidationError(
+                        f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source {sport!r} is "
+                        f"{src_type!r} but destination port {dport!r} is {dst_types[dport]!r}"
+                    )
             fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
             if edge.when is None and edge.loop_max is None:
                 unconditional_fed[(edge.dst, dport)] = unconditional_fed.get((edge.dst, dport), 0) + 1
