@@ -248,6 +248,8 @@ def test_generated_module_logs_on_exec() -> None:
     """Generated source calls _EVENT_LOG.info with NodeStarted/NodeFinished strings."""
     wf = _one_script_node_wf()
     src = generate(wf)
-    # Verify the generated source contains the expected logging calls.
-    assert "_EVENT_LOG.info('NodeStarted" in src
-    assert "_EVENT_LOG.info('NodeFinished" in src
+    # Verify the generated source contains the expected logging calls (the driver
+    # emits them with double quotes).
+    assert "_EVENT_LOG.info(" in src
+    assert "NodeStarted" in src
+    assert "NodeFinished" in src

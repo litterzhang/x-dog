@@ -235,8 +235,13 @@ def test_codegen_deterministic_emits_memo() -> None:
 
 
 def test_codegen_non_deterministic_no_memo_key() -> None:
-    """Generated source for a non-deterministic node does NOT contain _MEMO store calls."""
-    wf = _codegen_wf(deterministic=False, input_val="x")
-    src = generate(wf)
-    # The per-node key assignment and store should NOT appear for non-deterministic
-    assert "_MEMO[_mk]" not in src, "non-deterministic node must not emit _MEMO[_mk] store"
+    """A non-deterministic node's driver spec carries deterministic=False.
+
+    Memo machinery lives in the shared ``_drive`` helper now; a node opts in via
+    its per-node spec, so the toggle to check is the spec, not the whole source.
+    """
+    det = generate(_codegen_wf(deterministic=True, input_val="x"))
+    non = generate(_codegen_wf(deterministic=False, input_val="x"))
+    assert "deterministic=True" in det
+    assert "deterministic=True" not in non
+    assert "deterministic=False" in non

@@ -281,6 +281,9 @@ _TOKENS_USED: int = 0
 _MAX_TOKENS: int | None = None
 # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
 _MEMO: dict[str, dict[str, object]] = {}
+# Run-wide context the driver hands each pure node function.
+_WORKFLOW_NAME = "$workflow_name"
+_PROVIDER: object = None
 # Signals delivered to this run (human nodes check against this set).
 $signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
@@ -416,6 +419,90 @@ async def _run_agent(
     return "".join(accumulated), _node_tokens
 
 
+async def _drive(
+    node_id: str,
+    node_fn: "Callable[..., Awaitable[tuple[dict[str, object], int]]]",
+    inputs_fn: "Callable[[], dict[str, object]]",
+    store_fn: "Callable[[dict[str, object], dict[str, object]], None]",
+    *,
+    retry_max: int,
+    backoff: float,
+    deterministic: bool,
+    isolate: bool,
+    isolated_succs: tuple[str, ...],
+) -> None:
+    """Generic node driver: guards, inputs, memo, retry, store, budget, checkpoint.
+
+    ``node_fn`` is the pure node function (``provider, ctx, **inputs`` ->
+    ``(outputs, tokens)``); ``inputs_fn`` assembles ``ins`` from ``_OUT``;
+    ``store_fn(ins, outputs)`` writes ``_OUT``/``_OUTPUT``.  Mirrors the
+    interpreter's ``_run_node``.
+    """
+    global _TOKENS_USED
+    if node_id in _COMPLETED or node_id in _ISOLATED:
+        return
+    ins = inputs_fn()
+
+    if deterministic:
+        _mk = f"{node_id}:{hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()}"
+        if _mk in _MEMO:
+            _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+            _t0m = time.monotonic()
+            _OUT[node_id] = dict(_MEMO[_mk])
+            _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT[node_id])})
+            _COMPLETED.add(node_id)
+            _save_checkpoint()
+            _EVENT_LOG.info(
+                "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0m
+            )
+            return
+
+    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+    _t0 = time.monotonic()
+    _last_exc: BaseException | None = None
+    _outputs: dict[str, object] = {}
+    _tokens = 0
+    _ctx = RuntimeContext(step=len(_STACK), node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    for _attempt in range(retry_max):
+        try:
+            _outputs, _tokens = await node_fn(provider=_PROVIDER, ctx=_ctx, **ins)
+            _last_exc = None
+            break
+        except Exception as _exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
+            _last_exc = _exc
+            if _attempt + 1 < retry_max and backoff > 0:
+                await asyncio.sleep(backoff * (_attempt + 1))
+    try:
+        if _last_exc is not None:
+            raise _last_exc
+        store_fn(ins, _outputs)
+        _TOKENS_USED += _tokens
+        _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
+        if deterministic:
+            _MEMO[_mk] = dict(_OUT.get(node_id, {}))
+        _COMPLETED.add(node_id)
+        _save_checkpoint()
+        _EVENT_LOG.info(
+            "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0
+        )
+        if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
+            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
+    except BaseException as _ev_exc:
+        _EVENT_LOG.info(
+            "NodeFailed node=%s step=%d duration_s=%f error=%s",
+            node_id, len(_STACK), time.monotonic() - _t0, f"{type(_ev_exc).__name__}: {_ev_exc}",
+        )
+        if isolate and not isinstance(
+            _ev_exc, (WorkflowBudgetExceeded, KeyboardInterrupt, SystemExit, asyncio.CancelledError)
+        ):
+            _FAILED[node_id] = f"{type(_ev_exc).__name__}: {_ev_exc}"
+            _ISOLATED.add(node_id)
+            for _succ in isolated_succs:
+                _ISOLATED.add(_succ)
+            return
+        raise
+
+
 $node_functions
 
 
@@ -429,6 +516,8 @@ $signals_main_init
     _raw_max_tokens = os.environ.get("FLOW_MAX_TOKENS", "")
     _MAX_TOKENS = int(_raw_max_tokens) if _raw_max_tokens.strip().isdigit() else None
     provider = ai.provider("$provider")
+    global _PROVIDER
+    _PROVIDER = provider
 $main_body
     _last = _STACK[-1] if _STACK else {"step": -1, "node": ""}
     _RUNTIME.update(

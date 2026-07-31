@@ -410,28 +410,16 @@ async def execute(
 
         if node.type == "script":
             logger.debug("Running script node %r", node_id)
-            if node.code is not None:
-                fn = _resolve_script_fn(node, base_dir)
-            elif script_resolver is not None:
-                fn = script_resolver(node.run or "")
-            else:
-                fn = _resolve_script_fn(node, base_dir)
-
             step = await _reserve_step()
             _t0 = time.monotonic()
             _emit(NodeStarted(node_id=node_id, step=step))
 
             max_attempts, backoff = _retry_bounds(node)
             last_exc: BaseException | None = None
+            script_out: dict[str, object] = {}
             for attempt in range(max_attempts):
                 try:
-                    ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
-                    kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
-                    raw = fn(ctx, **kwargs)
-                    value = await asyncio.wait_for(
-                        raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout
-                    )
-                    await _store_script_output(node, node_id, value)
+                    script_out = await _node_script(node, node_id, ins, step)
                     last_exc = None
                     break
                 except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
@@ -444,6 +432,9 @@ async def execute(
                     error=f"{type(last_exc).__name__}: {last_exc}",
                 ))
                 raise last_exc
+            if script_out:
+                async with _state_lock:
+                    outputs.setdefault(node_id, {}).update(script_out)
             await _record_frame(node_id, ins, step)
             async with _state_lock:
                 if node.deterministic:
@@ -453,86 +444,18 @@ async def execute(
             _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
             return
 
-        # agent node — prompt interpolation is PORT-LOCAL (reads this node's inputs)
-        sys_prompt = interpolate(node.system_prompt, ins)
-        user_prompt = interpolate(node.prompt, ins)
-
-        model = node.model or wf.default_model
-        # stream_fn_factory is guaranteed non-None here
-        assert stream_fn_factory is not None
-        stream_fn = stream_fn_factory(model)
-
-        assert tool_registry is not None
-        resolved_tools: tuple[AgentTool, ...] = tool_registry.resolve(node.tools)
-
-        tool_ctx: dict[str, object] | None = None
-        sink: dict[str, object] = {}
-        final_sys_prompt = sys_prompt
-
-        if agent_is_structured(node):
-            from agent.tools import create_submit_result_tool
-
-            submit_tool = create_submit_result_tool()
-            resolved_tools = resolved_tools + (submit_tool,)
-            derived_schema = agent_output_schema(node)
-            tool_ctx = {
-                "flow_output_schema": derived_schema,
-                "flow_result_sink": sink,
-            }
-            field_names = ", ".join(p.name for p in node.output_ports)
-            directive = (
-                f"\nWhen finished, you MUST call the submit_result tool"
-                f" with an object containing these fields: {field_names}."
-            )
-            final_sys_prompt = sys_prompt + directive
-
-        # Enable the built-in web_search tool when the node opts in.  The search
-        # model may differ from the node model (some models don't browse).
-        web_search_fn = None
-        if node.web_search and web_search_fn_factory is not None:
-            web_search_fn = web_search_fn_factory(node.web_search_model or model)
-
-        agent = Agent(
-            stream_fn,
-            config=AgentConfig(model=model, system_prompt=final_sys_prompt),
-            tools=resolved_tools,
-            tool_ctx=tool_ctx,
-            web_search_fn=web_search_fn,
-        )
-
-        logger.debug("Running node %r with model %r", node_id, model)
-
+        # agent node — driver: retry the pure _node_agent, then store + budget.
         agent_max_attempts, agent_backoff = _retry_bounds(node)
         agent_last_exc: BaseException | None = None
-        accumulated: list[str] = []
         agent_step = await _reserve_step()
         _t0_agent = time.monotonic()
         _emit(NodeStarted(node_id=node_id, step=agent_step))
+        output_value: object = ""
         total_tokens = 0
 
         for agent_attempt in range(agent_max_attempts):
-            accumulated = []
-            sink.clear()
-            total_tokens = 0
-
-            async def _drain() -> None:
-                nonlocal total_tokens
-                event_stream = await agent.prompt(user_prompt)
-                async for event in event_stream:
-                    if isinstance(event, TurnEndEvent) and event.message is not None:
-                        msg = event.message
-                        if isinstance(msg, AssistantMessage):
-                            for part in msg.content:
-                                if isinstance(part, TextContent):
-                                    accumulated.append(part.text)
-                            # Some providers report per-category counts but leave
-                            # total_tokens at 0; fall back to input + output so the
-                            # P3 NodeFinished event still carries a real token count.
-                            _u = msg.usage
-                            total_tokens += _u.total_tokens or (_u.input + _u.output)
-
             try:
-                await asyncio.wait_for(_drain(), timeout=timeout)
+                output_value, total_tokens = await _node_agent(node, node_id, ins)
                 agent_last_exc = None
                 break
             except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
@@ -547,40 +470,8 @@ async def execute(
             ))
             raise agent_last_exc
 
-        output_value: object
-        _structured = agent_is_structured(node)
-        if _structured:
-            result_obj = sink.get("result")
-            if result_obj is None:
-                raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
-            # Keep the submitted object structured — do NOT flatten to a JSON string.
-            output_value = result_obj
-        else:
-            output_value = "".join(accumulated)
-
-        # Store the agent's output ports.  A structured agent with multiple ports
-        # fans the submitted object out by field name (each port coerced to its
-        # type) — mirroring the multi-output script path.  Otherwise the single
-        # port carries the whole value (object or text).
-        if node.output_ports:
-            if _structured and len(node.output_ports) > 1:
-                if not isinstance(output_value, dict):
-                    raise WorkflowExecutionError(
-                        f"Node {node.id!r}: multi-output agent must submit an object, "
-                        f"got {type(output_value).__name__}"
-                    )
-                stored: dict[str, object] = {}
-                for p in node.output_ports:
-                    if p.name not in output_value:
-                        raise WorkflowExecutionError(
-                            f"Node {node.id!r}: submitted result is missing field {p.name!r}"
-                        )
-                    stored[p.name] = to_state(output_value[p.name], p.type)
-                async with _state_lock:
-                    outputs.setdefault(node_id, {}).update(stored)
-            else:
-                async with _state_lock:
-                    outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
+        async with _state_lock:
+            _store_agent_output(node, node_id, output_value)
 
         await _record_frame(node_id, ins, agent_step)
         async with _state_lock:
@@ -599,24 +490,138 @@ async def execute(
         if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
             raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
-    async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
-        """Coerce a script's return value into the node's output port(s)."""
+    def _coerce_script_output(node: NodeDef, node_id: str, value: Any) -> dict[str, object]:
+        """Coerce a script's return value into its output-port dict (no store)."""
         ports = node.output_ports
-        stored: dict[str, object]
         if len(ports) <= 1:
             if not ports:
-                return
+                return {}
             p = ports[0]
-            stored = {p.name: to_state(value, p.type)}
+            return {p.name: to_state(value, p.type)}
+        # Multi-output script: the function must return a dict keyed by port name.
+        if not isinstance(value, dict):
+            raise WorkflowExecutionError(
+                f"Script node {node_id!r}: declares {len(ports)} output ports so must return a dict"
+            )
+        return {p.name: to_state(value[p.name], p.type) for p in ports}
+
+    async def _node_script(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> dict[str, object]:
+        """Run a script node's core work once; return its output-port dict.
+
+        Pure with respect to the run store: it resolves the function, builds the
+        typed kwargs from *ins*, calls it (async or sync), and coerces the return
+        into the output-port dict.  Storing, retry, memo, and events are the
+        driver's job (the caller).
+        """
+        if node.code is not None:
+            fn = _resolve_script_fn(node, base_dir)
+        elif script_resolver is not None:
+            fn = script_resolver(node.run or "")
         else:
-            # Multi-output script: the function must return a dict keyed by port name.
-            if not isinstance(value, dict):
-                raise WorkflowExecutionError(
-                    f"Script node {node_id!r}: declares {len(ports)} output ports so must return a dict"
-                )
-            stored = {p.name: to_state(value[p.name], p.type) for p in ports}
+            fn = _resolve_script_fn(node, base_dir)
+        ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
+        kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
+        raw = fn(ctx, **kwargs)
+        value = await asyncio.wait_for(raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout)
+        return _coerce_script_output(node, node_id, value)
+
+    async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
+        """Coerce a script's return value into the node's output port(s)."""
+        stored = _coerce_script_output(node, node_id, value)
+        if not stored:
+            return
         async with _state_lock:
             outputs.setdefault(node_id, {}).update(stored)
+
+    async def _node_agent(node: NodeDef, node_id: str, ins: dict[str, object]) -> tuple[object, int]:
+        """Run an agent node's core work once; return (output_value, tokens).
+
+        Pure with respect to the run store: builds prompts from *ins*, sets up the
+        Agent + submit_result tool, drains one turn, and returns the structured
+        result (or joined text) plus the token count.  Retry, store, budget, and
+        events are the driver's job.
+        """
+        sys_prompt = interpolate(node.system_prompt, ins)
+        user_prompt = interpolate(node.prompt, ins)
+        model = node.model or wf.default_model
+        assert stream_fn_factory is not None
+        stream_fn = stream_fn_factory(model)
+        assert tool_registry is not None
+        resolved_tools: tuple[AgentTool, ...] = tool_registry.resolve(node.tools)
+
+        tool_ctx: dict[str, object] | None = None
+        sink: dict[str, object] = {}
+        final_sys_prompt = sys_prompt
+        structured = agent_is_structured(node)
+        if structured:
+            from agent.tools import create_submit_result_tool
+
+            resolved_tools = resolved_tools + (create_submit_result_tool(),)
+            tool_ctx = {"flow_output_schema": agent_output_schema(node), "flow_result_sink": sink}
+            field_names = ", ".join(p.name for p in node.output_ports)
+            final_sys_prompt = sys_prompt + (
+                f"\nWhen finished, you MUST call the submit_result tool"
+                f" with an object containing these fields: {field_names}."
+            )
+
+        web_search_fn = None
+        if node.web_search and web_search_fn_factory is not None:
+            web_search_fn = web_search_fn_factory(node.web_search_model or model)
+
+        agent = Agent(
+            stream_fn,
+            config=AgentConfig(model=model, system_prompt=final_sys_prompt),
+            tools=resolved_tools,
+            tool_ctx=tool_ctx,
+            web_search_fn=web_search_fn,
+        )
+        logger.debug("Running node %r with model %r", node_id, model)
+
+        accumulated: list[str] = []
+        total_tokens = 0
+
+        async def _drain() -> None:
+            nonlocal total_tokens
+            event_stream = await agent.prompt(user_prompt)
+            async for event in event_stream:
+                if isinstance(event, TurnEndEvent) and event.message is not None:
+                    msg = event.message
+                    if isinstance(msg, AssistantMessage):
+                        for part in msg.content:
+                            if isinstance(part, TextContent):
+                                accumulated.append(part.text)
+                        # Some providers report per-category counts but leave
+                        # total_tokens at 0; fall back to input + output.
+                        _u = msg.usage
+                        total_tokens += _u.total_tokens or (_u.input + _u.output)
+
+        await asyncio.wait_for(_drain(), timeout=timeout)
+
+        if structured:
+            result_obj = sink.get("result")
+            if result_obj is None:
+                raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
+            return result_obj, total_tokens
+        return "".join(accumulated), total_tokens
+
+    def _store_agent_output(node: NodeDef, node_id: str, output_value: object) -> None:
+        """Store an agent's output value into its port(s) (caller holds _state_lock)."""
+        if not node.output_ports:
+            return
+        if agent_is_structured(node) and len(node.output_ports) > 1:
+            if not isinstance(output_value, dict):
+                raise WorkflowExecutionError(
+                    f"Node {node.id!r}: multi-output agent must submit an object, "
+                    f"got {type(output_value).__name__}"
+                )
+            for p in node.output_ports:
+                if p.name not in output_value:
+                    raise WorkflowExecutionError(
+                        f"Node {node.id!r}: submitted result is missing field {p.name!r}"
+                    )
+                outputs.setdefault(node_id, {})[p.name] = to_state(output_value[p.name], p.type)
+        else:
+            outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
 
     def _is_ready(node_id: str) -> bool:
         """Return True if all non-loop predecessors of node_id have completed.

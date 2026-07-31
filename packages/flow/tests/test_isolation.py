@@ -155,7 +155,8 @@ def test_codegen_isolation_guard_present() -> None:
     src = generate(wf)
     assert "_ISOLATED" in src
     assert "_FAILED" in src
-    assert "'bad' in _ISOLATED" in src
+    # Isolation now lives in the generic _drive; the node opts in via its spec.
+    assert "isolate=True" in src
 
 
 def test_codegen_no_isolation_for_default_node() -> None:

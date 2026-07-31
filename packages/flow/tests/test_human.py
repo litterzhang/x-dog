@@ -216,4 +216,5 @@ def test_codegen_no_human_nodes_unchanged() -> None:
     # No PAUSED / SystemExit runtime logic from a human node (the WorkflowPaused
     # class is inlined into every module, but the pause code path is human-only).
     assert "PAUSED" not in src
-    assert "SystemExit" not in src
+    # (SystemExit appears in the generic _drive's control-flow re-raise guard, so
+    # it's no longer a human-only marker; PAUSED is the human-pause indicator.)

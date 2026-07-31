@@ -265,34 +265,78 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
     return lines
 
 
-def _render_retry_wrapped(call_lines: list[str], node: NodeDef) -> list[str]:
-    """Wrap *call_lines* (the core-work call) in a retry loop when node.retry is set.
+def _retry_spec(node: NodeDef, wf: WorkflowDef) -> str:
+    """Emit the keyword args passed to ``_drive`` carrying this node's policy."""
+    max_attempts = 1 + (node.retry.max if node.retry is not None else 0)
+    backoff = node.retry.backoff if node.retry is not None else 0.0
+    isolate = node.on_error == "isolate"
+    succs = tuple(_transitive_successors_ids(node.id, wf)) if isolate else ()
+    return (
+        f"retry_max={max_attempts}, backoff={backoff!r}, deterministic={node.deterministic!r}, "
+        f"isolate={isolate!r}, isolated_succs={succs!r}"
+    )
 
-    When ``node.retry`` is None or ``max == 0`` the call_lines are returned unchanged.
-    The emitted loop mirrors the interpreter's semantics exactly.
+
+def _invoke_expr(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """The awaitable expression that runs one node from the scheduler.
+
+    Script/agent nodes go through the generic ``_drive`` (guards, inputs, retry,
+    store, memo, budget, checkpoint, isolation); a human node stays a
+    self-contained call (it pauses via SystemExit and doesn't fit the driver)."""
+    node = next(n for n in wf.nodes if n.id == node_id)
+    safe = safe_ids[node_id]
+    if node.type == "human":
+        return f"node_{safe}(provider)"
+    return (
+        f'_drive({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, {_retry_spec(node, wf)})'
+    )
+
+
+def _await_line(indent: str, node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """An ``await <invoke>`` scheduler line, with a whole-line noqa when too long."""
+    line = f"{indent}await {_invoke_expr(node_id, wf, safe_ids)}"
+    return line if len(line) <= 120 else line + "  # noqa: E501"
+
+
+def _render_inputs_fn(node: NodeDef, wf: WorkflowDef, safe: str) -> list[str]:
+    """Emit ``_inputs_<safe>() -> dict`` — assembles this node's ins from _OUT."""
+    lines = [f"def _inputs_{safe}() -> dict[str, object]:"]
+    body = _render_ins(node, wf)
+    if not body:
+        lines.append("    return {}")
+        return lines
+    lines += body
+    lines.append("    return ins")
+    return lines
+
+
+def _render_store_fn(node: NodeDef, wf: WorkflowDef, safe: str) -> list[str]:
+    """Emit ``_store_<safe>(ins, _res) -> None`` — write _OUT + flush $output.
+
+    *_res* is the pure node function's returned output-port dict; it is copied
+    into ``_OUT[node]`` verbatim (the node fn already coerced/fanned per port),
+    then any ``$output`` edge is flushed.  The ``ins`` param feeds the $output
+    ``when`` guards' unused-arg-free signature and keeps parity with the frame.
     """
-    if node.retry is None or node.retry.max == 0:
-        return call_lines
-    max_attempts = 1 + node.retry.max
-    backoff = node.retry.backoff
-    # call_lines each start with 4 spaces of indent (function body level).
-    # We re-indent them to 12 spaces (inside `for` + `try:`).
-    out: list[str] = []
-    out.append("    _last_exc: BaseException | None = None")
-    out.append(f"    for _attempt in range({max_attempts}):")
-    out.append("        try:")
-    for line in call_lines:
-        # strip the leading 4 spaces then add 12
-        out.append("            " + line.lstrip(" "))
-    out.append("            _last_exc = None")
-    out.append("            break")
-    out.append("        except BaseException as _exc:")
-    out.append("            _last_exc = _exc")
-    out.append(f"            if _attempt + 1 < {max_attempts}:")
-    out.append(f"                await asyncio.sleep({backoff} * (_attempt + 1))")
-    out.append("    if _last_exc is not None:")
-    out.append("        raise _last_exc")
-    return out
+    lines = [f"def _store_{safe}(ins: dict[str, object], _res: dict[str, object]) -> None:"]
+    lines.append(f"    _OUT[{node.id!r}] = dict(_res)")
+    # $output flush (mirrors _render_node_tail's second half).
+    out_container: ContainerExpr = f"_OUT[{node.id!r}]"
+    flushed = False
+    for edge in wf.edges:
+        if edge.dst != OUT_NODE_ID or edge.src != node.id:
+            continue
+        guard = _condition_to_expr(edge.when, out_container) if edge.when is not None else None
+        for sport, okey in edge.mapping:
+            cond = f"{sport!r} in _OUT[{node.id!r}]"
+            if guard is not None:
+                cond = f"({guard}) and {cond}"
+            lines.append(f"    if {cond}:")
+            lines.append(f"        _OUTPUT[{okey!r}] = _OUT[{node.id!r}][{sport!r}]")
+            flushed = True
+    if not flushed:
+        lines.append("    _ = ins  # (no $output flush; ins unused)")
+    return lines
 
 
 def _transitive_successors_ids(node_id: str, wf: WorkflowDef) -> list[str]:
@@ -312,31 +356,6 @@ def _transitive_successors_ids(node_id: str, wf: WorkflowDef) -> list[str]:
     return visited
 
 
-def _render_isolation_handler(node_id: str, wf: WorkflowDef) -> list[str]:
-    """Emit the except-block body for an on_error='isolate' node.
-
-    Records the failure in ``_FAILED``, marks the node and its transitive
-    successors in ``_ISOLATED``, and returns without re-raising.
-
-    Control-flow exceptions are re-raised first: a budget breach, cancellation,
-    KeyboardInterrupt, or the human-pause SystemExit must abort the whole run,
-    never be captured as an isolated node failure. This mirrors the interpreter,
-    which special-cases these at the scheduler level.
-    """
-    lines: list[str] = []
-    lines.append(
-        "        if isinstance(_ev_exc, (WorkflowBudgetExceeded, KeyboardInterrupt,"
-        " SystemExit, asyncio.CancelledError)):  # noqa: E501"
-    )
-    lines.append("            raise")
-    lines.append(f"        _FAILED[{node_id!r}] = f'{{type(_ev_exc).__name__}}: {{_ev_exc}}'")
-    lines.append(f"        _ISOLATED.add({node_id!r})")
-    for succ in _transitive_successors_ids(node_id, wf):
-        lines.append(f"        _ISOLATED.add({succ!r})")
-    lines.append("        return")
-    return lines
-
-
 def _entry_guards(node_id: str) -> list[str]:
     """The two early-return guards every node wrapper opens with (already-done / isolated)."""
     return [
@@ -347,89 +366,34 @@ def _entry_guards(node_id: str) -> list[str]:
     ]
 
 
-def _memo_hit_block(node: NodeDef) -> list[str]:
-    """Emit the deterministic memo-hit fast path (empty for non-deterministic nodes).
-
-    Computes ``_mk`` (the memo key) and, on a hit, replays the cached output as a
-    completed node — pushing a trace frame, checkpointing, and returning early. The
-    ``_mk`` binding is left in scope for the miss path to store into ``_MEMO``.
-    """
-    if not node.deterministic:
-        return []
-    ins_expr = "dict(ins)" if node.input_ports else "{}"
-    return [
-        f'    _mk = f"{{{node.id!r}}}:{{hashlib.sha256(json.dumps(ins if {bool(node.input_ports)} else {{}}, '
-        f'sort_keys=True).encode()).hexdigest()}}"  # noqa: E501',
-        "    if _mk in _MEMO:",
-        f'        _EVENT_LOG.info("NodeStarted node=%s step=%d", {node.id!r}, len(_STACK))',
-        "        _t0_memo = time.monotonic()",
-        f"        _OUT[{node.id!r}] = dict(_MEMO[_mk])",
-        f'        _STACK.append({{"step": len(_STACK), "node": {node.id!r},'
-        f' "in": {ins_expr}, "out": dict(_OUT[{node.id!r}])}})',
-        f"        _COMPLETED.add({node.id!r})",
-        "        _save_checkpoint()",
-        f'        _EVENT_LOG.info("NodeFinished node=%s step=%d duration_s=%f",'
-        f' {node.id!r}, len(_STACK) - 1, time.monotonic() - _t0_memo)  # noqa: E501',
-        "        return",
-    ]
-
-
-def _node_epilogue(node: NodeDef, wf: WorkflowDef) -> list[str]:
-    """The shared try-body tail + except handler for script/agent nodes.
-
-    Emits (at try-body indent) the NodeFinished log, then the ``except BaseException``
-    clause with the NodeFailed log and either the isolation handler or a bare re-raise.
-    Assumes ``_t0`` holds the node start time and the try block is open.
-    """
-    return [
-        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
-        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501",
-        "    except BaseException as _ev_exc:",
-        f"        _EVENT_LOG.info('NodeFailed node=%s step=%d duration_s=%f error=%s',"
-        f" {node.id!r}, len(_STACK), time.monotonic() - _t0,"
-        f" f'{{type(_ev_exc).__name__}}: {{_ev_exc}}')  # noqa: E501",
-        *(_render_isolation_handler(node.id, wf) if node.on_error == "isolate" else ["        raise"]),
-    ]
-
-
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
-    """Render a script node's async wrapper: build ins, call fn(ctx, **typed), store ports."""
-    lines = [f"async def {fn_name}(provider: object) -> None:"]
-    lines += _entry_guards(node.id)
-    lines += _render_ins(node, wf)
-    lines += _memo_hit_block(node)
-    lines.append(
-        f'    _ctx = RuntimeContext(step=len(_STACK), node_id="{_ESC(node.id)}", workflow_name="{_ESC(wf.name)}")'
-    )
-    call_args = ["_ctx"]
+    """Render a script node as a pure function: (provider, ctx, **inputs) -> (outputs, 0).
+
+    Assembles typed kwargs from its input params, calls the inlined ``_script_X``,
+    coerces the return into the output-port dict, and returns ``(outputs, 0)``.
+    Storing/retry/events are the driver's job.
+    """
+    params = ["provider: object", "ctx: RuntimeContext"]
+    params += [f"{p.name}: object" for p in node.input_ports]
+    sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
+    lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
+    call_args = ["ctx"]
     for p in node.input_ports:
-        lines.append(f'    _in_{p.name} = to_python(ins.get({p.name!r}, ""), "{p.type}")')
+        lines.append(f'    _in_{p.name} = to_python({p.name}, "{p.type}")')
         call_args.append(f"{p.name}=_in_{p.name}")
     await_kw = "await " if _script_is_async(node) else ""
-    core_call = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
-    # Emit start event, then wrap the work in try/except for timing.
-    lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
-    lines.append("    _t0 = time.monotonic()")
-    lines.append("    try:")
-    # Wrap core call (and retry loop if any) one extra indent level deeper.
-    for cl in _render_retry_wrapped([core_call], node):
-        lines.append("    " + cl)
-    # Output storage, frame, completed — still inside try.
-    lines.append(f"        _OUT[{node.id!r}] = {{}}")
+    core = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
+    lines.append(core if len(core) <= 120 else core + "  # noqa: E501")
+    lines.append("    _out: dict[str, object] = {}")
     if len(node.output_ports) <= 1:
         if node.output_ports:
             p = node.output_ports[0]
-            lines.append(f'        _OUT[{node.id!r}][{p.name!r}] = to_state(_val, "{p.type}")')
+            lines.append(f'    _out[{p.name!r}] = to_state(_val, "{p.type}")')
     else:
         for p in node.output_ports:
-            lines.append(f'        _OUT[{node.id!r}][{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")')
-    for tl in _render_node_tail(node, wf):
-        lines.append("    " + tl)
-    lines.append(f'        _COMPLETED.add({node.id!r})')
-    if node.deterministic:
-        lines.append(f'        _MEMO[_mk] = dict(_OUT[{node.id!r}])')
-    lines.append('        _save_checkpoint()')
-    lines += _node_epilogue(node, wf)
+            store = f'    _out[{p.name!r}] = to_state(_val[{p.name!r}], "{p.type}")'
+            lines.append(store if len(store) <= 120 else store + "  # noqa: E501")
+    lines.append("    return _out, 0")
     return "\n".join(lines)
 
 
@@ -483,28 +447,27 @@ def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
-def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    node_map = {n.id: n for n in wf.nodes}
-    node = node_map[node_id]
-    safe = safe_ids[node_id]
-    fn_name = f"node_{safe}"
+def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
+    """Render an agent node as a pure function: (provider, ctx, **inputs) -> (outputs, tokens).
 
-    if node.type == "script":
-        return _render_script_node(node, fn_name, safe, wf)
-
-    if node.type == "human":
-        return _render_human_node(node, fn_name, wf)
-
-    # agent node — prompts are PORT-LOCAL: {{x}} reads ins['x'].
+    Reconstructs a local ``ins`` from its params (so ``{{$.x}}`` prompt
+    interpolation is unchanged), runs the agent once, and coerces the result into
+    the output-port dict.  Storing/retry/budget/events are the driver's job.
+    """
     model = node.model or wf.default_model
-    ins_container: ContainerExpr = "ins" if node.input_ports else "{}"
+    params = ["provider: object", "ctx: RuntimeContext"]
+    params += [f"{p.name}: object" for p in node.input_ports]
+    sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
+    lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
+    if node.input_ports:
+        pairs = ", ".join(f"{p.name!r}: {p.name}" for p in node.input_ports)
+        ins_line = f"    ins: dict[str, object] = {{{pairs}}}"
+        lines.append(ins_line if len(ins_line) <= 120 else ins_line + "  # noqa: E501")
+        ins_container: ContainerExpr = "ins"
+    else:
+        ins_container = "{}"
     sys_prompt = _render_prompt(node.system_prompt, ins_container)
     user_prompt = _render_prompt(node.prompt, ins_container)
-
-    lines = [f"async def {fn_name}(provider: object) -> None:"]
-    lines += _entry_guards(node.id)
-    lines += _render_ins(node, wf)
-    lines += _memo_hit_block(node)
     lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
     _call_args = [f'provider, "{model}", _sys, _usr']
@@ -514,53 +477,51 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         _call_args.append("_tools")
     _structured = agent_is_structured(node)
     if _structured:
-        # The submit_result schema is derived from the output ports (no separately
-        # authored schema).  repr renders the JSON-schema dict as a Python literal.
-        _derived = agent_output_schema(node)
-        _call_args.append(f"output_schema={_derived!r}")
+        _call_args.append(f"output_schema={agent_output_schema(node)!r}")
     if node.web_search:
-        # Mirror the interpreter: the search model defaults to the node model.
         _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
-    _core_line = f"    result, _node_tokens = await _run_agent({', '.join(_call_args)})"
-    if len(_core_line) > 120:
-        _core_line += "  # noqa: E501"
-    core_call = _core_line
-    lines.append(f"    _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
-    lines.append("    _t0 = time.monotonic()")
-    lines.append("    try:")
-    for cl in _render_retry_wrapped([core_call], node):
-        lines.append("    " + cl)
-    lines.append(f"        _OUT[{node.id!r}] = {{}}")
+    _core = f"    result, _node_tokens = await _run_agent({', '.join(_call_args)})"
+    lines.append(_core if len(_core) <= 120 else _core + "  # noqa: E501")
+    lines.append("    _out: dict[str, object] = {}")
     if node.output_ports:
         if _structured and len(node.output_ports) > 1:
-            # Multi-output agent: fan the submitted object out to each declared
-            # port by field name, coerced to the port's type (mirrors the
-            # interpreter's multi-port store).
             _not_obj_msg = f"Node {node.id!r}: multi-output agent must submit an object"
-            lines.append("        if not isinstance(result, dict):")
-            lines.append(f"            raise WorkflowExecutionError({_not_obj_msg!r})")
+            lines.append("    if not isinstance(result, dict):")
+            lines.append(f"        raise WorkflowExecutionError({_not_obj_msg!r})")
             for p in node.output_ports:
                 _miss_msg = f"Node {node.id!r}: submitted result is missing field {p.name!r}"
-                lines.append(f"        if {p.name!r} not in result:")
-                lines.append(f"            raise WorkflowExecutionError({_miss_msg!r})")
-                store = f"        _OUT[{node.id!r}][{p.name!r}] = to_state(result[{p.name!r}], {p.type!r})"
-                if len(store) > 120:
-                    store += "  # noqa: E501"
-                lines.append(store)
+                lines.append(f"    if {p.name!r} not in result:")
+                lines.append(f"        raise WorkflowExecutionError({_miss_msg!r})")
+                store = f"    _out[{p.name!r}] = to_state(result[{p.name!r}], {p.type!r})"
+                lines.append(store if len(store) <= 120 else store + "  # noqa: E501")
         else:
-            lines.append(f"        _OUT[{node.id!r}][{node.output_ports[0].name!r}] = result")
-    for tl in _render_node_tail(node, wf):
-        lines.append("    " + tl)
-    lines.append("        global _TOKENS_USED")
-    lines.append("        _TOKENS_USED += _node_tokens")
-    lines.append("        if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:")
-    lines.append("            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]")
-    lines.append(f"        _COMPLETED.add({node.id!r})")
-    if node.deterministic:
-        lines.append(f"        _MEMO[_mk] = dict(_OUT[{node.id!r}])")
-    lines.append("        _save_checkpoint()")
-    lines += _node_epilogue(node, wf)
+            lines.append(f"    _out[{node.output_ports[0].name!r}] = result")
+    lines.append("    return _out, _node_tokens")
     return "\n".join(lines)
+
+
+def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """Emit a node's code: its pure function plus, for script/agent, the driver
+    helpers ``_inputs_<safe>`` and ``_store_<safe>``.  Human nodes stay
+    self-contained (they pause via SystemExit and don't fit the retry driver)."""
+    node_map = {n.id: n for n in wf.nodes}
+    node = node_map[node_id]
+    safe = safe_ids[node_id]
+    fn_name = f"node_{safe}"
+
+    if node.type == "human":
+        return _render_human_node(node, fn_name, wf)
+
+    if node.type == "script":
+        node_fn = _render_script_node(node, fn_name, safe, wf)
+    else:
+        node_fn = _render_agent_node(node, fn_name, wf)
+    blocks = [
+        node_fn,
+        "\n".join(_render_inputs_fn(node, wf, safe)),
+        "\n".join(_render_store_fn(node, wf, safe)),
+    ]
+    return "\n\n\n".join(blocks)
 
 
 def _build_fwd_graph(
@@ -700,13 +661,13 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
         if gate == "True":
             if loop_depth > 0:
                 lines.append(f"{ind()}_COMPLETED.discard({node_id!r})")
-            lines.append(f"{ind()}await node_{safe_ids[node_id]}(provider)")
+            lines.append(_await_line(ind(), node_id, wf, safe_ids))
             lines.append(f"{ind()}_ran.add('{_ESC(node_id)}')")
         else:
             lines.append(f"{ind()}if {gate}:")
             if loop_depth > 0:
                 lines.append(f"{ind()}    _COMPLETED.discard({node_id!r})")
-            lines.append(f"{ind()}    await node_{safe_ids[node_id]}(provider)")
+            lines.append(_await_line(ind() + "    ", node_id, wf, safe_ids))
             lines.append(f"{ind()}    _ran.add('{_ESC(node_id)}')")
 
         if node_id in loop_exit_set:
@@ -749,16 +710,17 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
         if len(ready) == 1:
             if loop_depth > 0:
                 lines.append(f"{ind()}_COMPLETED.discard({ready[0]!r})")
-            lines.append(f"{ind()}await node_{safe_ids[ready[0]]}(provider)")
+            lines.append(_await_line(ind(), ready[0], wf, safe_ids))
         else:
             for n in ready:
                 if loop_depth > 0:
                     lines.append(f"{ind()}_COMPLETED.discard({n!r})")
             if use_capped:
-                calls = [f"_capped(node_{safe_ids[n]}(provider))" for n in ready]
+                calls = [f"_capped({_invoke_expr(n, wf, safe_ids)})" for n in ready]
             else:
-                calls = [f"node_{safe_ids[n]}(provider)" for n in ready]
-            lines.append(f"{ind()}await asyncio.gather({', '.join(calls)})")
+                calls = [_invoke_expr(n, wf, safe_ids) for n in ready]
+            gather = f"{ind()}await asyncio.gather({', '.join(calls)})"
+            lines.append(gather if len(gather) <= 120 else gather + "  # noqa: E501")
 
         for n in ready:
             completed.add(n)
@@ -889,8 +851,8 @@ def generate(wf: WorkflowDef) -> str:
         signals_boilerplate = "\n_SIGNALS: set[str] = set()"
         signals_main_init = ""
 
-    has_deterministic = any(n.deterministic for n in wf.nodes)
-    hashlib_import = "import hashlib\n" if has_deterministic else ""
+    # _drive always references hashlib in its (deterministic-only) memo branch.
+    hashlib_import = "import hashlib\n"
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,

@@ -678,10 +678,10 @@ def test_generate_no_retry_source_unchanged() -> None:
         edges=(),
     )
     src = generate(wf)
-    # The core-call line appears verbatim — no retry scaffolding.
-    assert "_val = _script_work(_ctx)" in src
-    assert "_last_exc" not in src
-    assert "_attempt" not in src
+    # The pure node function calls the inlined script with its ctx param.
+    assert "_val = _script_work(ctx)" in src
+    # A no-retry node drives with retry_max=1 (the retry loop lives in _drive).
+    assert "retry_max=1" in src
 
 
 async def test_generate_retry_script_node_retries_on_failure() -> None:
