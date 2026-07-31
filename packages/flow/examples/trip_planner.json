@@ -13,9 +13,13 @@
     {
       "id": "plan",
       "type": "agent",
-      "inputs": ["destination", "days", "budget_usd"],
+      "inputs": [
+        {"name": "destination", "type": "string"},
+        {"name": "days", "type": "integer"},
+        {"name": "budget_usd", "type": "number"}
+      ],
       "system_prompt": "You are a meticulous travel planner. Given a destination, a number of days, and a budget in USD, produce a realistic day-by-day plan.",
-      "prompt": "Plan a trip.\nDestination: {{$.destination}}\nDays: {{$.days}}\nBudget (USD): {{$.budget_usd}}\n\nWhen finished, call submit_result with:\n- summary: one sentence describing the trip\n- daily_plan: an array with exactly {{$.days}} strings, one per day (e.g. 'Day 1: ...')\n- est_cost_usd: your estimated total cost as a number\n- highlight: the single must-do experience",
+      "prompt": "Plan a trip.\nDestination: {{$.destination}}\nDays: {{$.days}}\nBudget (USD): {{$.budget_usd}}\n\nField guidance:\n- summary: one sentence describing the trip\n- daily_plan: an array with exactly {{$.days}} strings, one per day (e.g. 'Day 1: ...')\n- est_cost_usd: your estimated total cost as a number\n- highlight: the single must-do experience",
       "outputs": [
         {"name": "summary", "type": "string"},
         {"name": "daily_plan", "type": "array"},
