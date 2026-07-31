@@ -18,6 +18,7 @@ from agent.events import TurnEndEvent
 from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
 from agent.tools import create_submit_result_tool
 from ai.types import AssistantMessage, TextContent
+from jsonpath_ng import parse as _jsonpath_parse
 $script_imports
 _EVENT_LOG = logging.getLogger("flow.generated.events")
 
@@ -90,32 +91,22 @@ def _to_bool(value: object) -> bool:
     raise ValueError(f"cannot coerce {value!r} to boolean")
 
 
-def resolve_path(value: object, segments: list[str]) -> object:
-    """Walk *segments* into a structured *value*; return None on any miss."""
-    cur = value
-    for seg in segments:
-        if isinstance(cur, dict):
-            if seg not in cur:
-                return None
-            cur = cur[seg]
-        elif isinstance(cur, (list, tuple)):
-            if not seg.isdigit():
-                return None
-            idx = int(seg)
-            if not 0 <= idx < len(cur):
-                return None
-            cur = cur[idx]
-        else:
-            return None
-    return cur
+_JSONPATH_CACHE: dict[str, Any] = {}
+
+
+def jsonpath_get(state: object, path: str) -> object:
+    """Return the first JSONPath *path* match in *state*, or None if none."""
+    expr = _JSONPATH_CACHE.get(path)
+    if expr is None:
+        expr = _jsonpath_parse(path)
+        _JSONPATH_CACHE[path] = expr
+    matches = expr.find(state)
+    return matches[0].value if matches else None
 
 
 def interp_path(state: dict[str, object], path: str) -> str:
-    """Resolve a dotted ``{{path}}`` against *state* and project to text ('' on miss)."""
-    head, *rest = path.split(".")
-    if head not in state:
-        return ""
-    resolved = resolve_path(state[head], rest) if rest else state[head]
+    """Resolve a JSONPath ``{{path}}`` against *state* and project to text ('' on miss)."""
+    resolved = jsonpath_get(state, path)
     if resolved is None:
         return ""
     return port_str(resolved)
@@ -373,7 +364,7 @@ async def _run_agent(
     system_prompt: str,
     prompt: str,
     tools: tuple[AgentTool, ...] = (),
-    output_schema: tuple[tuple[str, str], ...] = (),
+    output_schema: dict[str, object] | None = None,
     web_search_model: str | None = None,
 ) -> tuple[object, int]:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
@@ -382,10 +373,11 @@ async def _run_agent(
     _sink: dict[str, object] = {}
     _tool_ctx: dict[str, object] | None = None
     _sys = system_prompt
-    if output_schema:
+    if output_schema is not None:
         tools = tools + (create_submit_result_tool(),)
-        _tool_ctx = {"flow_output_schema": dict(output_schema), "flow_result_sink": _sink}
-        _fields = ", ".join(_f for _f, _ in output_schema)
+        _tool_ctx = {"flow_output_schema": output_schema, "flow_result_sink": _sink}
+        _props = output_schema.get("properties")
+        _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
         _sys = system_prompt + (
             "\nWhen finished, you MUST call the submit_result tool"
             f" with an object containing these fields: {_fields}."
@@ -415,7 +407,7 @@ async def _run_agent(
                 # Mirrors flow.executor's token accounting: some providers leave
                 # total_tokens at 0 but fill input/output, so fall back to their sum.
                 _node_tokens += _u.total_tokens or (_u.input + _u.output)
-    if output_schema:
+    if output_schema is not None:
         _result_obj = _sink.get("result")
         if _result_obj is None:
             raise WorkflowExecutionError("agent did not submit a result via submit_result")

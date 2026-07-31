@@ -29,15 +29,21 @@ def _condition_to_dict(cond: Condition) -> dict[str, Any]:
 
 
 def _ports_to_json(ports: tuple[Port, ...]) -> list[Any]:
-    """Emit a port list: bare name for a plain ``string`` port; the ``{name,type,
-    optional}`` object form when a non-default field (type or optional) is set."""
+    """Emit a port list: bare name for a plain required ``string`` port; else an
+    object with ``type`` (scalar) or ``schema`` (nested), plus ``optional`` when
+    the port is not required.  The loader lifts these back into schema/required."""
     out: list[Any] = []
     for p in ports:
-        if p.type == "string" and not p.optional:
+        is_scalar = set(p.schema.keys()) <= {"type"}
+        if is_scalar and p.type == "string" and p.required:
             out.append(p.name)
             continue
-        obj: dict[str, Any] = {"name": p.name, "type": p.type}
-        if p.optional:
+        obj: dict[str, Any] = {"name": p.name}
+        if is_scalar:
+            obj["type"] = p.type
+        else:
+            obj["schema"] = p.schema
+        if not p.required:
             obj["optional"] = True
         out.append(obj)
     return out
@@ -62,8 +68,6 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["inputs"] = _ports_to_json(node.input_ports)
     if node.output_ports:
         data["outputs"] = _ports_to_json(node.output_ports)
-    if node.output_schema:
-        data["output_schema"] = {k: v for k, v in node.output_schema}
     if node.web_search:
         data["web_search"] = True
     if node.web_search_model is not None:

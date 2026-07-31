@@ -26,22 +26,54 @@ IN_NODE_ID = "$in"
 OUT_NODE_ID = "$output"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Port:
-    """A named, typed data port on a node.
+    """A named, JSON-Schema-typed data port on a node.
 
-    ``type`` is a JSON type name (``string``/``integer``/``number``/``boolean``/
-    ``array``/``object``) used to coerce the string-valued wire format to/from the
-    Python value a script sees.  Agent ports are almost always ``string``.
+    ``schema`` is a JSON Schema fragment describing the port's value: a scalar
+    ``{"type": "integer"}``, a structured ``{"type": "object", "properties":
+    {...}, "required": [...]}``, or ``{"type": "array", "items": {...}}``.  The
+    six top-level type names (``string``/``integer``/``number``/``boolean``/
+    ``array``/``object``) drive wire-format coercion; nested structure is
+    validated (not re-coerced) by fastjsonschema.
 
-    ``optional`` marks an **input** port that need not be fed by any edge — e.g. a
-    loop-carried value that is absent on the first pass (the prompt interpolates it
-    to ``""`` / a script sees the type's zero-value).  Ignored on output ports.
+    ``required`` marks an **input** port that must be fed by an edge (the default).
+    ``required=False`` is the old ``optional``: a loop-carried value absent on the
+    first pass interpolates to ``""`` / a script sees the type's zero-value.
+    Ignored on output ports (they are always produced by their node).
+
+    The constructor stays backward-compatible: ``Port("n", "integer")`` and
+    ``Port("n", optional=True)`` still work, building the equivalent ``schema`` /
+    ``required``.  A structured port passes ``schema=`` directly.  ``type`` is a
+    convenience view of ``schema["type"]``.
     """
 
     name: str
-    type: str = "string"
-    optional: bool = False
+    schema: dict[str, object]
+    required: bool
+
+    def __init__(
+        self,
+        name: str,
+        type: str | None = None,  # noqa: A002 - legacy positional; builds schema
+        optional: bool | None = None,
+        *,
+        schema: dict[str, object] | None = None,
+        required: bool | None = None,
+    ) -> None:
+        if schema is None:
+            schema = {"type": type or "string"}
+        if required is None:
+            required = True if optional is None else not optional
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "schema", schema)
+        object.__setattr__(self, "required", required)
+
+    @property
+    def type(self) -> str:
+        """The port's top-level JSON type name (``schema['type']``)."""
+        t = self.schema.get("type", "string")
+        return t if isinstance(t, str) else "string"
 
 
 @dataclass(frozen=True)
@@ -65,9 +97,6 @@ class NodeDef:
     # Data ports: each node reads its input ports and writes its output ports.
     input_ports: tuple[Port, ...] = ()
     output_ports: tuple[Port, ...] = ()
-    # Structured-output agents: field -> JSON type; forces a submit_result call
-    # whose validated JSON is stored in the node's single output port.
-    output_schema: tuple[tuple[str, str], ...] = ()
     # Inline script source (agent nodes leave this empty).
     code: str | None = None
     # Agent nodes: enable the built-in web_search tool.  ``web_search_model``
@@ -152,3 +181,41 @@ def entry_frontier(wf: WorkflowDef) -> tuple[str, ...]:
             continue
         has_real_pred.add(e.dst)
     return tuple(n.id for n in wf.nodes if n.id not in has_real_pred)
+
+
+def agent_is_structured(node: NodeDef) -> bool:
+    """Whether an agent produces a structured result via ``submit_result``.
+
+    An agent is plain-text when it has no output port, or exactly one scalar
+    ``string`` port (its reply text goes verbatim into that port).  Otherwise it
+    is structured: it must ``submit_result`` an object validated against the
+    schema derived from its output ports.
+    """
+    ports = node.output_ports
+    if len(ports) == 0:
+        return False
+    if len(ports) == 1 and ports[0].schema == {"type": "string"}:
+        return False
+    return True
+
+
+def agent_output_schema(node: NodeDef) -> dict[str, object]:
+    """The JSON Schema an agent's ``submit_result`` object is validated against.
+
+    Derived from the output ports (no separately-authored schema):
+
+    * multiple ports → an object with one property per port, all required;
+    * a single structured port → that port's own schema (the whole submitted
+      value is stored in it).
+
+    Only meaningful when :func:`agent_is_structured` is True.
+    """
+    ports = node.output_ports
+    if len(ports) == 1:
+        return dict(ports[0].schema)
+    return {
+        "type": "object",
+        "properties": {p.name: dict(p.schema) for p in ports},
+        "required": [p.name for p in ports if p.required],
+    }
+

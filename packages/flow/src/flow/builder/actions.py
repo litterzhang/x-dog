@@ -118,14 +118,6 @@ def set_output_ports(model: BuilderModel, node_id: str, ports: tuple[Port, ...])
     return model.with_wf(wf)
 
 
-def set_output_schema(
-    model: BuilderModel, node_id: str, schema: tuple[tuple[str, str], ...]
-) -> BuilderModel:
-    """Replace a node's output schema (tuple of (field, json_type) pairs)."""
-    wf = _map_node(model.wf, node_id, lambda n: replace(n, output_schema=tuple(schema)))
-    return model.with_wf(wf)
-
-
 def set_node_type(model: BuilderModel, node_id: str, node_type: str) -> BuilderModel:
     """Switch a node between 'agent' and 'script'."""
     if node_type not in ("agent", "script"):

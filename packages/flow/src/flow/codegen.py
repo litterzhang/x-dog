@@ -16,13 +16,24 @@ import re
 import string
 from collections import defaultdict
 
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, WorkflowDef, entry_frontier
+from flow.models import (
+    IN_NODE_ID,
+    OUT_NODE_ID,
+    Condition,
+    EdgeDef,
+    NodeDef,
+    WorkflowDef,
+    agent_is_structured,
+    agent_output_schema,
+    entry_frontier,
+)
 
 # A ContainerExpr is a Python expression string evaluating to the state dict
 # (``dict[str, object]``) that a ``{{path}}`` placeholder is resolved against.
 ContainerExpr = str
 # Placeholder grammar: a dotted path of \w+ segments (mirrors flow.interpolate).
-_PLACEHOLDER = re.compile(r"\{\{\s*(\w+(?:\.\w+)*)\s*\}\}")
+# A placeholder is ``{{ <jsonpath> }}`` — matches the interpreter's _PATTERN.
+_PLACEHOLDER = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 
 
 def _safe_id(node_id: str) -> str:
@@ -178,23 +189,22 @@ def _incoming_loops(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
 def _emit_ins_assign(lines: list[str], src: str, sport: str, dport: str, guard: str | None) -> None:
     """Emit the guarded ``ins[dport] = <source value>`` for one edge mapping.
 
-    A plain source key reads a whole output port; a dotted key (``plan.owner``)
-    resolves a nested field via the inlined ``resolve_path`` — mirroring the
-    interpreter's ``_build_inputs``.  *guard* is an extra condition (loop edges)
-    or None.
+    The source key is a JSONPath resolved against the source node's output-ports
+    dict via the inlined ``jsonpath_get`` — a plain port (``plan``) or a nested
+    field (``$.verdict.within_budget``).  A miss (None) leaves the port unfed —
+    mirroring the interpreter's ``_build_inputs``.  *guard* is an extra condition
+    (loop edges) or None.
     """
-    head, _dot, tail = sport.partition(".")
-    head_present = f"{head!r} in _OUT.get({src!r}, {{}})"
-    cond = f"({guard}) and {head_present}" if guard else head_present
-    if tail:
-        segs = tail.split(".")
-        lines.append(f"    if {cond}:")
-        lines.append(f"        _rv = resolve_path(_OUT[{src!r}][{head!r}], {segs!r})")
+    getter = f"jsonpath_get(_OUT.get({src!r}, {{}}), {sport!r})"
+    cond = f"({guard})" if guard else None
+    lines.append(f"    _rv = {getter}" if cond is None else f"    if {cond}:")
+    if cond is None:
+        lines.append("    if _rv is not None:")
+        lines.append(f"        ins[{dport!r}] = _rv")
+    else:
+        lines.append(f"        _rv = {getter}")
         lines.append("        if _rv is not None:")
         lines.append(f"            ins[{dport!r}] = _rv")
-    else:
-        lines.append(f"    if {cond}:")
-        lines.append(f"        ins[{dport!r}] = _OUT[{src!r}][{head!r}]")
 
 
 def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
@@ -502,9 +512,12 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         tool_names = ", ".join(f'"{t}"' for t in node.tools)
         lines.append(f"    _tools = _REGISTRY.resolve(({tool_names},))")
         _call_args.append("_tools")
-    if node.output_schema:
-        # repr renders the tuple-of-(name,type) pairs as a valid Python literal.
-        _call_args.append(f"output_schema={node.output_schema!r}")
+    _structured = agent_is_structured(node)
+    if _structured:
+        # The submit_result schema is derived from the output ports (no separately
+        # authored schema).  repr renders the JSON-schema dict as a Python literal.
+        _derived = agent_output_schema(node)
+        _call_args.append(f"output_schema={_derived!r}")
     if node.web_search:
         # Mirror the interpreter: the search model defaults to the node model.
         _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
@@ -519,7 +532,7 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         lines.append("    " + cl)
     lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
-        if node.output_schema and len(node.output_ports) > 1:
+        if _structured and len(node.output_ports) > 1:
             # Multi-output agent: fan the submitted object out to each declared
             # port by field name, coerced to the port's type (mirrors the
             # interpreter's multi-port store).

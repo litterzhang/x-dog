@@ -374,7 +374,7 @@ def test_optional_input_port_need_not_be_fed() -> None:
     }
     wf = parse_workflow(data)
     validate_workflow(wf)  # does not raise
-    assert wf.nodes[0].input_ports[0].optional is True
+    assert wf.nodes[0].input_ports[0].required is False
 
 
 def test_non_optional_unfed_port_still_raises() -> None:
@@ -511,28 +511,6 @@ def test_two_conditional_edges_into_one_port_ok() -> None:
     }
     wf = parse_workflow(data)
     validate_workflow(wf)  # should not raise
-    data = {
-        "name": "schema-test",
-        "provider": "anthropic",
-        "entry": "a",
-        "nodes": [{"id": "a", "output_schema": {"name": "string", "count": "integer"}}],
-        "edges": [],
-    }
-    wf = parse_workflow(data)
-    node = wf.nodes[0]
-    assert set(node.output_schema) == {("name", "string"), ("count", "integer")}
-
-
-def test_output_schema_default_empty() -> None:
-    data = {
-        "name": "no-schema",
-        "provider": "anthropic",
-        "entry": "a",
-        "nodes": [{"id": "a"}],
-        "edges": [],
-    }
-    wf = parse_workflow(data)
-    assert wf.nodes[0].output_schema == ()
 
 
 # --- typed inline script nodes (code XOR run, signature validation) ----------
@@ -723,32 +701,12 @@ def _agent_wf(node: dict[str, object]) -> dict[str, object]:
     }
 
 
-def test_validate_multi_output_agent_without_schema_fails() -> None:
-    node = {
-        "id": "n1", "type": "agent", "inputs": ["topic"],
-        "prompt": "go", "outputs": ["a", "b"],
-    }
-    wf = parse_workflow(_agent_wf(node))
-    with pytest.raises(WorkflowValidationError, match="must declare 'output_schema'"):
-        validate_workflow(wf)
-
-
-def test_validate_multi_output_agent_port_not_in_schema_fails() -> None:
-    node = {
-        "id": "n1", "type": "agent", "inputs": ["topic"], "prompt": "go",
-        "outputs": [{"name": "a", "type": "string"}, {"name": "zzz", "type": "string"}],
-        "output_schema": {"a": "string", "b": "string"},
-    }
-    wf = parse_workflow(_agent_wf(node))
-    with pytest.raises(WorkflowValidationError, match="not"):
-        validate_workflow(wf)
-
-
 def test_validate_multi_output_agent_ok() -> None:
+    # A multi-output agent needs no separately-authored schema: its ports ARE the
+    # schema, so it validates fine without any ``output_schema`` key.
     node = {
         "id": "n1", "type": "agent", "inputs": ["topic"], "prompt": "go",
         "outputs": [{"name": "a", "type": "string"}, {"name": "b", "type": "array"}],
-        "output_schema": {"a": "string", "b": "array"},
     }
     wf = parse_workflow(_agent_wf(node))
     validate_workflow(wf)  # no raise

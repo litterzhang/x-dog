@@ -282,12 +282,9 @@ class BuilderApp(Component):
                 out.append(row("prompt", node.prompt))
             if node.tools:
                 out.append(row("tools", ", ".join(node.tools)))
-            if node.output_schema:
-                fields = ", ".join(f"{k}:{v}" for k, v in node.output_schema)
-                out.append(row("schema", fields))
         if node.input_ports:
             out.append(
-                row("inputs", ", ".join(f"{p.name}:{p.type}{'?' if p.optional else ''}" for p in node.input_ports))
+                row("inputs", ", ".join(f"{p.name}:{p.type}{'' if p.required else '?'}" for p in node.input_ports))
             )
         if node.output_ports:
             out.append(row("outputs", ", ".join(f"{p.name}:{p.type}" for p in node.output_ports)))

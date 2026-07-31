@@ -127,12 +127,10 @@ def test_backedge_needs_loop_max() -> None:
     assert m2.error is None
 
 
-def test_output_schema_and_tools() -> None:
+def test_set_tools() -> None:
     m = actions.add_node(empty_model(), "agent")
-    m = actions.set_output_schema(m, "agent", (("category", "string"), ("n", "integer")))
     m = actions.set_tools(m, "agent", ("echo", "filesystem"))
     node = m.wf.nodes[0]
-    assert node.output_schema == (("category", "string"), ("n", "integer"))
     assert node.tools == ("echo", "filesystem")
 
 

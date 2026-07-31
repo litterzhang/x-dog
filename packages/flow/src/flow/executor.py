@@ -27,8 +27,17 @@ from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowBudgetExceeded, WorkflowExecutionError, WorkflowPaused
 from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
-from flow.interpolate import interpolate, resolve_path
-from flow.models import IN_NODE_ID, OUT_NODE_ID, EdgeDef, NodeDef, WorkflowDef, entry_frontier
+from flow.interpolate import interpolate, jsonpath_get
+from flow.models import (
+    IN_NODE_ID,
+    OUT_NODE_ID,
+    EdgeDef,
+    NodeDef,
+    WorkflowDef,
+    agent_is_structured,
+    agent_output_schema,
+    entry_frontier,
+)
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -251,18 +260,12 @@ async def execute(
                 continue
             src_ports = _source_ports(edge.src)
             for sport, dport in edge.mapping:
-                # A dotted source key reads a nested field of a structured port:
-                # ``plan.owner`` -> resolve_path(src_ports['plan'], ['owner']).
-                head, _dot, tail = sport.partition(".")
-                if head not in src_ports:
-                    continue
-                if tail:
-                    resolved = resolve_path(src_ports[head], tail.split("."))
-                    if resolved is None:
-                        continue  # sub-path absent -> treat as not fed (lenient)
+                # The source key is a JSONPath resolved against the source node's
+                # output ports: a plain port (``plan``) or a nested field
+                # (``$.verdict.within_budget``).  A miss leaves the port unfed.
+                resolved = jsonpath_get(src_ports, sport)
+                if resolved is not None:
                     ins[dport] = resolved
-                else:
-                    ins[dport] = src_ports[head]
         return ins
 
     # Track which nodes have finished
@@ -466,16 +469,17 @@ async def execute(
         sink: dict[str, object] = {}
         final_sys_prompt = sys_prompt
 
-        if node.output_schema:
+        if agent_is_structured(node):
             from agent.tools import create_submit_result_tool
 
             submit_tool = create_submit_result_tool()
             resolved_tools = resolved_tools + (submit_tool,)
+            derived_schema = agent_output_schema(node)
             tool_ctx = {
-                "flow_output_schema": dict(node.output_schema),
+                "flow_output_schema": derived_schema,
                 "flow_result_sink": sink,
             }
-            field_names = ", ".join(f for f, _ in node.output_schema)
+            field_names = ", ".join(p.name for p in node.output_ports)
             directive = (
                 f"\nWhen finished, you MUST call the submit_result tool"
                 f" with an object containing these fields: {field_names}."
@@ -544,7 +548,8 @@ async def execute(
             raise agent_last_exc
 
         output_value: object
-        if node.output_schema:
+        _structured = agent_is_structured(node)
+        if _structured:
             result_obj = sink.get("result")
             if result_obj is None:
                 raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
@@ -553,12 +558,12 @@ async def execute(
         else:
             output_value = "".join(accumulated)
 
-        # Store the agent's output ports.  With output_schema + multiple declared
-        # ports, fan the submitted object out by field name (each port coerced to
-        # its declared type) — mirroring the multi-output script path.  Otherwise
-        # the single port carries the whole value (object or text).
+        # Store the agent's output ports.  A structured agent with multiple ports
+        # fans the submitted object out by field name (each port coerced to its
+        # type) — mirroring the multi-output script path.  Otherwise the single
+        # port carries the whole value (object or text).
         if node.output_ports:
-            if node.output_schema and len(node.output_ports) > 1:
+            if _structured and len(node.output_ports) > 1:
                 if not isinstance(output_value, dict):
                     raise WorkflowExecutionError(
                         f"Node {node.id!r}: multi-output agent must submit an object, "

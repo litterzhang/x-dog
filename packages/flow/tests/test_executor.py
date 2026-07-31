@@ -789,8 +789,16 @@ async def test_output_schema_success() -> None:
                 id="n1",
                 model="m",
                 prompt="summarise",
-                output_ports=(Port("out"),),
-                output_schema=(("summary", "string"), ("score", "integer")),
+                # Single structured port: the whole submitted object lands in "out".
+                output_ports=(
+                    Port(
+                        "out",
+                        schema={
+                            "type": "object",
+                            "properties": {"summary": {"type": "string"}, "score": {"type": "integer"}},
+                        },
+                    ),
+                ),
             ),
         ),
         edges=(),
@@ -816,8 +824,13 @@ async def test_output_schema_missing_submission() -> None:
                 id="n1",
                 model="m",
                 prompt="summarise",
-                output_ports=(Port("out"),),
-                output_schema=(("summary", "string"),),
+                # Single structured port holding the whole submitted object.
+                output_ports=(
+                    Port(
+                        "out",
+                        schema={"type": "object", "properties": {"summary": {"type": "string"}}},
+                    ),
+                ),
             ),
         ),
         edges=(),
@@ -845,7 +858,6 @@ async def test_output_schema_multi_port_fans_out() -> None:
                 model="m",
                 prompt="plan",
                 output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
-                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
             ),
         ),
         edges=(),
@@ -884,7 +896,6 @@ async def test_output_schema_multi_port_incomplete_submission_rejected() -> None
                 model="m",
                 prompt="plan",
                 output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
-                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
             ),
         ),
         edges=(),

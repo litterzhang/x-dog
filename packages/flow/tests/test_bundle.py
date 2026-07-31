@@ -100,8 +100,10 @@ def test_bundle_runs_without_the_flow_package(tmp_path: Path) -> None:
         import sys, asyncio
         from pathlib import Path
         b = Path({str(out)!r})
-        # Drop every x-dog source path so the flow package is genuinely unavailable.
-        sys.path = [p for p in sys.path if "x-dog" not in p and "packages/flow" not in p]
+        # Drop the flow package SOURCE dir so the flow package is genuinely
+        # unavailable — but keep site-packages (third-party deps like jsonpath_ng
+        # / httpx that the generated module and vendored packages legitimately use).
+        sys.path = [p for p in sys.path if "packages/flow/src" not in p]
         sys.path.insert(0, str(b / "_vendor"))
         sys.path.insert(0, str(b))
         import importlib.util

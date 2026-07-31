@@ -2,7 +2,7 @@
 
 The law: ``parse_workflow(workflow_to_dict(wf)) == wf`` for every workflow the
 loader accepts.  We prove it against every shipped example plus a hand-built
-workflow that exercises conditions, loops, inputs, and output_schema.
+workflow that exercises conditions, loops, inputs, and structured output ports.
 """
 
 from __future__ import annotations
@@ -40,8 +40,16 @@ def _rich_workflow() -> WorkflowDef:
                 tools=("echo",),
                 system_prompt="sys",
                 prompt="do {{rec}}",
-                output_ports=(Port("out"),),
-                output_schema=(("k1", "string"), ("k2", "integer")),
+                # Structured output: the whole submitted object lands in "out".
+                output_ports=(
+                    Port(
+                        "out",
+                        schema={
+                            "type": "object",
+                            "properties": {"k1": {"type": "string"}, "k2": {"type": "integer"}},
+                        },
+                    ),
+                ),
             ),
             NodeDef(id="c", type="agent", prompt="review {{out}}", output_ports=(Port("verdict"),)),
         ),
@@ -104,6 +112,36 @@ def test_roundtrip_optional_input_port() -> None:
     # the optional flag is emitted in the object form
     a_inputs = next(n for n in dumped["nodes"] if n["id"] == "a")["inputs"]
     assert {"name": "feedback", "type": "string", "optional": True} in a_inputs
+    assert parse_workflow(dumped) == wf
+
+
+def test_roundtrip_nested_schema_port() -> None:
+    """A port carrying a nested JSON Schema survives serialize -> parse."""
+    plan_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"owner": {"type": "string"}, "tasks": {"type": "array", "items": {"type": "string"}}},
+        "required": ["owner", "tasks"],
+    }
+    wf = WorkflowDef(
+        name="nested",
+        provider="copilot",
+        entry="a",
+        default_model="m",
+        initial_state=(("topic", "x"),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="script",
+                input_ports=(Port("topic", "string"),),
+                code="def a(ctx, topic):\n    return {'owner': topic, 'tasks': []}",
+                output_ports=(Port("plan", schema=plan_schema),),
+            ),
+        ),
+        edges=(EdgeDef(src="$in", dst="a", mapping=(("topic", "topic"),)),),
+    )
+    dumped = workflow_to_dict(wf)
+    a_outputs = next(n for n in dumped["nodes"] if n["id"] == "a")["outputs"]
+    assert a_outputs == [{"name": "plan", "schema": plan_schema}]
     assert parse_workflow(dumped) == wf
 
 

@@ -159,19 +159,33 @@ def test_node_def_inputs_replace() -> None:
     assert updated is not node
 
 
-def test_node_def_output_schema_default() -> None:
-    node = NodeDef(id="n1")
-    assert node.output_schema == ()
+def test_agent_output_schema_derived_from_multi_ports() -> None:
+    from flow.models import Port, agent_is_structured, agent_output_schema
+
+    node = NodeDef(
+        id="n1",
+        type="agent",
+        output_ports=(Port("summary", "string"), Port("count", "integer")),
+    )
+    assert agent_is_structured(node) is True
+    assert agent_output_schema(node) == {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}, "count": {"type": "integer"}},
+        "required": ["summary", "count"],
+    }
 
 
-def test_node_def_output_schema_construction() -> None:
-    node = NodeDef(id="n1", output_schema=(("name", "string"), ("count", "integer")))
-    assert node.output_schema == (("name", "string"), ("count", "integer"))
+def test_agent_single_string_port_is_plain_text() -> None:
+    from flow.models import Port, agent_is_structured
+
+    node = NodeDef(id="n1", type="agent", output_ports=(Port("answer"),))
+    assert agent_is_structured(node) is False
 
 
-def test_node_def_output_schema_replace() -> None:
-    node = NodeDef(id="n1", output_schema=(("x", "string"),))
-    updated = dataclasses.replace(node, output_schema=(("y", "integer"),))
-    assert updated.output_schema == (("y", "integer"),)
-    assert node.output_schema == (("x", "string"),)
-    assert updated is not node
+def test_agent_single_structured_port_uses_its_schema() -> None:
+    from flow.models import Port, agent_is_structured, agent_output_schema
+
+    plan = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    node = NodeDef(id="n1", type="agent", output_ports=(Port("plan", schema=plan),))
+    assert agent_is_structured(node) is True
+    assert agent_output_schema(node) == plan

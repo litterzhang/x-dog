@@ -45,7 +45,6 @@ def _rich() -> WorkflowDef:
                 system_prompt="sys\nmultiline",
                 prompt="do {{rec}}",
                 output_ports=(Port("out"),),
-                output_schema=(("k1", "string"), ("k2", "integer")),
             ),
         ),
         edges=(

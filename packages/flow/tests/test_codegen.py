@@ -839,8 +839,16 @@ def _make_output_schema_wf() -> WorkflowDef:
                 system_prompt="Summarise.",
                 prompt="summarise {{topic}}",
                 input_ports=(Port("topic"),),
-                output_ports=(Port("out"),),
-                output_schema=(("summary", "string"), ("score", "integer")),
+                # Single structured port: the whole submitted object lands in "out".
+                output_ports=(
+                    Port(
+                        "out",
+                        schema={
+                            "type": "object",
+                            "properties": {"summary": {"type": "string"}, "score": {"type": "integer"}},
+                        },
+                    ),
+                ),
                 web_search=True,
                 web_search_model="sonar",
             ),
@@ -856,8 +864,10 @@ def test_generate_output_schema_call_site_and_ruff_clean() -> None:
     # the submit_result directive path is compiled in (via the template helper)
     assert "create_submit_result_tool" in src
     assert "web_search_fn_from_provider" in src
-    # the node's call site forwards both the schema and the search model
-    assert "output_schema=(('summary', 'string'), ('score', 'integer'))" in src
+    # the node's call site forwards the derived JSON schema and the search model
+    assert "output_schema={'type': 'object'" in src
+    assert "'summary': {'type': 'string'}" in src
+    assert "'score': {'type': 'integer'}" in src
     assert 'web_search_model="sonar"' in src
     ok, msg = _ruff_clean(src)
     assert ok, f"generated code not ruff-clean:\n{src}\n{msg}"
@@ -1161,7 +1171,6 @@ def _make_multi_output_agent_wf() -> WorkflowDef:
                     Port("tasks", "array"),
                     Port("cost", "number"),
                 ),
-                output_schema=(("summary", "string"), ("tasks", "array"), ("cost", "number")),
             ),
         ),
         edges=(EdgeDef(src=IN_NODE_ID, dst="plan", mapping=(("topic", "topic"),)),),

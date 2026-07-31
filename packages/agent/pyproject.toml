@@ -10,10 +10,15 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "ai",
+    "fastjsonschema",
 ]
 
 [project.scripts]
 xdog-agent = "agent.cli:main"
+
+[[tool.mypy.overrides]]
+module = ["fastjsonschema"]
+ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent"]

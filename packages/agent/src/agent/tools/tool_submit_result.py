@@ -39,19 +39,38 @@ _JSON_TYPES: dict[str, tuple[type, ...]] = {
 }
 
 
+def _looks_like_json_schema(schema: dict[str, Any]) -> bool:
+    """True if *schema* is a JSON Schema (has ``type``/``properties``) vs the
+    legacy flat ``{field: json_type}`` mapping."""
+    return "type" in schema or "properties" in schema
+
+
 def _validate_against_schema(result: Any, schema: Any) -> str | None:
     """Return an error string if *result* violates *schema*, else ``None``.
 
-    *schema* is a ``{field: json_type}`` mapping (or falsy for "accept any").
-    Only presence + type of declared fields is checked; extra fields pass.
+    *schema* is either a real JSON Schema (validated with fastjsonschema) or the
+    legacy flat ``{field: json_type}`` mapping (presence + type of declared
+    fields; extra fields pass).  A falsy schema accepts anything.
     """
-    if not isinstance(result, dict):
-        return f"result must be an object, got {type(result).__name__}"
     if not schema:
         return None
     if not isinstance(schema, dict):
-        return "invalid schema (expected an object mapping field -> type)"
+        return "invalid schema (expected an object)"
 
+    if _looks_like_json_schema(schema):
+        import fastjsonschema
+
+        try:
+            fastjsonschema.compile(schema)(result)
+        except fastjsonschema.JsonSchemaException as exc:
+            return str(exc)
+        except ValueError as exc:  # invalid schema — don't block the agent on our bug
+            return f"invalid schema: {exc}"
+        return None
+
+    # Legacy flat {field: json_type} mapping.
+    if not isinstance(result, dict):
+        return f"result must be an object, got {type(result).__name__}"
     for field, json_type in schema.items():
         if field not in result:
             return f"missing required field {field!r}"

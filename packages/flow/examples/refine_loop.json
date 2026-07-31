@@ -14,7 +14,7 @@
       "type": "agent",
       "inputs": ["topic", {"name": "feedback", "optional": true}],
       "system_prompt": "You are a careful writer. Produce a concise, accurate 2-3 sentence answer to the topic. If reviewer feedback is provided, revise the answer to address every point.",
-      "prompt": "Topic: {{topic}}\n\nReviewer feedback (may be empty on the first pass):\n{{feedback}}\n\nWrite or improve the answer now. Reply with ONLY the answer text.",
+      "prompt": "Topic: {{$.topic}}\n\nReviewer feedback (may be empty on the first pass):\n{{$.feedback}}\n\nWrite or improve the answer now. Reply with ONLY the answer text.",
       "outputs": ["answer"]
     },
     {
@@ -24,7 +24,7 @@
       "web_search_model": "gpt-5.5",
       "inputs": ["answer"],
       "system_prompt": "You are a fact-checking reviewer. Use the web_search tool to verify the claims in the answer before judging.",
-      "prompt": "Fact-check this answer using web_search: {{answer}}\n\nIf it is accurate and well-written, reply with exactly: APPROVE\nOtherwise reply with: REVISE: <specific, actionable notes on what is wrong or missing>",
+      "prompt": "Fact-check this answer using web_search: {{$.answer}}\n\nIf it is accurate and well-written, reply with exactly: APPROVE\nOtherwise reply with: REVISE: <specific, actionable notes on what is wrong or missing>",
       "outputs": ["feedback"]
     }
   ],
@@ -37,7 +37,7 @@
       "from": "critic",
       "to": "draft",
       "map": {"feedback": "feedback"},
-      "when": {"contains": {"value": "{{feedback}}", "text": "REVISE"}},
+      "when": {"contains": {"value": "{{$.feedback}}", "text": "REVISE"}},
       "loop": {"max": 2}
     }
   ]

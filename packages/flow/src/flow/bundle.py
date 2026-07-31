@@ -32,8 +32,10 @@ from flow.models import WorkflowDef
 # errors/coerce/runtime and the tool registry are inlined into workflow.py.
 _VENDORED_PACKAGES = ("ai", "agent")
 
-# Third-party runtime dependencies of the vendored packages (ai needs these).
-_THIRD_PARTY = ("httpx", "pydantic")
+# Third-party runtime dependencies of the vendored packages (ai needs httpx +
+# pydantic; agent needs fastjsonschema for submit_result schema validation; the
+# generated module imports jsonpath-ng for interpolation/conditions).
+_THIRD_PARTY = ("httpx", "pydantic", "fastjsonschema", "jsonpath-ng")
 
 # Directory names to skip when copying a package's source tree.
 _SKIP_DIRS = {"__pycache__", "tests", ".mypy_cache", ".ruff_cache"}

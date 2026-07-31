@@ -56,22 +56,37 @@ def _parse_condition(data: Any) -> Condition:
 
 
 def _parse_ports(raw: Any) -> tuple[Port, ...]:
-    """Parse a ``inputs``/``outputs`` list of bare names or ``{name,type,optional}`` objects."""
+    """Parse an ``inputs``/``outputs`` list.
+
+    Each entry is a bare name (a required ``string`` port) or an object.  The
+    object form accepts the legacy ``{name, type, optional}`` and the new
+    ``{name, schema, required}`` (a nested JSON Schema).  ``optional: true`` maps
+    to ``required: false``.
+    """
     if not raw:
         return ()
     ports: list[Port] = []
     for item in raw:
         if isinstance(item, dict):
-            ports.append(
-                Port(
-                    name=str(item["name"]),
-                    type=str(item.get("type", "string")),
-                    optional=bool(item.get("optional", False)),
-                )
-            )
+            ports.append(_port_from_obj(item))
         else:
             ports.append(Port(name=str(item)))
     return tuple(ports)
+
+
+def _port_from_obj(item: dict[str, Any]) -> Port:
+    """Build a Port from an object entry (legacy type/optional or new schema/required)."""
+    name = str(item["name"])
+    schema = item.get("schema")
+    if isinstance(schema, dict):
+        required = bool(item.get("required", not item.get("optional", False)))
+        return Port(name=name, schema=schema, required=required)
+    # Legacy scalar form: {name, type?, optional?}
+    return Port(
+        name=name,
+        type=str(item.get("type", "string")),
+        optional=bool(item.get("optional", False)),
+    )
 
 
 def _parse_output_ports(data: dict[str, Any]) -> tuple[Port, ...]:
@@ -82,19 +97,13 @@ def _parse_output_ports(data: dict[str, Any]) -> tuple[Port, ...]:
     if raw is None:
         return ()
     if isinstance(raw, dict):
-        return (Port(name=str(raw["name"]), type=str(raw.get("type", "string"))),)
+        return (_port_from_obj(raw),)
     return (Port(name=str(raw)),)
 
 
 def _parse_node(data: dict[str, Any]) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
-    raw_output_schema = data.get("output_schema", {})
-    output_schema: tuple[tuple[str, str], ...]
-    if isinstance(raw_output_schema, dict) and raw_output_schema:
-        output_schema = tuple((str(k), str(v)) for k, v in raw_output_schema.items())
-    else:
-        output_schema = ()
     node_id = str(data["id"])
     retry: RetryPolicy | None = None
     raw_retry = data.get("retry")
@@ -130,7 +139,6 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         run=data.get("run"),
         input_ports=_parse_ports(data.get("inputs", [])),
         output_ports=_parse_output_ports(data),
-        output_schema=output_schema,
         code=data.get("code"),
         web_search=bool(data.get("web_search", False)),
         web_search_model=data.get("web_search_model"),
@@ -272,6 +280,19 @@ def _output_port_names(wf: WorkflowDef, node_id: str, in_ports: set[str]) -> set
     return set()
 
 
+def _jsonpath_root(key: str) -> tuple[str, bool]:
+    """Return (root_field, has_subpath) for an edge-mapping JSONPath source key.
+
+    ``$.verdict.within_budget`` -> ("verdict", True); ``$.plan`` -> ("plan", False);
+    a bare ``plan`` -> ("plan", False); ``$.tasks[0]`` -> ("tasks", True).
+    """
+    body = key[2:] if key.startswith("$.") else (key[1:] if key.startswith("$") else key)
+    # The root field ends at the first '.' or '[' separator.
+    root = re.split(r"[.\[]", body, maxsplit=1)[0]
+    has_sub = len(root) < len(body)
+    return root, has_sub
+
+
 def _output_port_types(wf: WorkflowDef, node_id: str) -> dict[str, str]:
     """Map a node's output port name -> declared type.
 
@@ -411,22 +432,6 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
-            if len(node.output_ports) > 1:
-                # A multi-output agent fans its submitted object out to each port by
-                # field name, so it must declare a schema and every port must name a
-                # schema field.
-                if not node.output_schema:
-                    raise WorkflowValidationError(
-                        f"Agent node {node.id!r}: a multi-output agent (>1 output port) "
-                        f"must declare 'output_schema'"
-                    )
-                schema_fields = {f for f, _ in node.output_schema}
-                unknown = [p.name for p in node.output_ports if p.name not in schema_fields]
-                if unknown:
-                    raise WorkflowValidationError(
-                        f"Agent node {node.id!r}: output port(s) {sorted(unknown)} are not "
-                        f"fields of output_schema {sorted(schema_fields)}"
-                    )
         elif node.type == "human":
             if not node.signal:
                 raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
@@ -463,7 +468,7 @@ def validate_workflow(wf: WorkflowDef) -> None:
         # and it never needs to be "fed").
         if edge.dst == OUT_NODE_ID:
             for sport, _dport in edge.mapping:
-                head, _dot, subpath = sport.partition(".")
+                head, subpath = _jsonpath_root(sport)
                 if subpath:
                     # Sub-field mapping to the $output sink is not supported (only
                     # node->node edges resolve sub-fields); map the whole port.
@@ -481,11 +486,11 @@ def validate_workflow(wf: WorkflowDef) -> None:
         src_types = _output_port_types(wf, edge.src)  # empty for $in (untyped seed)
         dst_types = {p.name: p.type for p in node_by_id[edge.dst].input_ports}
         for sport, dport in edge.mapping:
-            # A dotted source key (``plan.owner``) reads a nested field of a
-            # structured port; only its head must be a real output port. Sub-field
-            # TYPE checking is deferred (needs a nested type system), so a dotted
+            # A JSONPath source key (``$.plan.owner``) reads a nested field of a
+            # structured port; only its root must be a real output port. Sub-field
+            # TYPE checking is deferred (needs a nested type system), so a sub-field
             # key is exempt from the type-consistency check below.
-            head, _dot, subpath = sport.partition(".")
+            head, subpath = _jsonpath_root(sport)
             if head not in src_outputs:
                 raise WorkflowValidationError(
                     f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
@@ -526,10 +531,10 @@ def validate_workflow(wf: WorkflowDef) -> None:
             )
 
     # Every declared input port must be fed by at least one edge mapping — unless
-    # it is marked optional (e.g. a loop-carried value absent on the first pass).
+    # it is not required (e.g. a loop-carried value absent on the first pass).
     for node in wf.nodes:
         for p in node.input_ports:
-            if p.optional:
+            if not p.required:
                 continue
             if fed.get((node.id, p.name), 0) == 0:
                 raise WorkflowValidationError(

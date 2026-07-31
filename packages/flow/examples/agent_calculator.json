@@ -26,7 +26,7 @@
       "inputs": ["problem"],
       "tools": ["bash"],
       "system_prompt": "You are a precise calculator. You do NOT do arithmetic in your head. You compute every expression by running a bash command.",
-      "prompt": "Compute this arithmetic expression by running a bash command (e.g. use `echo $((...))` or `python3 -c`): {{problem}}\n\nThen reply with ONLY the final integer result, nothing else.",
+      "prompt": "Compute this arithmetic expression by running a bash command (e.g. use `echo $((...))` or `python3 -c`): {{$.problem}}\n\nThen reply with ONLY the final integer result, nothing else.",
       "outputs": ["answer"]
     }
   ],
