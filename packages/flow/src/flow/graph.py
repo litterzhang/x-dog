@@ -13,6 +13,8 @@ def _condition_label(cond: Condition) -> str:
         return f"equals:{cond.value}"
     if cond.op == "contains":
         return f"contains:{cond.value}"
+    if cond.op in ("gt", "gte", "lt", "lte"):
+        return f"{cond.op}:{cond.value} {cond.text}"
     if cond.op == "not":
         child_label = _condition_label(cond.children[0]) if cond.children else ""
         return f"not({child_label})"

@@ -198,6 +198,36 @@ def test_nested_interpolation_in_children() -> None:
 
 
 # ---------------------------------------------------------------------------
+# numeric ops (gt / gte / lt / lte)
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_gte_true_and_false() -> None:
+    assert evaluate(Condition(op="gte", value="{{score}}", text="0.8"), {"score": 0.85}) is True
+    assert evaluate(Condition(op="gte", value="{{score}}", text="0.8"), {"score": 0.8}) is True
+    assert evaluate(Condition(op="gte", value="{{score}}", text="0.8"), {"score": 0.79}) is False
+
+
+def test_numeric_gt_lt_lte() -> None:
+    st = {"n": 5}
+    assert evaluate(Condition(op="gt", value="{{n}}", text="4"), st) is True
+    assert evaluate(Condition(op="gt", value="{{n}}", text="5"), st) is False
+    assert evaluate(Condition(op="lt", value="{{n}}", text="6"), st) is True
+    assert evaluate(Condition(op="lte", value="{{n}}", text="5"), st) is True
+
+
+def test_numeric_ignores_string_formatting() -> None:
+    # 0.80 vs 0.8 — numeric compare, not string compare
+    assert evaluate(Condition(op="gte", value="{{s}}", text="0.80"), {"s": 0.8}) is True
+    assert evaluate(Condition(op="equals", value="{{s}}", text="0.80"), {"s": 0.8}) is False
+
+
+def test_numeric_non_numeric_operand_raises() -> None:
+    with pytest.raises(WorkflowValidationError, match="numeric operands"):
+        evaluate(Condition(op="gt", value="hello", text="0.8"), {})
+
+
+# ---------------------------------------------------------------------------
 # unknown op
 # ---------------------------------------------------------------------------
 

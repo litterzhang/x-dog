@@ -112,6 +112,25 @@ def interp_path(state: dict[str, object], path: str) -> str:
     return port_str(resolved)
 
 
+def _ncmp(a: str, b: str, op: str) -> bool:
+    """Numeric compare of two interpolated operands (mirrors flow.conditions).
+
+    An empty operand (an unresolved value, e.g. a loop-carried port on the first
+    pass) makes the comparison False — lenient, like interpolation.  A non-empty
+    non-numeric operand raises, since that is a real authoring error.
+    """
+    if a.strip() == "" or b.strip() == "":
+        return False
+    _l, _r = float(a), float(b)
+    if op == "gt":
+        return _l > _r
+    if op == "gte":
+        return _l >= _r
+    if op == "lt":
+        return _l < _r
+    return _l <= _r
+
+
 def to_python(value: object, json_type: str) -> Any:
     """Coerce a stored wire *value* into the Python type named by *json_type* (tolerant)."""
     if json_type == "string":

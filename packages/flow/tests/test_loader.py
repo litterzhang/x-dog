@@ -475,15 +475,15 @@ def test_two_conditional_edges_into_one_port_ok() -> None:
                 "id": "odd",
                 "type": "script",
                 "inputs": [{"name": "x", "type": "integer"}],
-                "code": "def odd(ctx, x):\n    return x",
-                "outputs": [{"name": "z", "type": "integer"}],
+                "code": "def odd(ctx, x):\n    return {'z': x, 'kind': 'odd'}",
+                "outputs": [{"name": "z", "type": "integer"}, {"name": "kind", "type": "string"}],
             },
             {
                 "id": "even",
                 "type": "script",
                 "inputs": [{"name": "x", "type": "integer"}],
-                "code": "def even(ctx, x):\n    return x",
-                "outputs": [{"name": "z", "type": "integer"}],
+                "code": "def even(ctx, x):\n    return {'z': x, 'kind': 'even'}",
+                "outputs": [{"name": "z", "type": "integer"}, {"name": "kind", "type": "string"}],
             },
             {
                 "id": "merge",
@@ -972,3 +972,67 @@ def test_validate_subfield_from_in_exempt() -> None:
         "edges": [{"from": "$in", "to": "a", "map": {"$.cfg.n": "s"}}],
     }
     validate_workflow(parse_workflow(data))  # no raise ($in untyped)
+
+
+# --- Strict interpolation (P6-2) -------------------------------------------
+
+
+def _agent_prompt_wf(prompt: str, inputs: list[object]) -> dict[str, object]:
+    """A single agent node with the given prompt + declared input ports, fed by $in."""
+    return {
+        "name": "strict",
+        "provider": "copilot",
+        "entry": "a",
+        "defaults": {"model": "m"},
+        "state": {"topic": "x"},
+        "nodes": [{"id": "a", "type": "agent", "prompt": prompt, "inputs": inputs, "outputs": ["out"]}],
+        "edges": [{"from": "$in", "to": "a", "map": {"topic": "topic"}}],
+    }
+
+
+def test_strict_prompt_unknown_root_fails() -> None:
+    # {{ $.nope }} — no such input port on the node
+    wf = parse_workflow(_agent_prompt_wf("say {{ $.nope }}", ["topic"]))
+    with pytest.raises(WorkflowValidationError, match="is not a declared input port"):
+        validate_workflow(wf)
+
+
+def test_strict_prompt_declared_root_ok() -> None:
+    wf = parse_workflow(_agent_prompt_wf("say {{ $.topic }}", ["topic"]))
+    validate_workflow(wf)  # no raise
+
+
+def test_strict_prompt_nested_field_root_ok() -> None:
+    # {{ $.plan.owner }} — root 'plan' is a declared (object) input port
+    wf = parse_workflow(
+        _agent_prompt_wf(
+            "owner {{ $.plan.owner }}",
+            ["topic", {"name": "plan", "schema": {"type": "object"}, "required": False}],
+        )
+    )
+    validate_workflow(wf)  # no raise
+
+
+def test_strict_condition_operand_unknown_root_fails() -> None:
+    # the odd->merge edge's when references {{ $.kind }}, but 'odd' has no 'kind' output
+    data = {
+        "name": "cond-strict",
+        "provider": "copilot",
+        "entry": "route",
+        "defaults": {"model": "m"},
+        "state": {"n": 1},
+        "nodes": [
+            {"id": "route", "type": "script", "inputs": [{"name": "n", "type": "integer"}],
+             "code": "def route(ctx, n):\n    return n", "outputs": [{"name": "z", "type": "integer"}]},
+            {"id": "sink", "type": "script", "inputs": [{"name": "z", "type": "integer"}],
+             "code": "def sink(ctx, z):\n    return z", "outputs": ["out"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "route", "map": {"n": "n"}},
+            {"from": "route", "to": "sink", "map": {"z": "z"},
+             "when": {"equals": {"value": "{{ $.kind }}", "text": "x"}}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with pytest.raises(WorkflowValidationError, match="is not an output port"):
+        validate_workflow(wf)

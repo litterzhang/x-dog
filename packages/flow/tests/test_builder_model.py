@@ -121,7 +121,7 @@ def test_backedge_needs_loop_max() -> None:
         m2,
         "agent2",
         "agent",
-        when=Condition(op="contains", value="{{out}}", text="X"),
+        when=Condition(op="contains", value="literal", text="X"),
         loop_max=2,
     )
     assert m2.error is None

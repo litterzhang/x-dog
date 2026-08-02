@@ -119,12 +119,19 @@ def _str_expr(s: str, container: ContainerExpr) -> str:
     return _interp_expr(s, container)
 
 
+_NUM_OP_PY = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+
+
 def _condition_to_expr(cond: Condition, container: ContainerExpr) -> str:
     """Translate a Condition tree to a Python boolean expression (ports via *container*)."""
     if cond.op == "equals":
         return f"{_str_expr(cond.value or '', container)} == {_str_expr(cond.text or '', container)}"
     if cond.op == "contains":
         return f"{_str_expr(cond.text or '', container)} in {_str_expr(cond.value or '', container)}"
+    if cond.op in _NUM_OP_PY:
+        left = _str_expr(cond.value or "", container)
+        right = _str_expr(cond.text or "", container)
+        return f"_ncmp({left}, {right}, {cond.op!r})"
     if cond.op == "not":
         return f"not ({_condition_to_expr(cond.children[0], container)})"
     if cond.op == "and":
@@ -140,6 +147,10 @@ def _condition_to_negated_expr(cond: Condition, container: ContainerExpr) -> str
         return f"{_str_expr(cond.value or '', container)} != {_str_expr(cond.text or '', container)}"
     if cond.op == "contains":
         return f"{_str_expr(cond.text or '', container)} not in {_str_expr(cond.value or '', container)}"
+    if cond.op in _NUM_OP_PY:
+        left = _str_expr(cond.value or "", container)
+        right = _str_expr(cond.text or "", container)
+        return f"not _ncmp({left}, {right}, {cond.op!r})"
     if cond.op == "not":
         return _condition_to_expr(cond.children[0], container)
     if cond.op == "and":

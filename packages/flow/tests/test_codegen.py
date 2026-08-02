@@ -1402,3 +1402,51 @@ async def test_generate_flow_inputs_override_parity() -> None:
 
     assert gen_state["dbl"]["out"] == 42  # 21 * 2, the override took effect
     assert gen_state == _interp_out(interp)
+
+
+async def test_generate_numeric_condition_parity() -> None:
+    """A gte/lt loop-exit guard behaves identically in both engines."""
+    from flow.executor import execute
+
+    # bump increments a counter; the back-edge loops while count < 3 (numeric lt),
+    # so the loop runs until count reaches 3.
+    wf = WorkflowDef(
+        name="numeric-loop",
+        provider="copilot",
+        entry="bump",
+        default_model="m",
+        nodes=(
+            NodeDef(
+                id="bump",
+                type="script",
+                code="def bump(ctx, count):\n    return count + 1",
+                input_ports=(Port("count", "integer"),),
+                output_ports=(Port("count", "integer"),),
+            ),
+            NodeDef(
+                id="done",
+                type="script",
+                code="def done(ctx, count):\n    return f'final:{count}'",
+                input_ports=(Port("count", "integer"),),
+                output_ports=(Port("result", "string"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="bump", mapping=(("count", "count"),)),
+            # loop back to bump while count < 3 (numeric)
+            EdgeDef(
+                src="bump", dst="bump", mapping=(("count", "count"),),
+                when=Condition(op="lt", value="{{$.count}}", text="3"),
+                loop_max=5,
+            ),
+            EdgeDef(src="bump", dst="done", mapping=(("count", "count"),)),
+        ),
+        initial_state=(("count", 0),),
+    )
+
+    gen_state = await _run_generated(wf)
+    run_result = await execute(wf)
+
+    # 0 -> 1 -> 2 -> 3 (loop stops when count reaches 3, no longer < 3)
+    assert gen_state["done"]["result"] == "final:3"
+    assert gen_state == _interp_out(run_result)

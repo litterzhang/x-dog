@@ -51,7 +51,13 @@ def _rich_workflow() -> WorkflowDef:
                     ),
                 ),
             ),
-            NodeDef(id="c", type="agent", prompt="review {{out}}", output_ports=(Port("verdict"),)),
+            NodeDef(
+                id="c",
+                type="agent",
+                prompt="review {{out}}",
+                input_ports=(Port("out", required=False),),
+                output_ports=(Port("verdict"),),
+            ),
         ),
         edges=(
             EdgeDef(src="a", dst="b", mapping=(("rec", "rec"),)),

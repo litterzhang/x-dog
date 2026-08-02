@@ -125,7 +125,7 @@ class NodeDef:
 
 @dataclass(frozen=True)
 class Condition:
-    op: Literal["equals", "contains", "not", "and", "or"]
+    op: Literal["equals", "contains", "gt", "gte", "lt", "lte", "not", "and", "or"]
     value: str | None = None
     text: str | None = None
     children: tuple[Condition, ...] = ()

@@ -46,6 +46,10 @@ def _parse_condition(data: Any) -> Condition:
     if "contains" in data:
         inner = data["contains"]
         return Condition(op="contains", value=str(inner["value"]), text=str(inner["text"]))
+    for _num_op in ("gt", "gte", "lt", "lte"):
+        if _num_op in data:
+            inner = data[_num_op]
+            return Condition(op=_num_op, value=str(inner["value"]), text=str(inner["text"]))
     if "not" in data:
         return Condition(op="not", children=(_parse_condition(data["not"]),))
     if "and" in data:
@@ -293,6 +297,36 @@ def _jsonpath_root(key: str) -> tuple[str, bool]:
     return root, has_sub
 
 
+# A ``{{ <jsonpath> }}`` placeholder — mirrors flow.interpolate._PATTERN.
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
+
+
+def _placeholder_roots(text: str) -> list[str]:
+    """Root port names referenced by the ``{{ $.path }}`` placeholders in *text*.
+
+    Skips a placeholder whose root can't be determined (an odd JSONPath),
+    so strict validation only flags a clearly-wrong root.
+    """
+    roots: list[str] = []
+    for m in _PLACEHOLDER_RE.finditer(text):
+        root, _ = _jsonpath_root(m.group(1))
+        if root:
+            roots.append(root)
+    return roots
+
+
+def _condition_operand_roots(cond: Condition) -> list[str]:
+    """All placeholder roots referenced by a condition tree's value/text operands."""
+    roots: list[str] = []
+    if cond.value is not None:
+        roots += _placeholder_roots(cond.value)
+    if cond.text is not None:
+        roots += _placeholder_roots(cond.text)
+    for child in cond.children:
+        roots += _condition_operand_roots(child)
+    return roots
+
+
 # A JSONPath tail step: a ``.field`` name, or an ``[index]``/``[*]`` bracket.
 _JSONPATH_STEP = re.compile(r"\.(\w+)|\[([^\]]*)\]")
 
@@ -513,6 +547,16 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+            # Strict interpolation: every {{ $.x }} in a prompt must root at a
+            # declared input port (a typo would otherwise silently interpolate to "").
+            _in_names = set(node.input_names)
+            for _tmpl in (node.system_prompt, node.prompt):
+                for _root in _placeholder_roots(_tmpl):
+                    if _root not in _in_names:
+                        raise WorkflowValidationError(
+                            f"Agent node {node.id!r}: prompt references {{{{ ${_root} }}}} but "
+                            f"{_root!r} is not a declared input port"
+                        )
         elif node.type == "human":
             if not node.signal:
                 raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
@@ -544,6 +588,15 @@ def validate_workflow(wf: WorkflowDef) -> None:
             raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
 
         src_outputs = _output_port_names(wf, edge.src, in_ports)
+        # Strict interpolation for a condition: every {{ $.x }} operand must root at
+        # an output port of the edge's source node (or a $in seed key).
+        if edge.when is not None:
+            for _root in _condition_operand_roots(edge.when):
+                if _root not in src_outputs:
+                    raise WorkflowValidationError(
+                        f"Edge {edge.src!r}->{edge.dst!r}: condition references {{{{ ${_root} }}}} but "
+                        f"{_root!r} is not an output port of {edge.src!r}"
+                    )
         # $output is a free-form sink: its destination "ports" are arbitrary output
         # keys, so only the source port must exist (no declared input ports to check,
         # and it never needs to be "fed").
