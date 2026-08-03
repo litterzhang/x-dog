@@ -20,7 +20,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import tempfile
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from flow.errors import WorkflowExecutionError
@@ -164,8 +167,13 @@ class CliAdapter(Protocol):
         system_prompt: str,
         output_schema: dict[str, object] | None,
         allowed_tools: tuple[str, ...],
+        scratch: Path,
     ) -> list[str]:
-        """Command-line args after the binary (prompt is fed on stdin)."""
+        """Command-line args after the binary (prompt is fed on stdin).
+
+        *scratch* is a per-turn temp directory an adapter may write files into
+        (e.g. codex's ``--output-schema`` file, MCP config); removed after the turn.
+        """
         ...
 
     def stdin(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -192,6 +200,7 @@ class ClaudeAdapter:
         system_prompt: str,
         output_schema: dict[str, object] | None,
         allowed_tools: tuple[str, ...],
+        scratch: Path,
     ) -> list[str]:
         args = ["-p", "--output-format", "json"]
         if model:
@@ -225,7 +234,82 @@ class ClaudeAdapter:
         raise WorkflowExecutionError("claude-cli: unexpected output (not a JSON object)")
 
 
-_CLI_ADAPTERS: dict[str, CliAdapter] = {a.name: a for a in (ClaudeAdapter(),)}
+class CodexAdapter:
+    """Adapter for the ``codex`` CLI (``codex exec``) in headless JSONL mode.
+
+    Differences the adapter absorbs vs claude: no system-prompt flag (folded into
+    the prompt), a schema *file* (``--output-schema FILE``) rather than a schema
+    string, and a JSONL event stream (parse the final ``agent_message`` item +
+    ``turn.completed`` usage) rather than a single JSON object.
+    """
+
+    name = "codex-cli"
+
+    def binary(self) -> str:
+        return "codex"
+
+    def argv(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        output_schema: dict[str, object] | None,
+        allowed_tools: tuple[str, ...],
+        scratch: Path,
+    ) -> list[str]:
+        args = ["exec", "--json", "--skip-git-repo-check"]
+        if model:
+            args += ["-m", model]
+        if output_schema is not None:
+            schema_file = scratch / "output_schema.json"
+            schema_file.write_text(json.dumps(output_schema, sort_keys=True), encoding="utf-8")
+            args += ["--output-schema", str(schema_file)]
+        # codex has no per-tool allow-list; capability is bounded by the sandbox.
+        # With no tools requested we keep the default read-only sandbox.
+        return args
+
+    def stdin(self, *, system_prompt: str, user_prompt: str) -> str:
+        # codex has no system-prompt flag — fold it into the prompt deterministically.
+        if system_prompt:
+            return f"{system_prompt}\n\n{user_prompt}"
+        return user_prompt
+
+    def parse(self, stdout: str, *, structured: bool) -> tuple[object, int]:
+        final_text: str | None = None
+        tokens = 0
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") == "item.completed":
+                item = ev.get("item")
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        final_text = text
+            elif ev.get("type") == "turn.completed":
+                usage = ev.get("usage")
+                if isinstance(usage, dict):
+                    _i = usage.get("input_tokens")
+                    _o = usage.get("output_tokens")
+                    tokens = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
+        if final_text is None:
+            raise WorkflowExecutionError("codex-cli: no agent_message in output")
+        if structured:
+            try:
+                return json.loads(final_text), tokens
+            except json.JSONDecodeError as exc:
+                raise WorkflowExecutionError(f"codex-cli: structured output is not valid JSON: {exc}") from exc
+        return final_text, tokens
+
+
+_CLI_ADAPTERS: dict[str, CliAdapter] = {a.name: a for a in (ClaudeAdapter(), CodexAdapter())}
 
 
 def cli_adapter_for(backend: str) -> CliAdapter:
@@ -263,30 +347,37 @@ class CliRunner:
     ) -> tuple[object, int]:
         structured = agent_is_structured(node)
         schema = agent_output_schema(node) if structured else None
-        argv = self._adapter.argv(
-            model=model,
-            system_prompt=system_prompt,
-            output_schema=schema,
-            allowed_tools=node.allowed_tools,
-        )
-        stdin_text = self._adapter.stdin(system_prompt=system_prompt, user_prompt=user_prompt)
-        binary = self._resolve_binary()
-
-        proc = await asyncio.create_subprocess_exec(
-            binary,
-            *argv,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        scratch = Path(tempfile.mkdtemp(prefix="flow-cli-"))
         try:
-            out_b, err_b = await asyncio.wait_for(proc.communicate(stdin_text.encode()), timeout=timeout)
-        except TimeoutError:
-            proc.kill()
-            raise WorkflowExecutionError(f"Node {node.id!r}: CLI {binary!r} timed out after {timeout}s") from None
-        if proc.returncode != 0:
-            err = err_b.decode(errors="replace").strip()
-            raise WorkflowExecutionError(
-                f"Node {node.id!r}: CLI {binary!r} exited {proc.returncode}: {err or '(no stderr)'}"
+            argv = self._adapter.argv(
+                model=model,
+                system_prompt=system_prompt,
+                output_schema=schema,
+                allowed_tools=node.allowed_tools,
+                scratch=scratch,
             )
-        return self._adapter.parse(out_b.decode(errors="replace"), structured=structured)
+            stdin_text = self._adapter.stdin(system_prompt=system_prompt, user_prompt=user_prompt)
+            binary = self._resolve_binary()
+
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                out_b, err_b = await asyncio.wait_for(proc.communicate(stdin_text.encode()), timeout=timeout)
+            except TimeoutError:
+                proc.kill()
+                raise WorkflowExecutionError(
+                    f"Node {node.id!r}: CLI {binary!r} timed out after {timeout}s"
+                ) from None
+            if proc.returncode != 0:
+                err = err_b.decode(errors="replace").strip()
+                raise WorkflowExecutionError(
+                    f"Node {node.id!r}: CLI {binary!r} exited {proc.returncode}: {err or '(no stderr)'}"
+                )
+            return self._adapter.parse(out_b.decode(errors="replace"), structured=structured)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)

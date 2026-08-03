@@ -203,3 +203,69 @@ sys.exit(3)
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, bad, name="bad_claude"))
     with pytest.raises(WorkflowExecutionError, match="exited 3: boom"):
         await execute(parse_workflow(_cli_wf()))
+
+
+# --- Phase 4: codex adapter ------------------------------------------------
+
+_FAKE_CODEX = '''#!/usr/bin/env python3
+import sys, json
+argv = sys.argv[1:]
+prompt = sys.stdin.read()
+schema_file = model = None
+i = 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--output-schema": schema_file = argv[i+1]; i += 2; continue
+    if a == "-m": model = argv[i+1]; i += 2; continue
+    i += 1
+if schema_file is not None:
+    props = json.loads(open(schema_file).read()).get("properties", {})
+    obj = {}
+    for k, v in props.items():
+        t = (v or {}).get("type", "string")
+        obj[k] = {"string":"S","integer":1,"number":1.0,"boolean":True,"array":[],"object":{}}.get(t,"S")
+    text = json.dumps(obj)
+else:
+    text = "CODEX|model=%s|prompt=%s" % (model, prompt.strip().replace(chr(10), "\\\\n"))
+# JSONL event stream
+print(json.dumps({"type": "thread.started"}))
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}))
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 9}}))
+'''
+
+
+def _codex_wf(**node_extra: Any) -> dict[str, Any]:
+    node = {"id": "a", "type": "agent", "backend": "codex-cli", "prompt": "hi", "outputs": ["out"]}
+    node.update(node_extra)
+    return {"name": "cx", "entry": "a", "nodes": [node],
+            "edges": [{"from": "a", "to": "$output", "map": {"out": "result"}}]}
+
+
+async def test_codex_text_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FLOW_CLI_BIN_CODEX_CLI", _install_fake_cli(tmp_path, _FAKE_CODEX, name="fake_codex"))
+    wf = parse_workflow(_codex_wf(model="gpt-5-codex"))
+    r = await execute(wf)
+    assert r.runtime["out"]["result"].startswith("CODEX|model=gpt-5-codex|")
+    assert r.runtime["tokens_used"] == 14  # 5 + 9 from JSONL usage
+
+
+async def test_codex_folds_system_prompt_into_prompt(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """codex has no system-prompt flag; the adapter folds it into stdin."""
+    monkeypatch.setenv("FLOW_CLI_BIN_CODEX_CLI", _install_fake_cli(tmp_path, _FAKE_CODEX, name="fake_codex"))
+    wf = parse_workflow(_codex_wf(system_prompt="You are terse.", prompt="ping"))
+    r = await execute(wf)
+    # the fake echoes the prompt; the system prompt must appear folded in
+    assert "You are terse." in r.runtime["out"]["result"]
+    assert "ping" in r.runtime["out"]["result"]
+
+
+async def test_codex_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FLOW_CLI_BIN_CODEX_CLI", _install_fake_cli(tmp_path, _FAKE_CODEX, name="fake_codex"))
+    d = {
+        "name": "s", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "backend": "codex-cli", "prompt": "plan",
+                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
+    }
+    r = await execute(parse_workflow(d))
+    assert r.runtime["out"] == {"title": "S", "n": 1}
