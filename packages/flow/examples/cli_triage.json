@@ -1,0 +1,44 @@
+{
+  "name": "cli-triage",
+  "entry": "classify",
+  "state": {
+    "report": "The checkout page throws a 500 error when the cart has more than 20 items."
+  },
+  "nodes": [
+    {
+      "id": "classify",
+      "type": "agent",
+      "backend": "claude-cli",
+      "model": "sonnet",
+      "inputs": [
+        {"name": "report", "type": "string"}
+      ],
+      "system_prompt": "You are a bug triager. Classify a bug report crisply.",
+      "prompt": "Classify this bug report:\n\n{{$.report}}\n\nFields:\n- severity: one of low, medium, high, critical\n- area: the affected subsystem in one or two words\n- summary: a one-sentence restatement",
+      "outputs": [
+        {"name": "severity", "type": "string"},
+        {"name": "area", "type": "string"},
+        {"name": "summary", "type": "string"}
+      ]
+    },
+    {
+      "id": "route",
+      "type": "script",
+      "inputs": [
+        {"name": "severity", "type": "string"},
+        {"name": "area", "type": "string"},
+        {"name": "summary", "type": "string"}
+      ],
+      "code": "def route(ctx, severity, area, summary):\n    order = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}\n    return {\n        'ticket': f'[{severity.upper()}] {area}: {summary}',\n        'page_oncall': order.get(severity.lower(), 0) >= 2,\n    }",
+      "outputs": [
+        {"name": "triage", "type": "object"}
+      ]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "classify", "map": {"report": "report"}},
+    {"from": "classify", "to": "route", "map": {"severity": "severity", "area": "area", "summary": "summary"}},
+    {"from": "classify", "to": "$output", "map": {"severity": "severity", "area": "area"}},
+    {"from": "route", "to": "$output", "map": {"triage": "triage"}}
+  ]
+}

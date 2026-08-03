@@ -1,7 +1,8 @@
 # flow — CLI Agent Backend + flow-as-a-Skill
 
-Status: draft · Audience: flow maintainers · Prerequisite: skim `subflow.md` for
-the "seam, not rewrite" discipline this doc follows.
+Status: **v1 shipped** (bundle slim-down deferred — see §10) · Audience: flow
+maintainers · Prerequisite: skim `subflow.md` for the "seam, not rewrite"
+discipline this doc follows.
 
 Today a flow **agent node** runs through the in-process `agent` + `ai` SDK, which
 means a workflow must be configured with a **provider** (model + API key). This doc
@@ -327,18 +328,23 @@ skill mechanism. The skill's own authoring is a separate, doc-heavy task tracked
 
 ## 9. Dependency reduction (the payoff)
 
-- **Interpreter**: the CLI runner imports no `agent`/`ai` — only `asyncio`
-  subprocess + `json`. `execute()` over a pure-CLI workflow touches neither package.
-- **Codegen**: a CLI agent node compiles to a `subprocess.run([...])` + `json.loads`,
-  so the generated module **does not inline `agent`/`ai`** for that node. A pure-CLI
-  workflow's `--portable` bundle drops the `ai`/`agent` vendoring (`_VENDORED_PACKAGES`
-  becomes empty, or just `flow` if a subflow is present).
-- **No provider config.** A pure-CLI workflow carries no API key and no provider —
-  the lib's configuration burden disappears for that case.
+**Status: partially shipped.**
+
+- **Interpreter (done)**: the CLI runner imports no `agent`/`ai` — only `asyncio`
+  subprocess + `json`. `execute()` over a pure-CLI workflow builds no SDK wiring and
+  needs no provider.
+- **No provider config (done)**: a pure-CLI workflow carries no API key and no
+  provider — the lib's configuration burden disappears for that case.
+- **Codegen/bundle slim-down (deferred)**: a generated module still imports
+  `agent`/`ai` at the top today (the template's SDK helper block is unconditional),
+  so a pure-CLI `--portable` bundle still vendors them. Dropping it needs a
+  conditional-import template refactor — emit the SDK imports + `ToolRegistry` +
+  `_run_agent` block only when the workflow has an SDK agent node. Tracked as a
+  follow-up.
 - **Unchanged**: script nodes, scheduler, checkpoint, fan-out, subflow, wire format.
 
-A mixed workflow still vendors `agent`/`ai` for its SDK nodes; the lean case is
-pure-CLI.
+A mixed workflow vendors `agent`/`ai` for its SDK nodes regardless; the fully-lean
+pure-CLI bundle arrives with the deferred refactor.
 
 ---
 
