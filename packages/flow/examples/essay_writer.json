@@ -1,0 +1,105 @@
+{
+  "name": "essay-writer",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "state": {
+    "question": "Should cities replace on-street parking with protected bike lanes?"
+  },
+  "nodes": [
+    {
+      "id": "brief",
+      "type": "agent",
+      "inputs": [
+        {"name": "question", "type": "string"}
+      ],
+      "system_prompt": "You are an essay strategist. Turn a question into a tight argumentative brief.",
+      "prompt": "Question: {{$.question}}\n\nProduce a brief for a short persuasive essay.\nFields:\n- thesis: one sentence stating the position the essay will argue\n- key_points: an array of exactly 3 short strings, each a supporting argument",
+      "outputs": [
+        {"name": "thesis", "type": "string"},
+        {"name": "key_points", "type": "array"}
+      ]
+    },
+    {
+      "id": "compose",
+      "type": "subflow",
+      "subflow": {
+        "name": "draft-critique-revise",
+        "provider": "copilot",
+        "defaults": {
+          "model": "claude-sonnet-4.6"
+        },
+        "state": {
+          "thesis": "",
+          "points": []
+        },
+        "nodes": [
+          {
+            "id": "draft",
+            "type": "agent",
+            "inputs": [
+              {"name": "thesis", "type": "string"},
+              {"name": "points", "type": "array"}
+            ],
+            "system_prompt": "You are an essayist. Write a single tight paragraph (120-160 words).",
+            "prompt": "Thesis: {{$.thesis}}\n\nSupporting points:\n- {{$.points[0]}}\n- {{$.points[1]}}\n- {{$.points[2]}}\n\nWrite one persuasive paragraph arguing the thesis, weaving in the points. Reply with ONLY the paragraph.",
+            "outputs": ["essay_draft"]
+          },
+          {
+            "id": "critique",
+            "type": "agent",
+            "inputs": [
+              {"name": "essay_draft", "type": "string"}
+            ],
+            "system_prompt": "You are a demanding writing critic. Score rigor and clarity from 0 to 10.",
+            "prompt": "Critique this paragraph:\n\n{{$.essay_draft}}\n\nFields:\n- score: a number from 0 to 10 for overall persuasiveness and clarity\n- feedback: one sentence naming the single most important improvement",
+            "outputs": [
+              {"name": "score", "type": "number"},
+              {"name": "feedback", "type": "string"}
+            ]
+          },
+          {
+            "id": "revise",
+            "type": "agent",
+            "inputs": [
+              {"name": "essay_draft", "type": "string"},
+              {"name": "feedback", "type": "string"}
+            ],
+            "system_prompt": "You are an essayist revising to address one specific critique.",
+            "prompt": "Draft:\n{{$.essay_draft}}\n\nApply this feedback, changing nothing else: {{$.feedback}}\n\nReply with ONLY the improved paragraph.",
+            "outputs": ["final_essay"]
+          }
+        ],
+        "edges": [
+          {"from": "$in", "to": "draft", "map": {"thesis": "thesis", "points": "points"}},
+          {"from": "draft", "to": "critique", "map": {"essay_draft": "essay_draft"}},
+          {"from": "draft", "to": "revise", "map": {"essay_draft": "essay_draft"}},
+          {"from": "critique", "to": "revise", "map": {"feedback": "feedback"}},
+          {"from": "revise", "to": "$output", "map": {"final_essay": "final_essay"}},
+          {"from": "critique", "to": "$output", "map": {"score": "score"}}
+        ]
+      }
+    },
+    {
+      "id": "wrap",
+      "type": "script",
+      "inputs": [
+        {"name": "final_essay", "type": "string"},
+        {"name": "score", "type": "number"}
+      ],
+      "code": "def wrap(ctx, final_essay, score):\n    return {\n        'word_count': len(final_essay.split()),\n        'critic_score': score,\n        'passed_review': score >= 7,\n    }",
+      "outputs": [
+        {"name": "report", "type": "object"}
+      ]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "brief", "map": {"question": "question"}},
+    {"from": "brief", "to": "compose", "map": {"thesis": "thesis", "key_points": "points"}},
+    {"from": "compose", "to": "wrap", "map": {"final_essay": "final_essay", "score": "score"}},
+    {"from": "brief", "to": "$output", "map": {"thesis": "thesis"}},
+    {"from": "compose", "to": "$output", "map": {"final_essay": "essay"}},
+    {"from": "wrap", "to": "$output", "map": {"report": "report"}}
+  ]
+}
