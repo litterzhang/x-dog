@@ -9,6 +9,7 @@ import importlib
 import inspect
 import json
 import logging
+import re
 import sys
 import time
 from collections import defaultdict
@@ -76,6 +77,24 @@ def _memo_key(node_id: str, ins: dict[str, object]) -> str:
     """
     digest = hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()
     return f"{node_id}:{digest}"
+
+
+def _mapping_root(sport: str) -> str:
+    """Root output-port name of a mapping source key (mirrors loader._jsonpath_root).
+
+    ``$.plan.tasks`` -> ``plan``; a bare ``tasks`` -> ``tasks``.  Used to spot the
+    fan_out array port among a fan-out edge's mapping sources.
+    """
+    body = sport[2:] if sport.startswith("$.") else (sport[1:] if sport.startswith("$") else sport)
+    return re.split(r"[.\[]", body, maxsplit=1)[0]
+
+
+def _incoming_fan_out_edge(node_id: str, in_edges: Mapping[str, list[EdgeDef]]) -> EdgeDef | None:
+    """The single fan_out edge feeding *node_id*, or None (the loader forbids >1)."""
+    for edge in in_edges.get(node_id, []):
+        if edge.fan_out is not None:
+            return edge
+    return None
 
 
 def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
@@ -361,6 +380,87 @@ async def execute(
         except Exception:
             pass
 
+    async def _fan_instance(
+        node: NodeDef, node_id: str, ins: dict[str, object], step: int
+    ) -> tuple[dict[str, object], int]:
+        """Run ONE fan-out instance's core work; return (output-port dict, tokens).
+
+        Pure w.r.t. the run store — no storing, no events, no retry.  Reuses the
+        same pure node functions as the non-fan path so a worker behaves identically
+        whether or not it is fanned.
+        """
+        if node.type == "script":
+            out = await _node_script(node, node_id, ins, step)
+            return out, 0
+        value, tokens = await _node_agent(node, node_id, ins)
+        # Project the agent's returned value into its output-port dict (same rule
+        # as _store_agent_output, but pure — returns instead of mutating outputs).
+        projected: dict[str, object] = {}
+        if node.output_ports:
+            if agent_is_structured(node) and len(node.output_ports) > 1:
+                if not isinstance(value, dict):
+                    raise WorkflowExecutionError(
+                        f"Node {node_id!r}: multi-output agent must submit an object, "
+                        f"got {type(value).__name__}"
+                    )
+                for p in node.output_ports:
+                    if p.name not in value:
+                        raise WorkflowExecutionError(f"Node {node_id!r}: submitted result is missing field {p.name!r}")
+                    projected[p.name] = to_state(value[p.name], p.type)
+            else:
+                projected[node.output_ports[0].name] = value
+        return projected, tokens
+
+    async def _run_fan_node(node: NodeDef, node_id: str, fan_edge: EdgeDef) -> None:
+        """Run *node* once per element of the fan_out source array (G1).
+
+        Aggregates each output port across instances into an index-ordered list and
+        stores it under the single ``node_id`` — so the scheduler, trace (one frame),
+        and checkpoint (one completed id) are unchanged.  The worker's instances run
+        fully in parallel (matching codegen's ``asyncio.gather``); the fan node holds
+        one outer concurrency slot, its instances do not re-acquire it.
+        """
+        nonlocal tokens_used
+        async with _state_lock:
+            shared = _build_inputs(node_id)
+        # The fan_out array lives on the source node's output port named by the
+        # mapping whose root is fan_edge.fan_out; that mapping's dst is the worker's
+        # per-element input port.
+        src_ports = _source_ports(fan_edge.src)
+        items: list[object] = []
+        worker_port = ""
+        for sport, dport in fan_edge.mapping:
+            if _mapping_root(sport) == fan_edge.fan_out:
+                raw = jsonpath_get(src_ports, sport)
+                items = list(raw) if isinstance(raw, (list, tuple)) else []
+                worker_port = dport
+                break
+
+        step = await _reserve_step()
+        _emit(NodeStarted(node_id=node_id, step=step))
+        _t0 = time.monotonic()
+
+        async def _one(i: int) -> tuple[dict[str, object], int]:
+            ins_i = {**shared, worker_port: items[i]}
+            return await _fan_instance(node, node_id, ins_i, step)
+
+        results = await asyncio.gather(*[_one(i) for i in range(len(items))])
+
+        # Aggregate: each output port becomes an index-ordered list of per-instance values.
+        agg: dict[str, object] = {p.name: [r[0].get(p.name) for r in results] for p in node.output_ports}
+        total_tokens = sum(r[1] for r in results)
+        async with _state_lock:
+            outputs[node_id] = agg
+        # One trace frame for the whole fan (its 'in' shows the fanned array).
+        await _record_frame(node_id, {worker_port: items} if worker_port else {}, step)
+        async with _state_lock:
+            tokens_used += total_tokens
+        completed.add(node_id)
+        _save_checkpoint()
+        _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=total_tokens))
+        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
+            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
+
     async def _run_node(node_id: str) -> None:
         """Execute a single node and store its output ports."""
         # Skip nodes already completed (resume from checkpoint).
@@ -368,6 +468,13 @@ async def execute(
             return
         node = node_map[node_id]
 
+        # Dynamic fan-out (G1): if a fan_out edge feeds this node, run it once per
+        # element of the source array and aggregate each output port into an
+        # index-ordered list.  From the scheduler's view this is still ONE node.
+        _fan_edge = _incoming_fan_out_edge(node_id, in_edges)
+        if _fan_edge is not None:
+            await _run_fan_node(node, node_id, _fan_edge)
+            return
         async with _state_lock:
             ins = _build_inputs(node_id)
 

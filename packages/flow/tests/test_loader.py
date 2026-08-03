@@ -1036,3 +1036,109 @@ def test_strict_condition_operand_unknown_root_fails() -> None:
     wf = parse_workflow(data)
     with pytest.raises(WorkflowValidationError, match="is not an output port"):
         validate_workflow(wf)
+
+
+# --- Dynamic fan-out (G1) --------------------------------------------------
+
+
+def _map_reduce_wf(mutate=None) -> dict:
+    """A valid map-reduce workflow: plan -> (fan_out) work -> (fan_in) merge."""
+    data = {
+        "name": "mr",
+        "provider": "copilot",
+        "entry": "plan",
+        "state": {"topic": "x"},
+        "nodes": [
+            {
+                "id": "plan",
+                "type": "script",
+                "inputs": ["topic"],
+                "code": "def p(ctx, topic):\n    return [topic + str(i) for i in range(3)]",
+                "outputs": [{"name": "tasks", "schema": {"type": "array", "items": {"type": "string"}}}],
+            },
+            {"id": "work", "type": "agent", "prompt": "do {{task}}", "inputs": ["task"], "outputs": ["res"]},
+            {
+                "id": "merge",
+                "type": "script",
+                "inputs": [{"name": "results", "schema": {"type": "array", "items": {"type": "string"}}}],
+                "code": "def m(ctx, results):\n    return ','.join(results)",
+                "outputs": ["summary"],
+            },
+        ],
+        "edges": [
+            {"from": "$in", "to": "plan", "map": {"topic": "topic"}},
+            {"from": "plan", "to": "work", "fan_out": "tasks", "map": {"tasks": "task"}},
+            {"from": "work", "to": "merge", "fan_in": "list", "map": {"res": "results"}},
+            {"from": "merge", "to": "$output", "map": {"summary": "summary"}},
+        ],
+    }
+    if mutate is not None:
+        mutate(data)
+    return data
+
+
+def test_fan_out_map_reduce_validates() -> None:
+    validate_workflow(parse_workflow(_map_reduce_wf()))  # no raise
+
+
+def test_fan_out_edge_fields_parsed() -> None:
+    wf = parse_workflow(_map_reduce_wf())
+    fo = next(e for e in wf.edges if e.src == "plan" and e.dst == "work")
+    fi = next(e for e in wf.edges if e.src == "work" and e.dst == "merge")
+    assert fo.fan_out == "tasks" and fo.fan_in is None
+    assert fi.fan_in == "list" and fi.fan_out is None
+
+
+def test_fan_out_on_non_array_port_raises() -> None:
+    def mut(d: dict) -> None:
+        d["nodes"][0]["outputs"] = ["tasks"]  # plain string, not array
+
+    with pytest.raises(WorkflowValidationError, match="must be an array output"):
+        validate_workflow(parse_workflow(_map_reduce_wf(mut)))
+
+
+def test_fan_out_element_type_mismatch_raises() -> None:
+    def mut(d: dict) -> None:
+        # items are integers but the worker's input port is a string
+        d["nodes"][0]["outputs"] = [{"name": "tasks", "schema": {"type": "array", "items": {"type": "integer"}}}]
+        d["nodes"][1]["inputs"] = [{"name": "task", "type": "string"}]
+
+    with pytest.raises(WorkflowValidationError, match="type mismatch"):
+        validate_workflow(parse_workflow(_map_reduce_wf(mut)))
+
+
+def test_fan_in_from_non_worker_raises() -> None:
+    def mut(d: dict) -> None:
+        d["edges"][1].pop("fan_out")  # work no longer a fan-out worker
+
+    # Removing fan_out makes the plan->work edge a plain array->string mismatch;
+    # fix the worker input to array so the fan_in-source check is what fires.
+    def mut2(d: dict) -> None:
+        d["edges"][1].pop("fan_out")
+        d["nodes"][1]["inputs"] = [{"name": "task", "schema": {"type": "array"}}]
+
+    with pytest.raises(WorkflowValidationError, match="is not a fan-out worker"):
+        validate_workflow(parse_workflow(_map_reduce_wf(mut2)))
+
+
+def test_fan_out_worker_in_loop_raises() -> None:
+    def mut(d: dict) -> None:
+        d["edges"].append({"from": "work", "to": "work", "loop": {"max": 2}, "map": {"res": "task"}})
+
+    with pytest.raises(WorkflowValidationError, match="bounded loop"):
+        validate_workflow(parse_workflow(_map_reduce_wf(mut)))
+
+
+def test_fan_in_bad_reducer_raises() -> None:
+    def mut(d: dict) -> None:
+        d["edges"][2]["fan_in"] = "concat"
+
+    with pytest.raises(WorkflowValidationError, match="fan_in must be 'list'"):
+        parse_workflow(_map_reduce_wf(mut))
+
+
+def test_fan_out_roundtrips() -> None:
+    from flow.builder.serialize import workflow_to_dict
+
+    wf = parse_workflow(_map_reduce_wf())
+    assert parse_workflow(workflow_to_dict(wf)) == wf

@@ -288,16 +288,43 @@ def _retry_spec(node: NodeDef, wf: WorkflowDef) -> str:
     )
 
 
+def _incoming_fan_out_edge(node_id: str, wf: WorkflowDef) -> EdgeDef | None:
+    """The single fan_out edge feeding *node_id*, or None (loader forbids >1)."""
+    for e in wf.edges:
+        if e.dst == node_id and e.fan_out is not None:
+            return e
+    return None
+
+
+def _fan_worker_port(edge: EdgeDef) -> str:
+    """The worker input port that receives one array element (the fan_out mapping's dst)."""
+    for sport, dport in edge.mapping:
+        head = sport[2:] if sport.startswith("$.") else (sport[1:] if sport.startswith("$") else sport)
+        head = re.split(r"[.\[]", head, maxsplit=1)[0]
+        if head == edge.fan_out:
+            return dport
+    return ""
+
+
 def _invoke_expr(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """The awaitable expression that runs one node from the scheduler.
 
     Script/agent nodes go through the generic ``_drive`` (guards, inputs, retry,
-    store, memo, budget, checkpoint, isolation); a human node stays a
-    self-contained call (it pauses via SystemExit and doesn't fit the driver)."""
+    store, memo, budget, checkpoint, isolation); a fan-out worker goes through
+    ``_drive_fan`` (run once per array element, aggregate ports into lists); a
+    human node stays a self-contained call (it pauses via SystemExit)."""
     node = next(n for n in wf.nodes if n.id == node_id)
     safe = safe_ids[node_id]
     if node.type == "human":
         return f"node_{safe}(provider)"
+    fan_edge = _incoming_fan_out_edge(node_id, wf)
+    if fan_edge is not None:
+        fan_port = _fan_worker_port(fan_edge)
+        out_ports = tuple(p.name for p in node.output_ports)
+        return (
+            f"_drive_fan({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
+            f"{fan_port!r}, {out_ports!r})"
+        )
     return (
         f'_drive({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, {_retry_spec(node, wf)})'
     )

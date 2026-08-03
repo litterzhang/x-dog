@@ -180,12 +180,27 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
         mapping = tuple((str(s), str(d)) for s, d in raw_map.items())
     else:
         mapping = ()
+    fan_out: str | None = None
+    raw_fan_out = data.get("fan_out")
+    if raw_fan_out is not None:
+        fan_out = str(raw_fan_out)
+    fan_in: Literal["list"] | None = None
+    raw_fan_in = data.get("fan_in")
+    if raw_fan_in is not None:
+        if raw_fan_in != "list":
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: fan_in must be 'list',"
+                f" got {raw_fan_in!r}"
+            )
+        fan_in = "list"
     return EdgeDef(
         src=str(data["from"]),
         dst=str(data["to"]),
         mapping=mapping,
         when=when,
         loop_max=loop_max,
+        fan_out=fan_out,
+        fan_in=fan_in,
     )
 
 
@@ -462,6 +477,60 @@ def _detect_cycle(wf: WorkflowDef) -> list[str] | None:
     return None
 
 
+def _validate_fan_out_edge(
+    wf: WorkflowDef,
+    edge: EdgeDef,
+    src_outputs: set[str],
+    loop_touched: set[str],
+) -> None:
+    """Validate a ``fan_out`` edge (G1): the named source port must be an ARRAY
+    output; the worker must not be a loop node or itself a fan-out worker (no
+    nesting); the array must be one of the edge's mapping sources."""
+    assert edge.fan_out is not None
+    label = f"Edge {edge.src!r}->{edge.dst!r}"
+    if edge.fan_out not in src_outputs:
+        raise WorkflowValidationError(
+            f"{label}: fan_out names {edge.fan_out!r} which is not an output port of {edge.src!r}"
+        )
+    # The fan_out port must be declared as an array on a real node source
+    # ($in seeds are untyped and can't drive a typed fan-out).
+    if edge.src == IN_NODE_ID:
+        raise WorkflowValidationError(f"{label}: fan_out from {IN_NODE_ID} is not supported (untyped seed)")
+    src_schemas = _output_port_schemas(wf, edge.src)
+    src_schema = src_schemas.get(edge.fan_out, {})
+    if src_schema.get("type") != "array":
+        raise WorkflowValidationError(
+            f"{label}: fan_out port {edge.fan_out!r} must be an array output, "
+            f"got type {src_schema.get('type', 'string')!r}"
+        )
+    # The fan_out port must appear as a mapping source (its elements feed the worker).
+    if edge.fan_out not in {_jsonpath_root(s)[0] for s, _ in edge.mapping}:
+        raise WorkflowValidationError(
+            f"{label}: fan_out port {edge.fan_out!r} must be mapped to a worker input port"
+        )
+    # v1 scope guards: no worker inside a loop, no fan_out on a loop back-edge, no nesting.
+    if edge.loop_max is not None:
+        raise WorkflowValidationError(f"{label}: a fan_out edge may not be a bounded loop back-edge")
+    if edge.dst in loop_touched:
+        raise WorkflowValidationError(
+            f"{label}: fan-out worker {edge.dst!r} may not also be part of a bounded loop (v1)"
+        )
+    if any(e.fan_out is not None and e.dst == edge.src for e in wf.edges):
+        raise WorkflowValidationError(
+            f"{label}: nested fan-out is not supported (v1) — {edge.src!r} is itself a fan-out worker"
+        )
+
+
+def _validate_fan_in_edge(edge: EdgeDef, fan_out_workers: set[str]) -> None:
+    """Validate a ``fan_in`` edge (G1): its source must be a fan-out worker."""
+    assert edge.fan_in is not None
+    if edge.src not in fan_out_workers:
+        raise WorkflowValidationError(
+            f"Edge {edge.src!r}->{edge.dst!r}: fan_in source {edge.src!r} is not a fan-out worker "
+            f"(no incoming fan_out edge feeds it)"
+        )
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
     node_ids = [n.id for n in wf.nodes]
@@ -577,6 +646,13 @@ def validate_workflow(wf: WorkflowDef) -> None:
     # two producers can't silently target the same port (the old shared-key clash).
     fed: dict[tuple[str, str], int] = {}
     unconditional_fed: dict[tuple[str, str], int] = {}
+    # Dynamic fan-out (G1) topology: a fan-out worker is the dst of a fan_out edge;
+    # loop_touched nodes appear on either end of a bounded-loop edge.  Used to reject
+    # a worker inside a loop, nested fan-out, and a fan_in whose src isn't a worker.
+    fan_out_workers = {e.dst for e in wf.edges if e.fan_out is not None}
+    loop_touched = {e.src for e in wf.edges if e.loop_max is not None} | {
+        e.dst for e in wf.edges if e.loop_max is not None
+    }
     for edge in wf.edges:
         if edge.src == OUT_NODE_ID:
             raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")
@@ -597,6 +673,12 @@ def validate_workflow(wf: WorkflowDef) -> None:
                         f"Edge {edge.src!r}->{edge.dst!r}: condition references {{{{ ${_root} }}}} but "
                         f"{_root!r} is not an output port of {edge.src!r}"
                     )
+
+        # Dynamic fan-out (G1) edge-shape validation.
+        if edge.fan_out is not None:
+            _validate_fan_out_edge(wf, edge, src_outputs, loop_touched)
+        if edge.fan_in is not None:
+            _validate_fan_in_edge(edge, fan_out_workers)
         # $output is a free-form sink: its destination "ports" are arbitrary output
         # keys, so only the source port must exist (no declared input ports to check,
         # and it never needs to be "fed").
@@ -636,8 +718,17 @@ def validate_workflow(wf: WorkflowDef) -> None:
             # destination input type.  $in seeds are untyped (absent from
             # src_types/src_schemas) so edges out of $in are exempt.
             if dport in dst_types and (head in src_types or head in src_schemas):
-                if not subpath:
-                    src_type: str | None = src_types.get(head)
+                src_type: str | None
+                if edge.fan_in is not None:
+                    # fan_in (G1): the worker's port is aggregated into a list at
+                    # runtime, so the destination must accept an array.
+                    src_type = "array"
+                elif edge.fan_out is not None and head == edge.fan_out and not subpath:
+                    # fan_out (G1): the worker consumes ONE array element, so the
+                    # element (items) type must match — not the array itself.
+                    src_type = _schema_subtype(src_schemas[head], ["[]"]) if head in src_schemas else None
+                elif not subpath:
+                    src_type = src_types.get(head)
                 else:
                     # 2b-2: descend the source port's schema along the JSONPath tail
                     # to find the sub-field type.  An un-typable path (wildcard,

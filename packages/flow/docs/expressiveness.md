@@ -33,7 +33,7 @@ is: **which of these are worth relaxing, and what does each cost the
 ### G1 — No dynamic fan-out (can't map a node over a runtime-sized list)
 
 **This is the only capability-level gap. Everything else is convenience or
-correctness.**
+correctness.** **→ SHIPPED (v1, Strategy A). See [`fan-out.md`](./fan-out.md).**
 
 Today a loop is a back-edge with a compile-time bound:
 
@@ -105,6 +105,11 @@ is expressible in generated Python. The real cost is everywhere else:
 long as the reduce order is defined (instance index order) and instance ids are
 identical across engines. This is the one gap that deserves its own design doc
 before code.
+
+> **Design doc:** [`fan-out.md`](./fan-out.md) resolves the instance-identity and
+> reduce-semantics questions and picks the smallest-blast-radius strategy
+> (fan group as a single scheduler node, dynamic count confined to one node's
+> execution) so the static-graph property — and `interpret == compile` — holds.
 
 ---
 
@@ -296,7 +301,9 @@ ramifications.
 - G1: `fan_out` / `fan_in` edges; instance-keyed trace, state, and checkpoint;
   `gather`-based codegen; a `map-reduce` integration test that both engines must
   pass. **Do not start before the design doc resolves instance-id and reduce
-  semantics.**
+  semantics.** → resolved in [`fan-out.md`](./fan-out.md); **v1 shipped
+  (Strategy A)**: `fan_out`/`fan_in` edges, `_run_fan_node` + `_drive_fan`,
+  cross-engine parity for `N ∈ {0,1,3}` in `tests/test_fan_out.py`.
 - G4 rides on G1 + G3: once instances carry structured ports and interpolation
   can reach nested fields, agent→agent structured data is mostly free.
 

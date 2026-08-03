@@ -140,6 +140,15 @@ class EdgeDef:
     mapping: tuple[tuple[str, str], ...] = ()
     when: Condition | None = None
     loop_max: int | None = None
+    # Dynamic fan-out (G1). On a src->worker edge, ``fan_out`` names the source
+    # ARRAY output port whose elements are mapped one-per-instance: the worker
+    # node runs once per element (in parallel) and each of its output ports is
+    # aggregated into an index-ordered list stored in the worker's own port.
+    # On a worker->collector edge, ``fan_in="list"`` marks that the mapped source
+    # port already holds that aggregated list (a load-time type-lift marker;
+    # runtime treats the edge as a plain mapping).  See docs/fan-out.md.
+    fan_out: str | None = None
+    fan_in: Literal["list"] | None = None
 
 
 @dataclass(frozen=True)

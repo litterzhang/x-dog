@@ -522,6 +522,48 @@ async def _drive(
         raise
 
 
+async def _drive_fan(
+    node_id: str,
+    node_fn: "Callable[..., Awaitable[tuple[dict[str, object], int]]]",
+    inputs_fn: "Callable[[], dict[str, object]]",
+    store_fn: "Callable[[dict[str, object], dict[str, object]], None]",
+    fan_port: str,
+    out_ports: tuple[str, ...],
+) -> None:
+    """Dynamic fan-out driver (G1): run *node_fn* once per element of the array in
+    ``ins[fan_port]`` and aggregate each output port into an index-ordered list.
+
+    From the scheduler's view this is still ONE node (one completed id, one frame,
+    one checkpoint entry).  Mirrors the interpreter's ``_run_fan_node``.
+    """
+    global _TOKENS_USED
+    if node_id in _COMPLETED or node_id in _ISOLATED:
+        return
+    ins = inputs_fn()
+    _raw = ins.get(fan_port)
+    _items: list[object] = list(_raw) if isinstance(_raw, (list, tuple)) else []
+    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+    _t0 = time.monotonic()
+    _ctx = RuntimeContext(step=len(_STACK), node_id=node_id, workflow_name=_WORKFLOW_NAME)
+
+    async def _one(_x: object) -> tuple[dict[str, object], int]:
+        return await node_fn(provider=_PROVIDER, ctx=_ctx, **{**ins, fan_port: _x})
+
+    _results = await asyncio.gather(*[_one(_x) for _x in _items])
+    _agg: dict[str, object] = {_p: [r[0].get(_p) for r in _results] for _p in out_ports}
+    _tokens = sum(r[1] for r in _results)
+    store_fn(ins, _agg)
+    _TOKENS_USED += _tokens
+    _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
+    _COMPLETED.add(node_id)
+    _save_checkpoint()
+    _EVENT_LOG.info(
+        "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0
+    )
+    if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
+        raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
+
+
 $node_functions
 
 

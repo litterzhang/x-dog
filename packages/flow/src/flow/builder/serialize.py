@@ -84,6 +84,10 @@ def _edge_to_dict(edge: EdgeDef) -> dict[str, Any]:
         data["when"] = _condition_to_dict(edge.when)
     if edge.loop_max is not None:
         data["loop"] = {"max": edge.loop_max}
+    if edge.fan_out is not None:
+        data["fan_out"] = edge.fan_out
+    if edge.fan_in is not None:
+        data["fan_in"] = edge.fan_in
     return data
 
 
