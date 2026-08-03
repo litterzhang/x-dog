@@ -150,11 +150,44 @@ Every subcommand accepts a `.json` workflow or a `.svg` with the JSON embedded.
   - `-v / --verbose` — Show flow's DEBUG logs — node execution and loop firing.
 - **`xdog-flow generate <config>`** — Compile the workflow to a standalone Python module.
   - `-o / --output FILE` — Write to a file instead of stdout.
-  - `--portable -o DIR` — Emit a self-contained bundle (vendored `ai`/`agent`, pinned deps); `--offline` also downloads wheels for a no-network install.
+  - `--portable -o DIR` — Emit a self-contained bundle; `ai`/`agent` are vendored only when an SDK agent node needs them (a pure-CLI/script bundle drops them), and `--offline` also downloads wheels for a no-network install.
 - **`xdog-flow graph <config>`** — Render the workflow graph.
   - `--mermaid` — Emit a Mermaid flowchart.
   - `--svg` — Emit an SVG document with the workflow JSON embedded.
 - **`xdog-flow build <config>`** — Open the interactive TUI builder (created if the file is missing).
+- **`xdog-flow install <config>`** — Build a portable bundle and install a scheduler (Linux/systemd) for a workflow with a `schedule` block.
+  - `--dry-run` — Print the systemd units and actions without touching the OS.
+  - `--name NAME` — Install name (default: the workflow name).
+  - `--list` — List installed scheduled workflows.
+  - `--delete NAME` — Uninstall one (units + bundle + registry entry).
+
+### CLI agent nodes
+
+An agent node may set `"backend": "claude-cli"` or `"codex-cli"` to run its turn by
+shelling out to a coding-agent CLI instead of the in-process SDK:
+
+- **No provider** — the CLI owns auth; a workflow whose agent nodes are all
+  CLI-backed omits `provider` (it is required only for an SDK agent node).
+- **`allowed_tools`** — a list that NARROWS the CLI's own tools (built-ins like
+  `"Read"`, or MCP tools `"mcp__server__tool"`); `[]` = no tools, tightest sandbox.
+- **`mcp_servers`** — an opaque per-server spec flow converts into the CLI's MCP
+  config, with `${ENV_VAR}` secret interpolation (the JSON carries the reference,
+  never the token).
+- The CLI binary is found on `PATH`; `FLOW_CLI_BIN` (or `FLOW_CLI_BIN_CLAUDE_CLI`)
+  overrides it. Both engines shell the same command, so `interpret == compile` holds.
+
+### Scheduling
+
+A top-level `schedule` block makes a workflow fire on its own (config for
+`xdog-flow install`; the engine ignores it):
+
+- **`{"mode": "timer", "every": "15m"}`** or `{"mode": "timer", "cron": "0 9 * * 1-5"}`
+  — a systemd user timer (or crontab fallback) runs the bundle on schedule.
+- **`{"mode": "hook", "signal": "s", "listen": {"type": "http", "path": "/hooks/x", "port": 8787}}`**
+  — an external event delivers `signal` to a fresh run (routed by one shared,
+  systemd-supervised listener). Pair it with a `human` node on the same signal.
+
+Every firing is an independent `python <bundle>` run — the engine is unchanged.
 
 ### Generated-module run-time overrides
 
@@ -166,6 +199,8 @@ regenerating — parity with `run`'s flags:
 - `FLOW_PROVIDER=openai` — override the provider (mirrors `--provider`).
 - `FLOW_MAX_TOKENS=100000` — abort once cumulative agent tokens pass the ceiling.
 - `FLOW_RUN_ID` + `FLOW_CHECKPOINT_DIR` — enable checkpoint/resume.
+- `FLOW_SIGNALS=go,ready` — deliver human-node signals (how a hook run passes its gate).
+- `FLOW_CLI_BIN` (or `FLOW_CLI_BIN_CLAUDE_CLI`) — override the CLI binary a CLI agent node shells out to.
 
 ## Validated before it runs
 

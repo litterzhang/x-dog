@@ -1,0 +1,106 @@
+{
+  "name": "essay-writer",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "state": {
+    "question": "Should cities replace on-street parking with protected bike lanes?"
+  },
+  "nodes": [
+    {
+      "id": "brief",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "question",
+          "type": "string"
+        }
+      ],
+      "system_prompt": "You are an essay strategist. Turn a question into a tight argumentative brief.",
+      "prompt": "Question: {{$.question}}\n\nProduce a brief for a short persuasive essay.\nFields:\n- thesis: one sentence stating the position the essay will argue\n- key_points: an array of exactly 3 short strings, each a supporting argument",
+      "outputs": [
+        {
+          "name": "thesis",
+          "type": "string"
+        },
+        {
+          "name": "key_points",
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "id": "compose",
+      "type": "subflow",
+      "subflow": "./essay_compose.json"
+    },
+    {
+      "id": "wrap",
+      "type": "script",
+      "inputs": [
+        {
+          "name": "final_essay",
+          "type": "string"
+        },
+        {
+          "name": "score",
+          "type": "number"
+        }
+      ],
+      "code": "def wrap(ctx, final_essay, score):\n    return {\n        'word_count': len(final_essay.split()),\n        'critic_score': score,\n        'passed_review': score >= 7,\n    }",
+      "outputs": [
+        {
+          "name": "report",
+          "type": "object"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "brief",
+      "map": {
+        "question": "question"
+      }
+    },
+    {
+      "from": "brief",
+      "to": "compose",
+      "map": {
+        "thesis": "thesis",
+        "key_points": "points"
+      }
+    },
+    {
+      "from": "compose",
+      "to": "wrap",
+      "map": {
+        "final_essay": "final_essay",
+        "score": "score"
+      }
+    },
+    {
+      "from": "brief",
+      "to": "$output",
+      "map": {
+        "thesis": "thesis"
+      }
+    },
+    {
+      "from": "compose",
+      "to": "$output",
+      "map": {
+        "final_essay": "essay"
+      }
+    },
+    {
+      "from": "wrap",
+      "to": "$output",
+      "map": {
+        "report": "report"
+      }
+    }
+  ]
+}

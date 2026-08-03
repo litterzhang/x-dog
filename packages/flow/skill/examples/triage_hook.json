@@ -1,0 +1,45 @@
+{
+  "name": "triage-hook",
+  "entry": "gate",
+  "schedule": {
+    "mode": "hook",
+    "signal": "new-ticket",
+    "listen": {
+      "type": "http",
+      "path": "/hooks/triage",
+      "port": 8787
+    }
+  },
+  "state": {
+    "report": ""
+  },
+  "nodes": [
+    {
+      "id": "gate",
+      "type": "human",
+      "signal": "new-ticket",
+      "outputs": ["ack"]
+    },
+    {
+      "id": "classify",
+      "type": "agent",
+      "backend": "claude-cli",
+      "model": "sonnet",
+      "inputs": [
+        {"name": "report", "type": "string"},
+        {"name": "ack", "type": "string"}
+      ],
+      "system_prompt": "You are a terse bug triager.",
+      "prompt": "A new ticket arrived (ack={{$.ack}}). Triage it:\n\n{{$.report}}\n\nFields:\n- severity: low|medium|high|critical\n- area: 1-2 words",
+      "outputs": [
+        {"name": "severity", "type": "string"},
+        {"name": "area", "type": "string"}
+      ]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "classify", "map": {"report": "report"}},
+    {"from": "gate", "to": "classify", "map": {"ack": "ack"}},
+    {"from": "classify", "to": "$output", "map": {"severity": "severity", "area": "area"}}
+  ]
+}

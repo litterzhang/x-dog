@@ -49,10 +49,18 @@ _FEATURES = (
     Feature("Derived output schema", "An agent's structured-output contract is derived from its output ports (no separate output_schema), validated by fastjsonschema.", "Agents & tools"),
     Feature("Agent web search", "Agent nodes can enable a built-in web_search tool with its own browsing model.", "Agents & tools"),
     Feature("JSON-declared custom tools", "A module:func tool manifest, loaded at run and generate time.", "Agents & tools"),
+    Feature("CLI agent backend", "An agent node can set backend:\"claude-cli\"/\"codex-cli\" to run one turn by shelling out to a coding-agent CLI instead of the in-process SDK — no provider/API key needed (the CLI owns auth); structured output maps to the CLI's native schema flag.", "Agents & tools"),
+    Feature("CLI tool allow-list", "A CLI agent node NARROWS the CLI's own toolset with allowed_tools (built-ins or mcp__server__tool); flow ships no tools. An empty list runs the tightest sandbox.", "Agents & tools"),
+    Feature("Per-node MCP servers", "A CLI agent node declares mcp_servers (an opaque pass-through spec); flow generates the CLI's MCP config, with ${ENV} secret interpolation — the JSON carries the reference, never the token.", "Agents & tools"),
+    # --- Scheduling: firing a workflow on its own ---
+    Feature("Active / timer scheduling", "A schedule:{mode:\"timer\"} block fires the workflow on an interval (every:\"15m\") or a cron expression; xdog-flow install writes a systemd user timer (or a crontab fallback).", "Scheduling"),
+    Feature("Passive / hook scheduling", "A schedule:{mode:\"hook\"} block fires on an external event (http/file), delivering a signal to a fresh run — reusing the human-node pause/resume primitive.", "Scheduling"),
+    Feature("Shared hook listener", "All hook workflows on a host share ONE systemd-supervised listener that routes each event (http by path, file by dir) to the right bundle — no port collisions, no per-workflow daemon.", "Scheduling"),
+    Feature("Install lifecycle", "xdog-flow install builds the portable bundle + installs the scheduler; --list and --delete manage installed workflows via a JSON registry; --dry-run previews the units without touching the OS.", "Scheduling"),
     # --- Codegen & authoring ---
     Feature("Code generation", "Compile a workflow JSON to a runnable, ruff-clean Python module that mirrors the interpreter node-for-node.", "Codegen & authoring"),
     Feature("Interpret == compile", "Interpreter and generated module agree node-for-node — enforced by a cross-engine parity suite on every feature.", "Codegen & authoring"),
-    Feature("Portable bundle", "generate --portable emits a self-contained dir (vendored ai/agent, pinned deps); --offline downloads wheels for a no-network install.", "Codegen & authoring"),
+    Feature("Portable bundle", "generate --portable emits a self-contained dir; ai/agent are vendored only when an SDK agent node needs them, so a pure-CLI or script-only bundle drops them (requirements trim to jsonpath-ng). --offline downloads wheels for a no-network install.", "Codegen & authoring"),
     Feature("Runtime overrides", "The generated module honours FLOW_INPUTS (JSON merged into $in) and FLOW_PROVIDER — parity with the interpreter's --input / --provider.", "Codegen & authoring"),
     Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; shows subflow nodes and the workflow's typed signature; round-trips JSON.", "Codegen & authoring"),
     Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid; node boxes are colour-coded by type (agent/script/human/subflow).", "Codegen & authoring"),
@@ -64,6 +72,7 @@ _FEATURE_CATEGORIES = (
     "Execution",
     "Resilience",
     "Agents & tools",
+    "Scheduling",
     "Codegen & authoring",
 )
 
@@ -160,6 +169,33 @@ _ROADMAP = (
         "Every item shipped with interpreter + codegen + a cross-engine parity test, "
         "and the builder/graph views render subflow nodes and the typed signature.",
     ), done=True),
+    Phase("P7", "CLI agent backend — flow as a skill", (
+        "Done: an agent node can set backend:\"claude-cli\"/\"codex-cli\" to run one "
+        "turn by shelling out to a coding-agent CLI instead of the in-process SDK. A "
+        "CLI agent node needs NO provider (the CLI owns auth); its allowed_tools "
+        "narrows the CLI's own toolset; its mcp_servers spec is format-converted into "
+        "the CLI's MCP config with ${ENV} secret interpolation. Both engines shell the "
+        "same command, so interpret == compile holds.",
+        "Done: the SDK block (agent/ai imports + tool registry + _run_agent) is emitted "
+        "only when a workflow has an SDK agent node — so a pure-CLI/script generated "
+        "module imports no agent/ai and its --portable bundle drops that vendoring.",
+        "Done: a flow skill (SKILL.md + example pack) installable into claude/codex, so "
+        "a CLI can crystallize a recurring process into a workflow and run it. See "
+        "docs/cli-agent.md.",
+    ), done=True),
+    Phase("P8", "Scheduling — fire a workflow on its own", (
+        "Done: a top-level schedule block. mode:\"timer\" fires on an interval "
+        "(every:\"15m\") or a cron expression (translated to a systemd OnCalendar); "
+        "mode:\"hook\" fires when an external event (http/file) delivers a signal to a "
+        "fresh run — reusing the human-node pause/resume primitive.",
+        "Done: xdog-flow install builds the portable bundle and installs a systemd user "
+        "timer (crontab fallback) or, for hooks, adds a route to ONE shared "
+        "systemd-supervised listener; --list / --delete manage installs via a JSON "
+        "registry; --dry-run previews the units without touching the OS.",
+        "The scheduler wraps the built bundle — every firing is a fresh python <bundle> "
+        "run, so the engine and interpret == compile are untouched. Linux/systemd "
+        "first. See docs/scheduling.md.",
+    ), done=True),
     Phase("2026", "Beyond the kernel — as a library, not a platform", (
         "Deeper host-integration examples: run a flow graph as one activity inside a "
         "durable engine (e.g. Temporal) for cross-machine scale.",
@@ -180,7 +216,9 @@ DOCS = PackageDocs(
                   "Schema ports, JSONPath interpolation/mapping with end-to-end type checking, numeric "
                   "conditions, strict interpolation, a typed workflow signature (declared or inferred), "
                   "sub-workflows, and dynamic fan-out — each landing with a cross-engine parity test so "
-                  "interpret == compile holds. flow stays a single-machine, compilable kernel by design; "
-                  "distributed execution remains a deliberate non-goal. See Design for the non-goals.",
+                  "interpret == compile holds. P7 adds a CLI agent backend (run an agent turn by shelling "
+                  "out to claude/codex, no provider) and packages flow as a skill; P8 adds scheduling "
+                  "(timer + hook via xdog-flow install). flow stays a single-machine, compilable kernel by "
+                  "design; distributed execution remains a deliberate non-goal. See Design for the non-goals.",
     roadmap=_ROADMAP,
 )

@@ -1,0 +1,68 @@
+{
+  "name": "trip-planner",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "state": {
+    "destination": "Kyoto, Japan",
+    "days": 3,
+    "budget_usd": 1200
+  },
+  "nodes": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "inputs": [
+        {"name": "destination", "type": "string"},
+        {"name": "days", "type": "integer"},
+        {"name": "budget_usd", "type": "number"}
+      ],
+      "system_prompt": "You are a meticulous travel planner. Given a destination, a number of days, and a budget in USD, produce a realistic day-by-day plan.",
+      "prompt": "Plan a trip.\nDestination: {{$.destination}}\nDays: {{$.days}}\nBudget (USD): {{$.budget_usd}}\n\nField guidance:\n- summary: one sentence describing the trip\n- daily_plan: an array with exactly {{$.days}} strings, one per day (e.g. 'Day 1: ...')\n- est_cost_usd: your estimated total cost as a number\n- highlight: the single must-do experience",
+      "outputs": [
+        {"name": "summary", "type": "string"},
+        {"name": "daily_plan", "type": "array"},
+        {"name": "est_cost_usd", "type": "number"},
+        {"name": "highlight", "type": "string"}
+      ]
+    },
+    {
+      "id": "budget_check",
+      "type": "script",
+      "inputs": [
+        {"name": "daily_plan", "type": "array"},
+        {"name": "est_cost_usd", "type": "number"},
+        {"name": "budget_usd", "type": "number"}
+      ],
+      "code": "def budget_check(ctx, daily_plan, est_cost_usd, budget_usd):\n    verdict = {}\n    verdict['within_budget'] = est_cost_usd <= budget_usd\n    verdict['delta_usd'] = round(budget_usd - est_cost_usd, 2)\n    verdict['day_count'] = len(daily_plan)\n    return verdict",
+      "outputs": [
+        {"name": "verdict", "type": "object"}
+      ]
+    },
+    {
+      "id": "brief",
+      "type": "agent",
+      "inputs": [
+        {"name": "summary", "type": "string"},
+        {"name": "highlight", "type": "string"},
+        {"name": "daily_plan", "type": "array"},
+        {"name": "within_budget", "type": "boolean"},
+        {"name": "delta_usd", "type": "number"}
+      ],
+      "system_prompt": "You write short, friendly trip briefs for a traveler.",
+      "prompt": "Write a 3-sentence brief.\n\nTrip summary: {{$.summary}}\nMust-do: {{$.highlight}}\nDay 1: {{$.daily_plan[0]}}\n\nBudget: within_budget={{$.within_budget}}, delta_usd={{$.delta_usd}}.\n\nMention whether the plan fits the budget. Reply with ONLY the brief text.",
+      "outputs": ["brief"]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "plan", "map": {"destination": "destination", "days": "days", "budget_usd": "budget_usd"}},
+    {"from": "$in", "to": "budget_check", "map": {"budget_usd": "budget_usd"}},
+    {"from": "plan", "to": "budget_check", "map": {"daily_plan": "daily_plan", "est_cost_usd": "est_cost_usd"}},
+    {"from": "plan", "to": "brief", "map": {"summary": "summary", "highlight": "highlight", "daily_plan": "daily_plan"}},
+    {"from": "budget_check", "to": "brief", "map": {"$.verdict.within_budget": "within_budget", "$.verdict.delta_usd": "delta_usd"}},
+    {"from": "plan", "to": "$output", "map": {"summary": "trip_summary", "daily_plan": "itinerary", "est_cost_usd": "est_cost_usd", "highlight": "highlight"}},
+    {"from": "budget_check", "to": "$output", "map": {"verdict": "budget"}},
+    {"from": "brief", "to": "$output", "map": {"brief": "brief"}}
+  ]
+}

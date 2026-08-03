@@ -1,0 +1,38 @@
+{
+  "name": "agent-calculator",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "entry": "make_problem",
+  "state": {
+    "a": "347",
+    "b": "895"
+  },
+  "nodes": [
+    {
+      "id": "make_problem",
+      "type": "script",
+      "inputs": [
+        {"name": "a", "type": "integer"},
+        {"name": "b", "type": "integer"}
+      ],
+      "code": "def make_problem(ctx, a, b):\n    return f'{a} + {b}'",
+      "outputs": [{"name": "problem", "type": "string"}]
+    },
+    {
+      "id": "solve",
+      "type": "agent",
+      "inputs": ["problem"],
+      "tools": ["bash"],
+      "system_prompt": "You are a precise calculator. You do NOT do arithmetic in your head. You compute every expression by running a bash command.",
+      "prompt": "Compute this arithmetic expression by running a bash command (e.g. use `echo $((...))` or `python3 -c`): {{$.problem}}\n\nThen reply with ONLY the final integer result, nothing else.",
+      "outputs": ["answer"]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "make_problem", "map": {"a": "a", "b": "b"}},
+    {"from": "make_problem", "to": "solve", "map": {"problem": "problem"}},
+    {"from": "solve", "to": "$output", "map": {"answer": "result"}}
+  ]
+}
