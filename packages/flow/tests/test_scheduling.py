@@ -1,17 +1,26 @@
-"""Workflow scheduling (docs/scheduling.md) — Phase 1: schedule block.
+"""Workflow scheduling (docs/scheduling.md).
 
 A top-level ``schedule`` block declares how a workflow fires on its own (timer or
 hook). It is declarative config for ``xdog-flow install`` — the engine ignores it.
+flow.scheduler renders the systemd units / crontab lines.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 from flow.builder.serialize import workflow_to_dict
 from flow.errors import WorkflowValidationError
 from flow.loader import parse_workflow, validate_workflow
+from flow.models import ScheduleDef
+from flow.scheduler.systemd import (
+    cron_to_oncalendar,
+    render_listener_service,
+    render_timer_crontab,
+    render_timer_units,
+)
 
 
 def _wf(schedule: dict[str, Any] | None) -> dict[str, Any]:
@@ -92,3 +101,69 @@ def test_schedule_not_object_rejected() -> None:
 def test_schedule_roundtrips(schedule: dict[str, Any]) -> None:
     wf = parse_workflow(_wf(schedule))
     assert parse_workflow(workflow_to_dict(wf)) == wf
+
+
+# --- Phase 2: systemd / crontab unit rendering -----------------------------
+
+_B = Path("/home/u/.local/share/xdog-flow/triage")
+
+
+def test_timer_every_units() -> None:
+    r = render_timer_units("triage", _B, ScheduleDef(mode="timer", every="15m", inputs=(("report", "x"),)))
+    assert set(r.files) == {"triage.service", "triage.timer"}
+    assert r.enable == ("triage.timer",)
+    tmr = r.files["triage.timer"]
+    assert "OnUnitActiveSec=15min" in tmr and "Persistent=true" in tmr
+    svc = r.files["triage.service"]
+    assert "Type=oneshot" in svc
+    assert "Environment=FLOW_RUN_ID=triage" in svc
+    assert 'Environment=FLOW_INPUTS={"report": "x"}' in svc
+    assert f"ExecStart=/usr/bin/python3 {_B}" in svc
+
+
+def test_timer_cron_units() -> None:
+    r = render_timer_units("triage", _B, ScheduleDef(mode="timer", cron="*/15 * * * *"))
+    assert "OnCalendar=*-*-* *:*/15:00" in r.files["triage.timer"]
+
+
+def test_timer_no_inputs_omits_env() -> None:
+    r = render_timer_units("t", _B, ScheduleDef(mode="timer", every="1h"))
+    assert "FLOW_INPUTS" not in r.files["t.service"]
+
+
+@pytest.mark.parametrize(("cron", "oncal"), [
+    ("*/15 * * * *", "*-*-* *:*/15:00"),
+    ("0 9 * * 1-5", "Mon..Fri *-*-* 9:0:00"),
+    ("30 2 1 * *", "*-*-1 2:30:00"),
+    ("0 0 * * 0", "Sun *-*-* 0:0:00"),
+])
+def test_cron_to_oncalendar(cron: str, oncal: str) -> None:
+    assert cron_to_oncalendar(cron) == oncal
+
+
+def test_cron_bad_dow_raises() -> None:
+    with pytest.raises(ValueError, match="day-of-week"):
+        cron_to_oncalendar("0 0 * * xyz")
+
+
+def test_crontab_fallback_cron() -> None:
+    line = render_timer_crontab("triage", _B, ScheduleDef(mode="timer", cron="*/15 * * * *"))
+    assert line.startswith("*/15 * * * * FLOW_RUN_ID=triage /usr/bin/python3 ")
+
+
+def test_crontab_fallback_every_minutes() -> None:
+    line = render_timer_crontab("t", _B, ScheduleDef(mode="timer", every="30m"))
+    assert line.startswith("*/30 * * * *")
+
+
+def test_crontab_fallback_subminute_raises() -> None:
+    with pytest.raises(ValueError, match="sub-minute"):
+        render_timer_crontab("t", _B, ScheduleDef(mode="timer", every="30s"))
+
+
+def test_listener_service_render() -> None:
+    svc = render_listener_service()
+    assert "Description=xdog-flow shared hook listener" in svc
+    assert "flow.scheduler.listener --registry" in svc
+    assert "Restart=on-failure" in svc
+    assert "WantedBy=default.target" in svc
