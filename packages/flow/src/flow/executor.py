@@ -18,10 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent.agent import Agent
-from agent.core import AgentConfig, AgentTool, StreamFn
-from agent.events import TurnEndEvent
-from ai.types import AssistantMessage, TextContent
+from agent.core import StreamFn
 
 from flow.checkpoint import CheckpointStore
 from flow.coerce import to_python, to_state
@@ -36,9 +33,9 @@ from flow.models import (
     NodeDef,
     WorkflowDef,
     agent_is_structured,
-    agent_output_schema,
     entry_frontier,
 )
+from flow.runners import AgentRunner, SdkRunner
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -713,76 +710,42 @@ async def execute(
         async with _state_lock:
             outputs.setdefault(node_id, {}).update(stored)
 
+    _sdk_runner_cache: list[SdkRunner] = []
+
+    def _runner_for(node: NodeDef) -> AgentRunner:
+        """Select the agent backend for *node*.  Phase 1: always the SDK runner
+        (built once from the SDK wiring); later phases dispatch on ``node.backend``."""
+        if not _sdk_runner_cache:
+            assert stream_fn_factory is not None
+            assert tool_registry is not None
+            _sdk_runner_cache.append(
+                SdkRunner(
+                    stream_fn_factory=stream_fn_factory,
+                    tool_registry=tool_registry,
+                    web_search_fn_factory=web_search_fn_factory,
+                )
+            )
+        return _sdk_runner_cache[0]
+
     async def _node_agent(node: NodeDef, node_id: str, ins: dict[str, object]) -> tuple[object, int]:
         """Run an agent node's core work once; return (output_value, tokens).
 
-        Pure with respect to the run store: builds prompts from *ins*, sets up the
-        Agent + submit_result tool, drains one turn, and returns the structured
-        result (or joined text) plus the token count.  Retry, store, budget, and
-        events are the driver's job.
+        Node-generic part: interpolate the prompts and resolve the model, then
+        delegate the turn to the node's selected backend runner (SDK by default).
+        Retry, store, budget, and events are the driver's job.
         """
         sys_prompt = interpolate(node.system_prompt, ins)
         user_prompt = interpolate(node.prompt, ins)
         model = node.model or wf.default_model
-        assert stream_fn_factory is not None
-        stream_fn = stream_fn_factory(model)
-        assert tool_registry is not None
-        resolved_tools: tuple[AgentTool, ...] = tool_registry.resolve(node.tools)
-
-        tool_ctx: dict[str, object] | None = None
-        sink: dict[str, object] = {}
-        final_sys_prompt = sys_prompt
-        structured = agent_is_structured(node)
-        if structured:
-            from agent.tools import create_submit_result_tool
-
-            resolved_tools = resolved_tools + (create_submit_result_tool(),)
-            tool_ctx = {"flow_output_schema": agent_output_schema(node), "flow_result_sink": sink}
-            field_names = ", ".join(p.name for p in node.output_ports)
-            final_sys_prompt = sys_prompt + (
-                f"\nWhen finished, you MUST call the submit_result tool"
-                f" with an object containing these fields: {field_names}."
-            )
-
-        web_search_fn = None
-        if node.web_search and web_search_fn_factory is not None:
-            web_search_fn = web_search_fn_factory(node.web_search_model or model)
-
-        agent = Agent(
-            stream_fn,
-            config=AgentConfig(model=model, system_prompt=final_sys_prompt),
-            tools=resolved_tools,
-            tool_ctx=tool_ctx,
-            web_search_fn=web_search_fn,
-        )
         logger.debug("Running node %r with model %r", node_id, model)
-
-        accumulated: list[str] = []
-        total_tokens = 0
-
-        async def _drain() -> None:
-            nonlocal total_tokens
-            event_stream = await agent.prompt(user_prompt)
-            async for event in event_stream:
-                if isinstance(event, TurnEndEvent) and event.message is not None:
-                    msg = event.message
-                    if isinstance(msg, AssistantMessage):
-                        for part in msg.content:
-                            if isinstance(part, TextContent):
-                                accumulated.append(part.text)
-                        # Some providers report per-category counts but leave
-                        # total_tokens at 0; fall back to input + output.
-                        _u = msg.usage
-                        total_tokens += _u.total_tokens or (_u.input + _u.output)
-
-        await asyncio.wait_for(_drain(), timeout=timeout)
-
-        if structured:
-            result_obj = sink.get("result")
-            if result_obj is None:
-                raise WorkflowExecutionError(f"Node {node.id!r}: agent did not submit a result via submit_result")
-            return result_obj, total_tokens
-        return "".join(accumulated), total_tokens
+        runner = _runner_for(node)
+        return await runner.run(
+            node,
+            system_prompt=sys_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            timeout=timeout,
+        )
 
     def _store_agent_output(node: NodeDef, node_id: str, output_value: object) -> None:
         """Store an agent's output value into its port(s) (caller holds _state_lock)."""
