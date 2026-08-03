@@ -78,6 +78,12 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["web_search"] = True
     if node.web_search_model is not None:
         data["web_search_model"] = node.web_search_model
+    if node.backend is not None:
+        data["backend"] = node.backend
+    if node.allowed_tools:
+        data["allowed_tools"] = list(node.allowed_tools)
+    if node.mcp_servers:
+        data["mcp_servers"] = {name: spec for name, spec in node.mcp_servers}
     return data
 
 

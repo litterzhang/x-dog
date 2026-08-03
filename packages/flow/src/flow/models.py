@@ -119,6 +119,19 @@ class NodeDef:
     # (not a path ref) so codegen can embed it as a literal and recursion is
     # structurally impossible.  See docs/subflow.md.
     child: WorkflowDef | None = None
+    # CLI agent backend (docs/cli-agent.md): when set (e.g. "claude-cli" /
+    # "codex-cli"), this agent node runs by shelling out to that CLI instead of the
+    # in-process SDK.  A CLI agent node needs no provider (the CLI owns auth).
+    backend: str | None = None
+    # CLI agent tool allow-list: names the node may call (CLI built-ins like
+    # "Read"/"Bash" or MCP tools "mcp__<server>__<tool>").  Empty = no tools.
+    # flow passes these through to the CLI's own allow-list flag; it defines nothing.
+    allowed_tools: tuple[str, ...] = ()
+    # CLI agent MCP servers: (name, opaque-spec) pairs the node provides to its CLI.
+    # The spec dict is passed through unparsed — flow format-converts it into the
+    # CLI's MCP config (with ${ENV} secret interpolation), never validating fields,
+    # so a CLI adding MCP config fields needs no flow change.  See cli-agent.md §5.1.
+    mcp_servers: tuple[tuple[str, dict[str, object]], ...] = ()
 
     @property
     def input_names(self) -> tuple[str, ...]:

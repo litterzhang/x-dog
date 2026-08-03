@@ -37,6 +37,10 @@ from flow.models import (
 
 logger = logging.getLogger(__name__)
 
+# CLI agent backends (docs/cli-agent.md): an agent node with one of these shells
+# out to that CLI instead of the in-process SDK.
+_KNOWN_CLI_BACKENDS = frozenset({"claude-cli", "codex-cli"})
+
 
 def _parse_condition(data: Any) -> Condition:
     if not isinstance(data, dict):
@@ -189,6 +193,23 @@ def _parse_node(
             Port(name=k, schema=v if isinstance(v, dict) else {"type": "string"}) for k, v in out_sig.items()
         )
 
+    # CLI agent backend fields (docs/cli-agent.md).
+    backend = data.get("backend")
+    backend_val: str | None = str(backend) if backend is not None else None
+    raw_allowed = data.get("allowed_tools", [])
+    allowed_tools: tuple[str, ...] = tuple(str(t) for t in raw_allowed) if raw_allowed else ()
+    raw_mcp = data.get("mcp_servers", {})
+    mcp_servers: tuple[tuple[str, dict[str, object]], ...]
+    if isinstance(raw_mcp, dict) and raw_mcp:
+        mcp_list: list[tuple[str, dict[str, object]]] = []
+        for k, v in raw_mcp.items():
+            if not isinstance(v, dict):
+                raise WorkflowValidationError(f"Node {node_id!r}: mcp_servers[{k!r}] must be an object")
+            mcp_list.append((str(k), v))
+        mcp_servers = tuple(mcp_list)
+    else:
+        mcp_servers = ()
+
     return NodeDef(
         id=node_id,
         type=node_type,
@@ -207,6 +228,9 @@ def _parse_node(
         on_error=on_error,
         deterministic=bool(data.get("deterministic", False)),
         child=child,
+        backend=backend_val,
+        allowed_tools=allowed_tools,
+        mcp_servers=mcp_servers,
     )
 
 
@@ -782,6 +806,16 @@ def validate_workflow(wf: WorkflowDef) -> None:
             "nothing can start. Feed at least one node from $in (or set an explicit entry)."
         )
 
+    # A provider is required only if the workflow has an SDK agent node (an agent
+    # node with no CLI backend).  A pure-CLI (or script-only) workflow needs none —
+    # a CLI agent node reuses the CLI's own auth.  See docs/cli-agent.md §7.
+    _has_sdk_agent = any(n.type == "agent" and n.backend is None for n in wf.nodes)
+    if _has_sdk_agent and not wf.provider:
+        raise WorkflowValidationError(
+            "Workflow has an SDK agent node but no 'provider'. Set a provider, or give the "
+            "agent node a CLI 'backend' (e.g. 'claude-cli') which needs no provider."
+        )
+
     _run_re = re.compile(r"^[\w.]+:[\w]+$")
 
     # Validate the custom-tool manifest and build the set of resolvable tool
@@ -823,6 +857,15 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
             if node.code is not None:
                 raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+            if node.backend is not None and node.backend not in _KNOWN_CLI_BACKENDS:
+                known = ", ".join(sorted(_KNOWN_CLI_BACKENDS))
+                raise WorkflowValidationError(
+                    f"Agent node {node.id!r}: unknown backend {node.backend!r}; expected one of {known}"
+                )
+            if node.backend is None and (node.allowed_tools or node.mcp_servers):
+                raise WorkflowValidationError(
+                    f"Agent node {node.id!r}: 'allowed_tools'/'mcp_servers' require a CLI 'backend'"
+                )
             # Strict interpolation: every {{ $.x }} in a prompt must root at a
             # declared input port (a typo would otherwise silently interpolate to "").
             _in_names = set(node.input_names)
