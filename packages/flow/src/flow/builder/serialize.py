@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, ScheduleDef, WorkflowDef
 
 
 def _condition_to_dict(cond: Condition) -> dict[str, Any]:
@@ -127,9 +127,27 @@ def workflow_to_dict(wf: WorkflowDef) -> dict[str, Any]:
         data["max_concurrency"] = wf.max_concurrency
     if wf.fan_max_concurrency:
         data["fan_max_concurrency"] = wf.fan_max_concurrency
+    if wf.schedule is not None:
+        data["schedule"] = _schedule_to_dict(wf.schedule)
     data["nodes"] = [_node_to_dict(n) for n in wf.nodes]
     data["edges"] = [_edge_to_dict(e) for e in wf.edges]
     return data
+
+
+def _schedule_to_dict(sch: ScheduleDef) -> dict[str, Any]:
+    """Inverse of ``flow.loader._parse_schedule``."""
+    out: dict[str, Any] = {"mode": sch.mode}
+    if sch.every is not None:
+        out["every"] = sch.every
+    if sch.cron is not None:
+        out["cron"] = sch.cron
+    if sch.inputs:
+        out["inputs"] = {k: v for k, v in sch.inputs}
+    if sch.signal is not None:
+        out["signal"] = sch.signal
+    if sch.listen is not None:
+        out["listen"] = sch.listen
+    return out
 
 
 def dump_workflow(wf: WorkflowDef, path: str | Path) -> None:

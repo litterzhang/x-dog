@@ -31,6 +31,7 @@ from flow.models import (
     NodeDef,
     Port,
     RetryPolicy,
+    ScheduleDef,
     WorkflowDef,
     entry_frontier,
 )
@@ -286,6 +287,64 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     )
 
 
+def _parse_schedule(raw: Any) -> ScheduleDef | None:
+    """Parse + validate a top-level ``schedule`` block (docs/scheduling.md).
+
+    None (absent) means run-once.  Validates mode-specific rules so a broken
+    schedule fails at load, not at install time.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise WorkflowValidationError("schedule must be an object")
+    mode = raw.get("mode")
+    if mode not in ("timer", "hook"):
+        raise WorkflowValidationError(f"schedule.mode must be 'timer' or 'hook', got {mode!r}")
+
+    raw_inputs = raw.get("inputs", {})
+    inputs: tuple[tuple[str, object], ...]
+    if isinstance(raw_inputs, dict):
+        inputs = tuple((str(k), v) for k, v in raw_inputs.items())
+    elif not raw_inputs:
+        inputs = ()
+    else:
+        raise WorkflowValidationError("schedule.inputs must be an object")
+
+    if mode == "timer":
+        every = raw.get("every")
+        cron = raw.get("cron")
+        if (every is None) == (cron is None):
+            raise WorkflowValidationError("schedule (timer) needs exactly one of 'every' or 'cron'")
+        if every is not None:
+            every = str(every)
+            if not _EVERY_RE.match(every):
+                raise WorkflowValidationError(
+                    f"schedule.every must look like '30s'/'15m'/'2h'/'1d', got {every!r}"
+                )
+        cron = str(cron) if cron is not None else None
+        if cron is not None and len(cron.split()) != 5:
+            raise WorkflowValidationError(f"schedule.cron must be a 5-field cron expression, got {cron!r}")
+        return ScheduleDef(mode="timer", every=every, cron=cron, inputs=inputs)
+
+    # hook
+    signal = raw.get("signal")
+    if not signal or not isinstance(signal, str):
+        raise WorkflowValidationError("schedule (hook) needs a non-empty 'signal'")
+    listen = raw.get("listen")
+    if not isinstance(listen, dict):
+        raise WorkflowValidationError("schedule (hook) needs a 'listen' object")
+    ltype = listen.get("type")
+    if ltype not in ("http", "file", "socket"):
+        raise WorkflowValidationError(
+            f"schedule.listen.type must be 'http', 'file', or 'socket', got {ltype!r}"
+        )
+    return ScheduleDef(mode="hook", inputs=inputs, signal=signal, listen=listen)
+
+
+# schedule.every grammar: an integer followed by a unit (s/m/h/d).
+_EVERY_RE = re.compile(r"^\d+[smhd]$")
+
+
 def parse_workflow(
     data: dict[str, Any],
     *,
@@ -344,6 +403,8 @@ def parse_workflow(
         raise WorkflowValidationError("fan_max_concurrency must be an int >= 0")
     fan_max_concurrency = raw_fan_max
 
+    schedule = _parse_schedule(data.get("schedule"))
+
     nodes = tuple(_parse_node(n, base_dir=base_dir, _seen=_seen) for n in data.get("nodes", []))
     edges = tuple(_parse_edge(e) for e in data.get("edges", []))
 
@@ -359,6 +420,7 @@ def parse_workflow(
         tool_refs=tool_refs,
         max_concurrency=max_concurrency,
         fan_max_concurrency=fan_max_concurrency,
+        schedule=schedule,
     )
 
 

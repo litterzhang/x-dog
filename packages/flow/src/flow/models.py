@@ -171,6 +171,29 @@ class EdgeDef:
 
 
 @dataclass(frozen=True)
+class ScheduleDef:
+    """How a workflow fires on its own (docs/scheduling.md).
+
+    Declarative config for ``xdog-flow install`` — the engine never reads it; a
+    scheduler (systemd timer / listener) wraps the built bundle.  Two modes:
+
+    * ``mode="timer"`` — fire on a schedule: exactly one of ``every`` ("30s"/"15m"/
+      "2h"/"1d") or ``cron`` (a 5-field cron expression).
+    * ``mode="hook"`` — fire when an external event delivers ``signal`` via a
+      ``listen`` transport (an opaque dict: ``{"type": "http"|"file"|"socket", ...}``).
+
+    ``inputs`` is optional per-firing ``$in`` seed data (env ``FLOW_INPUTS``).
+    """
+
+    mode: Literal["timer", "hook"]
+    every: str | None = None
+    cron: str | None = None
+    inputs: tuple[tuple[str, object], ...] = ()
+    signal: str | None = None
+    listen: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
 class WorkflowDef:
     name: str
     provider: str
@@ -199,6 +222,10 @@ class WorkflowDef:
     # semaphore must not be re-acquired inside a fan node (self-nesting would
     # deadlock at cap=1).  Both engines apply it identically (interpret == compile).
     fan_max_concurrency: int = 0
+    # Optional scheduling (docs/scheduling.md): how the workflow fires on its own.
+    # None = run-once (current behaviour).  Read only by ``xdog-flow install`` — the
+    # engine ignores it (a scheduler wraps the built bundle, unchanged execution).
+    schedule: ScheduleDef | None = None
 
 
 def entry_frontier(wf: WorkflowDef) -> tuple[str, ...]:
