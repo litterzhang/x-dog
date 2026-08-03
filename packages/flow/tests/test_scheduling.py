@@ -281,3 +281,99 @@ def test_install_dry_run_touches_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "units").exists()
     assert not inst.registry_path.exists()
     assert not log.exists()  # no systemctl actually invoked
+
+
+# --- Phase 4: shared hook listener (routing) -------------------------------
+
+
+def _routes_two_http() -> list[Any]:
+    from flow.scheduler.listener import HookRoute
+
+    return [
+        HookRoute("triage", Path("/b/triage"), "new-ticket",
+                  {"type": "http", "path": "/hooks/triage", "port": 8787}),
+        HookRoute("deploy", Path("/b/deploy"), "go",
+                  {"type": "http", "path": "/hooks/deploy", "port": 8787}),
+    ]
+
+
+def test_listener_routes_http_by_path_with_env() -> None:
+    from flow.scheduler.listener import Router
+
+    spawned: list[tuple[str, dict[str, str]]] = []
+    r = Router(routes=_routes_two_http(), spawn=lambda b, e: spawned.append((str(b), dict(e))))
+    r.deliver_http("/hooks/triage", b'{"report": "boom"}')
+    bundle, env = spawned[-1]
+    assert bundle == "/b/triage"
+    assert env["FLOW_SIGNALS"] == "new-ticket"
+    assert env["FLOW_RUN_ID"] == "triage"
+    assert '"report": "boom"' in env["FLOW_INPUTS"]
+
+
+def test_listener_two_workflows_share_one_router() -> None:
+    from flow.scheduler.listener import Router
+
+    spawned: list[str] = []
+    r = Router(routes=_routes_two_http(), spawn=lambda b, e: spawned.append(str(b)))
+    r.deliver_http("/hooks/triage", b"")
+    r.deliver_http("/hooks/deploy", b"")
+    assert spawned == ["/b/triage", "/b/deploy"]
+    assert r.http_paths() == ["/hooks/deploy", "/hooks/triage"]
+
+
+def test_listener_empty_body_omits_inputs() -> None:
+    from flow.scheduler.listener import Router
+
+    seen: list[dict[str, str]] = []
+    r = Router(routes=_routes_two_http(), spawn=lambda b, e: seen.append(dict(e)))
+    r.deliver_http("/hooks/deploy", b"")
+    assert "FLOW_INPUTS" not in seen[-1]
+
+
+def test_listener_unknown_path_raises() -> None:
+    from flow.scheduler.listener import Router
+
+    r = Router(routes=_routes_two_http(), spawn=lambda b, e: None)
+    with pytest.raises(KeyError, match="no hook workflow bound"):
+        r.deliver_http("/nope", b"{}")
+
+
+def test_listener_file_routing() -> None:
+    from flow.scheduler.listener import HookRoute, Router
+
+    seen: list[tuple[str, dict[str, str]]] = []
+    routes = [HookRoute("ingest", Path("/b/ingest"), "file-in", {"type": "file", "dir": "/tmp/drop"})]
+    r = Router(routes=routes, spawn=lambda b, e: seen.append((str(b), dict(e))))
+    r.deliver_file("/tmp/drop", b'{"path": "/data"}')
+    assert seen[-1][0] == "/b/ingest"
+    assert seen[-1][1]["FLOW_SIGNALS"] == "file-in"
+    assert '"path": "/data"' in seen[-1][1]["FLOW_INPUTS"]
+
+
+def test_listener_from_registry_integration(tmp_path: Path) -> None:
+    """The listener reads exactly the hook routes an install wrote (Phase 3 -> 4)."""
+    from flow.scheduler.listener import Router
+
+    inst, _ = _installer(tmp_path)
+    inst.install(_hook_wf("deploy"))
+    inst.install(_timer_wf("t1"))  # a timer must NOT become a route
+    spawned: list[str] = []
+    r = Router.from_registry(inst.registry_path, spawn=lambda b, e: spawned.append(str(b)))
+    assert r.http_paths() == ["/hooks/deploy"]  # only the hook, not the timer
+    r.deliver_http("/hooks/deploy", b'{"x": 1}')
+    assert spawned and spawned[-1].endswith("/deploy")
+
+
+async def test_listener_signal_reaches_human_node(tmp_path: Path) -> None:
+    """The delivered signal makes a human node proceed instead of pausing."""
+    from flow.executor import execute
+
+    # A workflow that pauses at a human node unless its signal is delivered.
+    wf = parse_workflow({
+        "name": "gated", "entry": "gate", "state": {},
+        "nodes": [{"id": "gate", "type": "human", "signal": "go", "outputs": ["ok"]}],
+        "edges": [{"from": "gate", "to": "$output", "map": {"ok": "result"}}],
+    })
+    # Signal delivered (as the listener would via FLOW_SIGNALS) -> proceeds.
+    r = await execute(wf, signals={"go"})
+    assert r.runtime["out"]["result"] == "approved"
