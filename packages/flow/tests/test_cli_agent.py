@@ -8,11 +8,14 @@ pass-through spec). Provider is required only when an SDK agent node is present.
 
 from __future__ import annotations
 
+import pathlib
+import stat
 from typing import Any
 
 import pytest
 from flow.builder.serialize import workflow_to_dict
 from flow.errors import WorkflowValidationError
+from flow.executor import execute
 from flow.loader import parse_workflow, validate_workflow
 
 
@@ -117,3 +120,86 @@ def test_mixed_sdk_and_cli_agents_ok_with_provider() -> None:
         ],
     }
     validate_workflow(parse_workflow(d))  # no raise
+
+
+# --- Phase 3: CLI runner + claude adapter (interpreter) --------------------
+
+_FAKE_CLAUDE = '''#!/usr/bin/env python3
+import sys, json
+argv = sys.argv[1:]
+prompt = sys.stdin.read()
+schema = model = allowed = sysp = None
+i = 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--json-schema": schema = argv[i+1]; i += 2; continue
+    if a == "--model": model = argv[i+1]; i += 2; continue
+    if a == "--allowedTools": allowed = argv[i+1]; i += 2; continue
+    if a == "--append-system-prompt": sysp = argv[i+1]; i += 2; continue
+    i += 1
+env = {"input_tokens": 11, "output_tokens": 7}
+if schema is not None:
+    props = json.loads(schema).get("properties", {})
+    obj = {}
+    for k, v in props.items():
+        t = (v or {}).get("type", "string")
+        obj[k] = {"string":"S","integer":1,"number":1.0,"boolean":True,"array":[],"object":{}}.get(t,"S")
+    env["structured_output"] = obj
+else:
+    env["result"] = "TEXT|model=%s|tools=%s|sys=%s|prompt=%s" % (model, allowed, sysp, prompt.strip())
+print(json.dumps(env))
+'''
+
+
+def _install_fake_cli(tmp_path: pathlib.Path, script: str, name: str = "fake_claude") -> str:
+    """Write a fake CLI executable and return its path (for FLOW_CLI_BIN)."""
+    py = tmp_path / (name + ".py")
+    py.write_text(script, encoding="utf-8")
+    sh = tmp_path / name
+    sh.write_text(f'#!/usr/bin/env bash\nexec python3 "{py}" "$@"\n', encoding="utf-8")
+    sh.chmod(sh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return str(sh)
+
+
+async def test_cli_runner_text_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
+    wf = parse_workflow(_cli_wf(model="sonnet", allowed_tools=["Read", "WebSearch"]))
+    r = await execute(wf)
+    out = r.runtime["out"]["result"]
+    assert out.startswith("TEXT|model=sonnet|tools=Read,WebSearch|")
+    assert r.runtime["tokens_used"] == 18  # 11 + 7
+
+
+async def test_cli_runner_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
+    d = {
+        "name": "s", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "prompt": "plan",
+                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
+    }
+    r = await execute(parse_workflow(d))
+    assert r.runtime["out"] == {"title": "S", "n": 1}
+    assert r.runtime["state"]["a"] == {"title": "S", "n": 1}
+
+
+async def test_cli_runner_no_provider_needed(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """A pure-CLI workflow runs with no provider and never touches ai/agent."""
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
+    wf = parse_workflow(_cli_wf())  # no provider in the dict
+    assert wf.provider == ""
+    r = await execute(wf)  # would fail if it tried ai.provider("")
+    assert "result" in r.runtime["out"]
+
+
+async def test_cli_runner_nonzero_exit_raises(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    from flow.errors import WorkflowExecutionError
+
+    bad = '''#!/usr/bin/env python3
+import sys
+sys.stderr.write("boom")
+sys.exit(3)
+'''
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, bad, name="bad_claude"))
+    with pytest.raises(WorkflowExecutionError, match="exited 3: boom"):
+        await execute(parse_workflow(_cli_wf()))

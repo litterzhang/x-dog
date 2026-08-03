@@ -35,7 +35,7 @@ from flow.models import (
     agent_is_structured,
     entry_frontier,
 )
-from flow.runners import AgentRunner, SdkRunner
+from flow.runners import AgentRunner, CliRunner, SdkRunner, cli_adapter_for
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -204,7 +204,10 @@ async def execute(
         tool_registry = _default_registry()
     if wf.tool_refs:
         register_workflow_tools(wf, tool_registry, base_dir)
-    if stream_fn_factory is None:
+    # Build SDK wiring only when the workflow actually has an SDK agent node — a
+    # pure-CLI (or script-only) workflow needs no provider and must not touch ai.
+    _needs_sdk = any(n.type == "agent" and n.backend is None for n in wf.nodes)
+    if stream_fn_factory is None and _needs_sdk:
         import ai
         from agent.helpers import stream_fn_from_provider
 
@@ -711,10 +714,17 @@ async def execute(
             outputs.setdefault(node_id, {}).update(stored)
 
     _sdk_runner_cache: list[SdkRunner] = []
+    _cli_runner_cache: dict[str, CliRunner] = {}
 
     def _runner_for(node: NodeDef) -> AgentRunner:
-        """Select the agent backend for *node*.  Phase 1: always the SDK runner
-        (built once from the SDK wiring); later phases dispatch on ``node.backend``."""
+        """Select the agent backend for *node*: a CLI runner when ``node.backend``
+        is set, else the SDK runner (built once from the SDK wiring)."""
+        if node.backend is not None:
+            runner = _cli_runner_cache.get(node.backend)
+            if runner is None:
+                runner = CliRunner(cli_adapter_for(node.backend))
+                _cli_runner_cache[node.backend] = runner
+            return runner
         if not _sdk_runner_cache:
             assert stream_fn_factory is not None
             assert tool_registry is not None
