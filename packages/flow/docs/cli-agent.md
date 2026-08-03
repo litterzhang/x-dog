@@ -1,30 +1,54 @@
-# flow — CLI Agent Backend (pluggable agent runners)
+# flow — CLI Agent Backend + flow-as-a-Skill
 
 Status: draft · Audience: flow maintainers · Prerequisite: skim `subflow.md` for
 the "seam, not rewrite" discipline this doc follows.
 
-Today a flow **agent node** runs through the in-process `agent` + `ai` SDK: the
-interpreter builds an `Agent(stream_fn, …)` and drains one turn; codegen inlines
-the same machinery into the generated module. This doc designs an **alternative
-agent backend** that instead shells out to an external coding-agent **CLI**
-(`claude`, `codex`, …) as a subprocess for one one-shot turn — without touching
-the scheduler, checkpoint, fan-out, or subflow layers, and **coexisting** with the
-SDK backend (opt-in, existing workflows unchanged).
+Today a flow **agent node** runs through the in-process `agent` + `ai` SDK, which
+means a workflow must be configured with a **provider** (model + API key). This doc
+designs an **alternative agent backend** that instead shells out to an external
+coding-agent **CLI** (`claude`, `codex`, …) for one one-shot turn, plus a **skill**
+that packages flow so a CLI can *generate* and *run* workflows itself. The CLI
+backend is **opt-in per node** — a workflow may mix SDK and CLI agent nodes, and a
+workflow authored this way is still a normal, portable flow artifact (it is **not**
+restricted to CLI-only execution).
 
 ---
 
-## 1. Why
+## 1. Why — flow as a skill a CLI installs
 
-- **Decouple from the `agent`/`ai` SDK.** An agent node's execution is the *only*
-  place flow needs those packages. A CLI backend lets a workflow run — and a
-  generated module compile — without importing `agent`/`ai`. `--portable` bundles
-  then need not vendor them (a large simplification; the child module becomes a
-  thin `subprocess` wrapper).
-- **Reuse a real agent harness.** `claude` / `codex` bring their own tool loop,
-  MCP integration, sandboxing, and auth. flow orchestrates *between* agent turns;
-  the CLI owns *within* a turn.
-- **Multi-CLI.** Not claude-only — the backend is a **pluggable adapter** so
-  `codex` (and later others) drop in behind one interface.
+The driving use case is a **closed loop**: a coding-agent CLI installs flow as a
+skill, uses it to turn a recurring process into a saved `workflow.json`, and then
+runs that workflow — where the workflow's *agent* nodes call the **same CLI** back
+for each agentic step.
+
+```
+  user → "capture my research→draft→critique process as a workflow"
+      → CLI (with flow skill) writes workflow.json         (process is now crystallized)
+      → CLI runs the workflow: script nodes run code,
+        each CLI-agent node shells out to `claude`/`codex` for that step
+      → each agent node's tools are LIMITED by the node's allow-list
+```
+
+This directly removes three burdens of flow-as-a-standalone-lib:
+
+1. **No provider to configure.** A CLI agent node has **no provider** — it invokes
+   the local `claude`/`codex`, which owns its own auth. flow no longer needs an API
+   key or a provider setting for those nodes. (The SDK backend still uses a provider;
+   the two coexist.)
+2. **No tool catalog to maintain.** flow does **not** define or ship agent tools.
+   The CLI already has a rich toolset (Read/Bash/Edit/MCP/…); a workflow node only
+   **narrows** which of the CLI's tools that node may use, via an allow-list
+   (§5). flow provides zero tools and tracks zero tool capabilities.
+3. **Processes become reusable.** A workflow is the crystallized form of a
+   recurring process — the CLI generates it once, then re-runs it deterministically
+   around the non-deterministic agent steps.
+
+Secondary benefits (unchanged from a pure-backend view): reusing a real agent
+harness (the CLI's own tool loop, MCP, sandbox), a multi-CLI adapter so `codex`
+drops in beside `claude`, and — for a pure-CLI workflow — a generated module and
+`--portable` bundle that need not vendor `agent`/`ai`.
+
+The **skill** itself is the new first-class deliverable — see §8.
 
 ---
 
@@ -46,10 +70,10 @@ retry, checkpoint, budget, fan-out, subflow — is unchanged.
 class AgentRunner(Protocol):
     async def run(
         self, *, system_prompt: str, user_prompt: str, model: str,
-        output_schema: dict | None,      # None -> plain text; else structured
-        tools: tuple[ToolSpec, ...],     # custom tools (MCP server specs, see §5)
+        output_schema: dict | None,        # None -> plain text; else structured
+        allowed_tools: tuple[str, ...],    # NARROW the CLI's toolset (§5); SDK ignores
         timeout: float,
-    ) -> tuple[object, int]:             # (structured obj OR text, tokens)
+    ) -> tuple[object, int]:               # (structured obj OR text, tokens)
         ...
 ```
 
@@ -58,10 +82,9 @@ class AgentRunner(Protocol):
 - **CLI runner** (new): spawns the CLI subprocess, feeds the prompt on stdin,
   parses stdout, returns the same tuple.
 
-Selection is per-workflow (and overridable per-run), e.g. `provider:
-"claude-cli"` / `"codex-cli"` names a CLI backend; anything else keeps the SDK
-path. No model, node, or edge semantics change → **`interpret == compile` is
-untouched at the workflow level** (see §6).
+Selection is **per node** via `node.backend` (§7): a CLI backend for that node,
+else the SDK path (default). No model, edge, or scheduling semantics change →
+**`interpret == compile` is untouched at the workflow level** (see §6).
 
 ---
 
@@ -87,7 +110,7 @@ its CLI's concrete argv + stdout grammar.
 
 **Key findings that shape the design:**
 1. **Both CLIs support NATIVE structured output** — so flow's `submit_result` tool
-   maps to a real flag, *not* a hand-rolled MCP sink. But the two接法 differ (schema
+   maps to a real flag, *not* a hand-rolled MCP sink. But the two integration paths differ (schema
    string vs schema file; `structured_output` field vs final-message JSON), so the
    adapter owns it.
 2. **System prompt is asymmetric** — claude has a flag, codex does not. The codex
@@ -137,31 +160,49 @@ a CLI without native structured output, but is not the primary path.
 
 ---
 
-## 5. Custom tools = MCP server specs
+## 5. Tools — a node NARROWS the CLI's toolset, it does not provide tools
 
-The SDK backend's tools are Python factories (`module:attr` → `AgentTool`). A CLI
-cannot load an in-process Python tool — a CLI tool must be an **external MCP
-server process**. So the CLI backend redefines what a workflow's tool refs mean:
+flow ships **no agent tools** and maintains **no catalog of which tools a CLI
+supports**. The CLI already has a toolset (claude: Read/Edit/Bash/Web/MCP…; codex:
+its exec toolset + configured MCP servers). A CLI agent node's tool config is a
+pure **allow-list that narrows** that existing set — the workflow author says
+"this node may use *only* these," and flow forwards it to the CLI's own allow-list
+mechanism.
 
-- A workflow declares tool refs as **MCP server specs** (command + args + env, or
-  an HTTP URL) instead of Python factories, when its backend is a CLI.
-- The adapter renders those into the CLI's config:
-  - **claude**: an `--mcp-config` JSON (`{"mcpServers": {...}}`, inline or scratch
-    file) plus `--allowedTools mcp__<server>__<tool>` for an explicit allow-list.
-  - **codex**: a scratch `config.toml` with `[mcp_servers.<name>]` blocks, passed
-    via `-c`/`--config`.
-- **Default: no tools.** A CLI agent node with no tool refs runs with the tightest
-  non-interactive posture (claude: default permission mode; codex: `read-only`
-  sandbox) — no bypass needed for a pure text/structured turn.
-- **Security:** flow never emits a blanket bypass flag by default. Tools are
-  opt-in and **explicitly allow-listed** per the CLI's mechanism. A permissive
-  sandbox/permission mode is only used when the workflow author explicitly
-  requests it (a per-node or per-run setting), never implicitly.
+```jsonc
+// a CLI agent node
+{
+  "id": "research",
+  "type": "agent",
+  "backend": "claude-cli",          // no provider needed
+  "prompt": "...",
+  "allowed_tools": ["Read", "WebSearch"],   // NARROW: only these of the CLI's tools
+  "outputs": [ ... ]                          // structured output via the CLI's schema flag
+}
+```
 
-This asymmetry (Python factory vs MCP server) is a real semantic difference
-between the two backends and is called out in the docs: a workflow's tools are
-portable across CLIs (both speak MCP) but **not** shared with the SDK backend's
-Python tools.
+- **Mapping.** `allowed_tools` → the CLI's allow-list flag:
+  - **claude**: `--allowedTools "Read,WebSearch"` (and, for an MCP tool the CLI is
+    already configured with, `mcp__<server>__<tool>`).
+  - **codex**: the equivalent narrowing via its config; codex `exec` is sandboxed
+    by default, so the node's allow-list plus `--sandbox <mode>` bounds it.
+- **flow defines nothing.** There is no `tool_refs`-as-MCP-server-spec authoring
+  path for CLI nodes (that would be flow *providing* tools). If a workflow needs a
+  bespoke MCP tool, that server is configured **in the CLI's own environment**
+  (the CLI owns tools); the node merely allow-lists its name. flow stays out of the
+  tool-supply business entirely — exactly the burden this design sheds.
+- **Default: empty allow-list = no tools.** A node with no `allowed_tools` runs a
+  pure text/structured turn with the tightest non-interactive posture (claude:
+  default permission mode; codex: `read-only` sandbox). No bypass flag.
+- **Security.** flow never emits a blanket bypass/`--dangerously-*` flag by
+  default. Broadening beyond the tightest posture is only done when the workflow
+  author explicitly sets a per-node/per-run permission mode — never implicitly.
+
+Contrast with the SDK backend, whose tools ARE flow-provided Python factories
+(`module:attr` → `AgentTool`). The two tool models are different by design: SDK =
+flow provides tools; CLI = the CLI provides tools and the node only restricts
+access. A node's `allowed_tools` is portable across CLIs (a plain name list); it
+is not shared with SDK tool refs.
 
 ---
 
@@ -186,42 +227,83 @@ backend uses with `stream_fn_factory`.
 
 ---
 
-## 7. Dependency reduction (the payoff)
+## 7. Selection & coexistence (per-node backend, no provider)
+
+The backend is chosen **per agent node**, so one workflow can freely mix SDK and
+CLI agent nodes — the workflow stays a normal, portable artifact (the user's
+requirement: a skill-generated workflow is *not* CLI-only).
+
+- **`node.backend`** (new, optional): `"claude-cli"` / `"codex-cli"` selects a CLI
+  backend for that node; absent → the SDK backend (default, unchanged).
+- **No provider on a CLI node.** A CLI agent node ignores `wf.provider` and needs
+  no API key — the CLI owns auth. `wf.provider` is only consulted for SDK nodes, so
+  a **pure-CLI workflow may omit `provider` entirely**. (Validation: `provider` is
+  required only if the workflow has at least one SDK agent node.)
+- **`node.model`** maps to the CLI's `--model` (claude aliases `sonnet/opus/haiku`
+  or a full id; codex a free-form model string). Absent → the CLI's own default
+  model (flow does not force one).
+- **Binary discovery.** The CLI is found on `PATH`; `FLOW_CLI_BIN` overrides it and
+  is the test-stub hook. A per-adapter default binary name (`claude`, `codex`).
+- A workflow with no CLI node never spawns a subprocess; a workflow with no SDK
+  node never imports `agent`/`ai`.
+
+---
+
+## 8. The skill (flow packaged for a CLI)
+
+The new first-class deliverable: a **skill** that teaches a coding-agent CLI to
+author and run flows. It is what turns flow-the-lib into a CLI capability.
+
+- **Contents.** The skill bundles: (a) a concise spec of the workflow JSON schema
+  (nodes, ports, edges, conditions, fan-out, subflow, CLI agent nodes) distilled
+  from `models.py`/`loader.py`; (b) worked examples (the shipped `examples/*.json`,
+  including a CLI-agent one); (c) the exact commands — `xdog-flow validate`,
+  `xdog-flow run`, `xdog-flow generate` — with when-to-use guidance; (d) the rule
+  that a CLI agent node uses `backend`, no `provider`, and an `allowed_tools`
+  narrow-list.
+- **Loop.** The CLI, guided by the skill, writes `workflow.json`, `validate`s it
+  (fast structural feedback — the loader's errors are actionable), then `run`s it.
+  Agent nodes marked `claude-cli`/`codex-cli` shell back to the CLI for their step.
+- **Generation uses existing surface.** No new authoring API — the skill drives the
+  same `loader` + `graph` + CLI that a human uses. The skill is mostly
+  documentation + command wrappers + examples, not new code. This keeps the skill
+  thin and the JSON schema the single source of truth.
+- **Portability.** Because a generated workflow can still contain SDK nodes and is a
+  plain JSON artifact, a workflow the CLI produces is shareable and runnable outside
+  the CLI (with a provider) — it is crystallized process, not a CLI-lock-in format.
+
+Delivery: the skill lives alongside flow (e.g. a `skill/` directory or a generated
+`SKILL.md` + example pack) and is installable into `claude`/`codex` per each tool's
+skill mechanism. The skill's own authoring is a separate, doc-heavy task tracked in
+§11.
+
+---
+
+## 9. Dependency reduction (the payoff)
 
 - **Interpreter**: the CLI runner imports no `agent`/`ai` — only `asyncio`
-  subprocess + `json`. `execute()` with a CLI backend touches neither package.
-- **Codegen**: an agent node compiles to a `subprocess.run(["claude"/"codex", …])`
-  + `json.loads`, so the generated module **does not inline `agent`/`ai`**. A
-  CLI-backed workflow's `--portable` bundle drops the `ai`/`agent` vendoring
-  (`_VENDORED_PACKAGES` becomes empty, or just `flow` if a subflow is present).
-- **Unchanged**: script nodes, scheduler, checkpoint, fan-out, subflow, the whole
-  wire format.
+  subprocess + `json`. `execute()` over a pure-CLI workflow touches neither package.
+- **Codegen**: a CLI agent node compiles to a `subprocess.run([...])` + `json.loads`,
+  so the generated module **does not inline `agent`/`ai`** for that node. A pure-CLI
+  workflow's `--portable` bundle drops the `ai`/`agent` vendoring (`_VENDORED_PACKAGES`
+  becomes empty, or just `flow` if a subflow is present).
+- **No provider config.** A pure-CLI workflow carries no API key and no provider —
+  the lib's configuration burden disappears for that case.
+- **Unchanged**: script nodes, scheduler, checkpoint, fan-out, subflow, wire format.
 
-A workflow that mixes SDK agent nodes and CLI agent nodes is allowed but its
-bundle still vendors `agent`/`ai` (for the SDK nodes); a pure-CLI workflow is the
-lean case.
-
----
-
-## 8. Coexistence & selection
-
-- `provider: "claude-cli"` / `"codex-cli"` selects a CLI backend for the whole
-  workflow; any other provider keeps the SDK path (existing behaviour, default).
-- A per-run override mirrors `--provider` (env `FLOW_PROVIDER` already exists in
-  the generated module).
-- The CLI binary is discovered on `PATH`; `FLOW_CLI_BIN` overrides it (also the
-  test-stub hook).
-- A per-node opt-in `model`/tool posture is unchanged; a workflow with no CLI
-  backend never spawns a subprocess.
+A mixed workflow still vendors `agent`/`ai` for its SDK nodes; the lean case is
+pure-CLI.
 
 ---
 
-## 9. v1 scope & non-goals
+## 10. v1 scope & non-goals
 
 **v1 delivers:** the `AgentRunner`/`CliAdapter` seam; a `claude` adapter and a
-`codex` adapter; native structured output via each CLI's schema flag; custom tools
-as MCP server specs with explicit allow-listing; codegen that emits the subprocess
-call; a fake-CLI parity test; a dependency-lean bundle for pure-CLI workflows.
+`codex` adapter; a per-node `backend` selector with **no provider** required for
+CLI nodes; native structured output via each CLI's schema flag; `allowed_tools`
+that narrows the CLI's toolset (flow provides none); codegen that emits the
+subprocess call; a fake-CLI parity test; a dependency-lean bundle for pure-CLI
+workflows; and a **skill** (§8) packaging flow for a CLI to author + run flows.
 
 **Non-goals (v1):**
 - No streaming of intermediate CLI events into flow's trace (only the final
@@ -230,11 +312,11 @@ call; a fake-CLI parity test; a dependency-lean bundle for pure-CLI workflows.
   flow accounts tokens uniformly, cost is out of scope).
 - No mixing an SDK tool and a CLI MCP tool on the same node.
 - No auto-installing the CLI; it must be on `PATH`.
-- The SDK backend stays the default; CLI is opt-in.
+- The SDK backend stays the default; CLI is opt-in per node.
 
 ---
 
-## 10. Risks
+## 11. Risks
 
 1. **CLI flag drift.** Both CLIs' flags are version-dependent (codex docs are now
    redirect stubs; claude added `--json-schema` only in a recent build).
@@ -255,25 +337,30 @@ call; a fake-CLI parity test; a dependency-lean bundle for pure-CLI workflows.
 
 ---
 
-## 11. Phased delivery (TDD, parity-gated)
+## 12. Phased delivery (TDD, parity-gated)
 
 1. **Seam.** Extract the `AgentRunner` contract; make the SDK path an
    `SdkRunner` behind it (no behaviour change; full suite still green). Gate.
-2. **CLI runner + claude adapter.** Interpreter side: spawn, stdin, parse; a
-   fake-`claude` stub test for text + structured. Gate.
-3. **codex adapter.** Same contract, second adapter; fake-`codex` stub test,
+2. **Model + loader.** Add `node.backend`; make `wf.provider` required only when a
+   workflow has an SDK agent node (a pure-CLI workflow validates with no provider);
+   parse `allowed_tools`; serialize round-trip. Unit tests.
+3. **CLI runner + claude adapter.** Interpreter side: spawn, stdin, parse; a
+   fake-`claude` stub test (via `FLOW_CLI_BIN`) for text + structured + allow-list.
+   Gate.
+4. **codex adapter.** Same contract, second adapter; fake-`codex` stub test,
    including the system-prompt folding and JSONL parse.
-4. **Codegen.** Emit the subprocess call + shared parser; a non-CLI workflow's
-   module still imports no subprocess/CLI code (regression); a CLI workflow's
-   module imports no `agent`/`ai`. Cross-engine parity via the fake CLI. Gate.
-5. **Custom tools.** MCP-server-spec tool refs → each adapter's config; an
-   allow-list test. Bundle: drop `ai`/`agent` for a pure-CLI workflow.
-6. **Docs + example.** A `cli-agent` example (a workflow with a `claude-cli`
-   agent node) and a README note on the auth prerequisite.
+5. **Codegen.** Emit the subprocess call + shared parser; a workflow with no CLI
+   node still emits no subprocess code (regression); a pure-CLI module imports no
+   `agent`/`ai`. Cross-engine parity via the fake CLI. Gate.
+6. **Tools + bundle.** `allowed_tools` → each adapter's allow-list flag; a pure-CLI
+   `--portable` bundle drops `ai`/`agent` vendoring.
+7. **Skill + example.** A `cli-agent` example (a workflow with a `claude-cli` agent
+   node, still runnable with an SDK provider too) and the skill pack (§8): schema
+   spec + examples + command wrappers, installable into `claude`/`codex`.
 
 ---
 
-## 12. Verification
+## 13. Verification
 
 - `uv run ruff check packages/flow/src` · `uv run mypy --strict packages/flow/src`
   · `uv run pytest packages/flow/tests -q` (fake-CLI stubs — no real agent).
