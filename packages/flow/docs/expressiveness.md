@@ -245,6 +245,12 @@ validation and codegen (one function per node) simple.
 **`interpret == compile` impact:** MEDIUM. Both engines must agree on child
 input/output mapping and on how child checkpoints nest under the parent run id.
 
+> **Design doc:** [`subflow.md`](./subflow.md) — chooses an **opaque node** (the
+> child is NOT expanded/inlined; both engines run it through the same
+> `flow.executor.execute()`), which removes the five cross-cutting nesting
+> concerns and makes `interpret == compile` *stronger*. Trade: a subflow-using
+> generated module depends on `flow` (bundles vendor it). ~2–2.5 days.
+
 ---
 
 ### G6 — Loops are bounded-count, not condition-driven; nesting is awkward
@@ -295,7 +301,10 @@ ramifications.
 
 **Phase E2 — Sub-workflows (independent, medium)**
 - G5: `type:"subflow"` node; nested execute in the interpreter, inlined child in
-  codegen; nested checkpoint namespacing; a cross-engine example.
+  codegen; nested checkpoint namespacing; a cross-engine example. → designed in
+  [`subflow.md`](./subflow.md) as an **opaque node** (child NOT inlined; both
+  engines call the same `execute()`; generated module gains a scoped `flow`
+  dependency that `--portable` vendors). ~2–2.5 days, not yet implemented.
 
 **Phase E3 — Dynamic fan-out (its own design doc first)**
 - G1: `fan_out` / `fan_in` edges; instance-keyed trace, state, and checkpoint;
