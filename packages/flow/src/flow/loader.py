@@ -233,6 +233,11 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         raise WorkflowValidationError("max_concurrency must be an int >= 0")
     max_concurrency = raw_max_concurrency
 
+    raw_fan_max = data.get("fan_max_concurrency", 0)
+    if not isinstance(raw_fan_max, int) or raw_fan_max < 0:
+        raise WorkflowValidationError("fan_max_concurrency must be an int >= 0")
+    fan_max_concurrency = raw_fan_max
+
     nodes = tuple(_parse_node(n) for n in data.get("nodes", []))
     edges = tuple(_parse_edge(e) for e in data.get("edges", []))
 
@@ -246,6 +251,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         initial_state=initial_state,
         tool_refs=tool_refs,
         max_concurrency=max_concurrency,
+        fan_max_concurrency=fan_max_concurrency,
     )
 
 

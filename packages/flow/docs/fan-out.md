@@ -196,14 +196,19 @@ if edge.fan_in == "list":
 New run-local state: `fan_counts: dict[str, int]` (node id → instance width),
 sitting beside `loop_counters`.
 
-**Concurrency.** The N instances run through the **existing** semaphore
-(executor.py:226) — no new mechanism. **Critical:** the fan-out node's driver
-must NOT hold an outer semaphore slot while its instances each try to acquire one
-(self-nested acquire deadlocks at `cap == 1`). Resolution: the fan group is
-scheduled like any node (one outer slot), but the per-instance `gather` uses the
-same semaphore *without* the outer wrapper re-acquiring — i.e. the fan node's
-own body owns the parallelism budget. This must be spelled out in the driver so
-`cap=1` degrades to sequential instances rather than hanging.
+**Concurrency (as shipped).** The N instances run under a **dedicated** limiter
+`WorkflowDef.fan_max_concurrency` (0 = unlimited, the default) — a *separate*
+`asyncio.Semaphore` built inside `_run_fan_node`, **not** the scheduler semaphore.
+Re-acquiring the scheduler semaphore here would self-nest and deadlock at
+`cap == 1`, so the fan node holds its one outer scheduler slot and its instances
+acquire only the dedicated fan semaphore. Both engines apply the identical cap
+(`_run_fan_node` and the template's `_drive_fan(..., fan_cap)`), so
+`interpret == compile` holds. With `fan_max_concurrency = 0` all N instances run
+at once (the original behaviour); set it to bound a large fan-out (e.g. 50 agent
+instances) against a provider's rate limit. This dedicated limiter is also the
+prerequisite for a subflow node becoming a fan-out worker (see `subflow.md`):
+without it, N child `execute()` calls each with their own semaphore would run
+`N × child_cap` LLM calls unbounded.
 
 ### 4.3 Codegen (`codegen.py`)
 

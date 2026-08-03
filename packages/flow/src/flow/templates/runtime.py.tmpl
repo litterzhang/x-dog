@@ -529,12 +529,15 @@ async def _drive_fan(
     store_fn: "Callable[[dict[str, object], dict[str, object]], None]",
     fan_port: str,
     out_ports: tuple[str, ...],
+    fan_cap: int = 0,
 ) -> None:
     """Dynamic fan-out driver (G1): run *node_fn* once per element of the array in
     ``ins[fan_port]`` and aggregate each output port into an index-ordered list.
 
     From the scheduler's view this is still ONE node (one completed id, one frame,
-    one checkpoint entry).  Mirrors the interpreter's ``_run_fan_node``.
+    one checkpoint entry).  Mirrors the interpreter's ``_run_fan_node``.  A dedicated
+    ``fan_cap`` semaphore limits how many instances run at once (0 = unlimited); it
+    is independent of any scheduler semaphore (re-acquiring that here would deadlock).
     """
     global _TOKENS_USED
     if node_id in _COMPLETED or node_id in _ISOLATED:
@@ -545,9 +548,13 @@ async def _drive_fan(
     _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
     _t0 = time.monotonic()
     _ctx = RuntimeContext(step=len(_STACK), node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    _fan_sem: asyncio.Semaphore | None = asyncio.Semaphore(fan_cap) if fan_cap > 0 else None
 
     async def _one(_x: object) -> tuple[dict[str, object], int]:
-        return await node_fn(provider=_PROVIDER, ctx=_ctx, **{**ins, fan_port: _x})
+        if _fan_sem is None:
+            return await node_fn(provider=_PROVIDER, ctx=_ctx, **{**ins, fan_port: _x})
+        async with _fan_sem:
+            return await node_fn(provider=_PROVIDER, ctx=_ctx, **{**ins, fan_port: _x})
 
     _results = await asyncio.gather(*[_one(_x) for _x in _items])
     _agg: dict[str, object] = {_p: [r[0].get(_p) for r in _results] for _p in out_ports}

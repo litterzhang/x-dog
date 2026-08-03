@@ -440,9 +440,19 @@ async def execute(
         _emit(NodeStarted(node_id=node_id, step=step))
         _t0 = time.monotonic()
 
+        # Dedicated per-fan limiter: cap how many instances run at once WITHOUT
+        # touching the scheduler semaphore (re-acquiring it here would self-nest
+        # and deadlock at cap=1).  0/negative = unlimited.  Both engines apply the
+        # same cap so interpret == compile holds.
+        _fan_cap = wf.fan_max_concurrency
+        _fan_sem: asyncio.Semaphore | None = asyncio.Semaphore(_fan_cap) if _fan_cap > 0 else None
+
         async def _one(i: int) -> tuple[dict[str, object], int]:
             ins_i = {**shared, worker_port: items[i]}
-            return await _fan_instance(node, node_id, ins_i, step)
+            if _fan_sem is None:
+                return await _fan_instance(node, node_id, ins_i, step)
+            async with _fan_sem:
+                return await _fan_instance(node, node_id, ins_i, step)
 
         results = await asyncio.gather(*[_one(i) for i in range(len(items))])
 

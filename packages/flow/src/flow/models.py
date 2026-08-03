@@ -168,6 +168,12 @@ class WorkflowDef:
     # tool registry under ``tool_name``, so agent nodes can name it in ``tools``.
     tool_refs: tuple[tuple[str, str], ...] = field(default=())
     max_concurrency: int = 0  # 0 (or negative) = unlimited (current behaviour)
+    # Dynamic fan-out (G1) per-group concurrency cap: at most this many worker
+    # instances of ONE fan-out node run at once (0/negative = unlimited).  This is
+    # a DEDICATED limiter, independent of ``max_concurrency`` — the scheduler
+    # semaphore must not be re-acquired inside a fan node (self-nesting would
+    # deadlock at cap=1).  Both engines apply it identically (interpret == compile).
+    fan_max_concurrency: int = 0
 
 
 def entry_frontier(wf: WorkflowDef) -> tuple[str, ...]:

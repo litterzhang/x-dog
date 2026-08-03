@@ -25,11 +25,12 @@ from flow.executor import execute
 from flow.loader import parse_workflow
 
 
-def _map_reduce(n: int, cap: int = 0, worker: str = "script") -> dict[str, Any]:
+def _map_reduce(n: int, cap: int = 0, worker: str = "script", fan_cap: int = 0) -> dict[str, Any]:
     """A map-reduce workflow with a runtime-sized fan-out of *n* elements.
 
     ``worker='script'`` uppercases each element (no LLM); ``worker='agent'`` echoes
-    the stubbed model text so the same graph exercises the agent path.
+    the stubbed model text so the same graph exercises the agent path.  ``fan_cap``
+    caps how many worker instances run at once (0 = unlimited).
     """
     if worker == "script":
         work_node = {
@@ -54,6 +55,7 @@ def _map_reduce(n: int, cap: int = 0, worker: str = "script") -> dict[str, Any]:
         "defaults": {"model": "m"},
         "state": {"n": n},
         "max_concurrency": cap,
+        "fan_max_concurrency": fan_cap,
         "nodes": [
             {
                 "id": "plan",
@@ -219,3 +221,67 @@ def test_fan_out_generated_module_is_ruff_clean() -> None:
         assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# --- fan concurrency limiter -----------------------------------------------
+
+
+def _conc_tracking_map_reduce(n: int, fan_cap: int, probe: str) -> dict[str, Any]:
+    """Map-reduce whose worker records peak in-flight count into *probe* file."""
+    code = (
+        "async def w(ctx, task):\n"
+        "    import asyncio, json, os\n"
+        f"    p = {probe!r}\n"
+        "    st = json.load(open(p)) if os.path.exists(p) else {'cur': 0, 'max': 0}\n"
+        "    st['cur'] += 1\n"
+        "    st['max'] = max(st['max'], st['cur'])\n"
+        "    json.dump(st, open(p, 'w'))\n"
+        "    await asyncio.sleep(0.03)\n"
+        "    st = json.load(open(p))\n"
+        "    st['cur'] -= 1\n"
+        "    json.dump(st, open(p, 'w'))\n"
+        "    return task.upper()\n"
+    )
+    d = _map_reduce(n, fan_cap=fan_cap)
+    d["nodes"][1] = {"id": "work", "type": "script", "inputs": ["task"], "code": code, "outputs": ["res"]}
+    return d
+
+
+async def test_fan_cap_limits_peak_concurrency(tmp_path: pathlib.Path) -> None:
+    probe = str(tmp_path / "conc.json")
+    wf = parse_workflow(_conc_tracking_map_reduce(8, fan_cap=2, probe=probe))
+    await execute(wf, stream_fn_factory=_stub_factory("X"))
+    import json
+
+    peak = json.loads(pathlib.Path(probe).read_text())["max"]
+    assert peak == 2, f"fan_cap=2 should hold peak at 2, saw {peak}"
+
+
+async def test_fan_cap_zero_is_unlimited(tmp_path: pathlib.Path) -> None:
+    probe = str(tmp_path / "conc.json")
+    wf = parse_workflow(_conc_tracking_map_reduce(6, fan_cap=0, probe=probe))
+    await execute(wf, stream_fn_factory=_stub_factory("X"))
+    import json
+
+    peak = json.loads(pathlib.Path(probe).read_text())["max"]
+    assert peak == 6, f"fan_cap=0 should run all 6 at once, saw {peak}"
+
+
+async def test_fan_cap_parity_holds(tmp_path: pathlib.Path) -> None:
+    """A capped fan still produces identical output through both engines."""
+    data = _map_reduce(5, fan_cap=2)
+    wf = parse_workflow(data)
+    interp = await execute(wf, stream_fn_factory=_stub_factory("X"))
+    src = generate(wf)
+    assert "('res',), 2)" in src  # the fan_cap literal reaches _drive_fan positionally
+    gen_runtime = await _run_generated(src)
+    assert gen_runtime["state"] == dict(interp.runtime["state"])
+    assert gen_runtime["out"] == dict(interp.runtime["out"])
+
+
+def test_fan_max_concurrency_roundtrips() -> None:
+    from flow.builder.serialize import workflow_to_dict
+
+    wf = parse_workflow(_map_reduce(3, fan_cap=4))
+    assert wf.fan_max_concurrency == 4
+    assert parse_workflow(workflow_to_dict(wf)) == wf

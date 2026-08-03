@@ -323,7 +323,7 @@ def _invoke_expr(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str
         out_ports = tuple(p.name for p in node.output_ports)
         return (
             f"_drive_fan({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
-            f"{fan_port!r}, {out_ports!r})"
+            f"{fan_port!r}, {out_ports!r}, {wf.fan_max_concurrency})"
         )
     return (
         f'_drive({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, {_retry_spec(node, wf)})'
