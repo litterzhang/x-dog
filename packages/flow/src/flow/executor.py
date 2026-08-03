@@ -471,6 +471,65 @@ async def execute(
         if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
             raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
+    async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object]) -> None:
+        """Run a ``type="subflow"`` node (G5) as ONE opaque nested workflow.
+
+        Calls the same ``execute()`` on the inline child, mapping the parent's
+        ``ins`` into the child's ``$in`` and the child's ``runtime["out"]`` back
+        into this node's derived output ports.  The child owns its own scheduler,
+        checkpoint (a node-qualified run-id), trace, tokens, isolation, and
+        semaphore — the parent scheduler sees one node that completes once.
+        Mirrors codegen's ``node_X`` that calls ``execute()`` on the embedded child.
+        """
+        nonlocal tokens_used
+        assert node.child is not None
+        step = await _reserve_step()
+        _emit(NodeStarted(node_id=node_id, step=step))
+        _t0 = time.monotonic()
+
+        # Parent ins -> child $in (by the derived input-port names).
+        child_inputs = {p.name: ins[p.name] for p in node.input_ports if p.name in ins}
+        # Remaining token budget (None = unlimited); the child's own breaker trips
+        # if it overruns, and we re-check after it returns.
+        child_budget: int | None = None
+        if max_tokens is not None and max_tokens > 0:
+            child_budget = max(0, max_tokens - tokens_used)
+        child_run_id = f"{run_id}::{node_id}" if run_id else None
+
+        child_result = await execute(
+            node.child,
+            stream_fn_factory=stream_fn_factory,
+            timeout=timeout,
+            tool_registry=tool_registry,
+            script_resolver=script_resolver,
+            base_dir=base_dir,
+            inputs=child_inputs,
+            web_search_fn_factory=web_search_fn_factory,
+            checkpoint=checkpoint,
+            run_id=child_run_id,
+            max_tokens=child_budget,
+        )
+        child_out = child_result.runtime.get("out", {})
+        child_tokens = child_result.runtime.get("tokens_used", 0)
+        assert isinstance(child_out, dict)
+
+        # Child $output -> this node's derived output ports.
+        projected: dict[str, object] = {p.name: child_out[p.name] for p in node.output_ports if p.name in child_out}
+        async with _state_lock:
+            outputs[node_id] = projected
+        await _record_frame(node_id, ins, step)
+        async with _state_lock:
+            tokens_used += child_tokens if isinstance(child_tokens, int) else 0
+        completed.add(node_id)
+        _save_checkpoint()
+        _emit(NodeFinished(
+            node_id=node_id, step=step,
+            duration_s=time.monotonic() - _t0,
+            tokens=child_tokens if isinstance(child_tokens, int) else 0,
+        ))
+        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
+            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
+
     async def _run_node(node_id: str) -> None:
         """Execute a single node and store its output ports."""
         # Skip nodes already completed (resume from checkpoint).
@@ -523,6 +582,10 @@ async def execute(
                 # Signal absent — save checkpoint and pause
                 _save_checkpoint()
                 raise WorkflowPaused(node_id, node.signal)
+            return
+
+        if node.type == "subflow":
+            await _run_subflow_node(node, node_id, ins)
             return
 
         if node.type == "script":

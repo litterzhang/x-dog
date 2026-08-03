@@ -87,7 +87,7 @@ class RetryPolicy:
 @dataclass(frozen=True)
 class NodeDef:
     id: str
-    type: Literal["agent", "script", "human"] = "agent"
+    type: Literal["agent", "script", "human", "subflow"] = "agent"
     signal: str = ""
     model: str | None = None
     system_prompt: str = ""
@@ -113,6 +113,12 @@ class NodeDef:
     # Determinism flag: when True, output is memoised keyed by (node_id, hash(inputs))
     # so the node is skipped on retry/resume when the same input was already processed.
     deterministic: bool = False
+    # Sub-workflow (G5): for a ``type="subflow"`` node, the INLINE child workflow
+    # run as one opaque node.  Its input_ports/output_ports are DERIVED from the
+    # child's signature at load time (the author does not declare them).  Inline
+    # (not a path ref) so codegen can embed it as a literal and recursion is
+    # structurally impossible.  See docs/subflow.md.
+    child: WorkflowDef | None = None
 
     @property
     def input_names(self) -> tuple[str, ...]:

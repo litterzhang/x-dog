@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import importlib.resources
+import json
 import re
 import string
 from collections import defaultdict
@@ -538,6 +539,46 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def _render_subflow_node(node: NodeDef, fn_name: str, safe: str) -> str:
+    """Render a subflow node (G5) as a pure function calling ``execute()`` on the
+    embedded child.
+
+    The child workflow JSON is embedded as a module-level dict literal so the
+    generated module is self-carrying; the function maps its ``ins`` into the
+    child's ``$in`` and the child's ``runtime["out"]`` into this node's output
+    ports, returning ``(outputs, tokens)`` for the generic ``_drive``.  This is the
+    one place the generated module imports ``flow`` (see docs/subflow.md §3).
+    """
+    from flow.builder.serialize import workflow_to_dict
+
+    assert node.child is not None
+    child_json = json.dumps(workflow_to_dict(node.child), ensure_ascii=False)
+    in_names = [p.name for p in node.input_ports]
+    out_names = [p.name for p in node.output_ports]
+    params = ["provider: object", "ctx: RuntimeContext"]
+    params += [f"{p.name}: object" for p in node.input_ports]
+    sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
+    lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
+    lines.append("    from flow.executor import execute as _flow_execute")
+    lines.append("    from flow.loader import parse_workflow as _flow_parse")
+    child_line = f"    _child = _flow_parse(_CHILD_{safe})"
+    lines.append(child_line)
+    pairs = ", ".join(f"{n!r}: {n}" for n in in_names)
+    lines.append(f"    _child_in: dict[str, object] = {{{pairs}}}")
+    lines.append("    _res = await _flow_execute(_child, inputs=_child_in, stream_fn_factory=None)")
+    lines.append("    _cout = _res.runtime.get('out', {})")
+    lines.append("    _out: dict[str, object] = {}")
+    for n in out_names:
+        lines.append(f"    if {n!r} in _cout:")
+        lines.append(f"        _out[{n!r}] = _cout[{n!r}]")
+    lines.append("    _ctoks = _res.runtime.get('tokens_used', 0)")
+    lines.append("    return _out, _ctoks if isinstance(_ctoks, int) else 0")
+    # Module-level embedded child literal (emitted before the function).
+    literal = f"_CHILD_{safe} = {child_json}"
+    literal_line = literal if len(literal) <= 120 else literal + "  # noqa: E501"
+    return literal_line + "\n\n\n" + "\n".join(lines)
+
+
 def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit a node's code: its pure function plus, for script/agent, the driver
     helpers ``_inputs_<safe>`` and ``_store_<safe>``.  Human nodes stay
@@ -552,6 +593,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
 
     if node.type == "script":
         node_fn = _render_script_node(node, fn_name, safe, wf)
+    elif node.type == "subflow":
+        node_fn = _render_subflow_node(node, fn_name, safe)
     else:
         node_fn = _render_agent_node(node, fn_name, wf)
     blocks = [

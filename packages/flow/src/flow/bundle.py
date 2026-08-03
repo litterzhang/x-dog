@@ -178,8 +178,13 @@ def build_bundle(wf: WorkflowDef, out_dir: Path, *, offline: bool = False) -> Pa
     # 1) The generated workflow module.
     (out_dir / "workflow.py").write_text(generate(wf), encoding="utf-8")
 
-    # 2) Vendored package sources.
-    for name in _VENDORED_PACKAGES:
+    # 2) Vendored package sources.  A subflow-using workflow's generated module
+    # imports ``flow`` (to call execute() on the embedded child), so ``flow`` is
+    # vendored too — otherwise the bundle stays flow-independent (ai/agent only).
+    vendored: tuple[str, ...] = _VENDORED_PACKAGES
+    if any(n.type == "subflow" for n in wf.nodes):
+        vendored = (*vendored, "flow")
+    for name in vendored:
         _copy_package(name, vendor_dir)
 
     # 3) Entry point.

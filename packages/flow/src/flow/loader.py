@@ -127,12 +127,40 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         raise WorkflowValidationError(f"Node {node_id!r}: on_error must be 'fail' or 'isolate'")
     on_error: Literal["fail", "isolate"] = raw_on_error
     raw_type = data.get("type", "agent")
-    if raw_type not in ("agent", "script", "human"):
+    if raw_type not in ("agent", "script", "human", "subflow"):
         raise WorkflowValidationError(
-            f"Node {node_id!r}: type must be 'agent', 'script', or 'human', got {raw_type!r}"
+            f"Node {node_id!r}: type must be 'agent', 'script', 'human', or 'subflow', got {raw_type!r}"
         )
-    node_type: Literal["agent", "script", "human"] = raw_type
+    node_type: Literal["agent", "script", "human", "subflow"] = raw_type
     signal = str(data.get("signal", ""))
+
+    # Sub-workflow (G5): parse the INLINE child and DERIVE the node's ports from
+    # its signature — the author does not declare inputs/outputs on a subflow node.
+    child: WorkflowDef | None = None
+    sub_input_ports: tuple[Port, ...] = _parse_ports(data.get("inputs", []))
+    sub_output_ports: tuple[Port, ...] = _parse_output_ports(data)
+    if node_type == "subflow":
+        raw_child = data.get("subflow")
+        if not isinstance(raw_child, dict):
+            raise WorkflowValidationError(
+                f"Subflow node {node_id!r}: must set 'subflow' to an inline child workflow object"
+            )
+        if data.get("inputs") or data.get("outputs") or data.get("output"):
+            raise WorkflowValidationError(
+                f"Subflow node {node_id!r}: must not declare 'inputs'/'outputs' — they are "
+                f"derived from the child workflow's signature"
+            )
+        child = parse_workflow(raw_child)
+        in_sig = workflow_input_schema(child)["properties"]
+        out_sig = workflow_output_schema(child)["properties"]
+        assert isinstance(in_sig, dict) and isinstance(out_sig, dict)
+        sub_input_ports = tuple(
+            Port(name=k, schema=v if isinstance(v, dict) else {"type": "string"}) for k, v in in_sig.items()
+        )
+        sub_output_ports = tuple(
+            Port(name=k, schema=v if isinstance(v, dict) else {"type": "string"}) for k, v in out_sig.items()
+        )
+
     return NodeDef(
         id=node_id,
         type=node_type,
@@ -142,14 +170,15 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
         prompt=data.get("prompt", ""),
         tools=tools,
         run=data.get("run"),
-        input_ports=_parse_ports(data.get("inputs", [])),
-        output_ports=_parse_output_ports(data),
+        input_ports=sub_input_ports,
+        output_ports=sub_output_ports,
         code=data.get("code"),
         web_search=bool(data.get("web_search", False)),
         web_search_model=data.get("web_search_model"),
         retry=retry,
         on_error=on_error,
         deterministic=bool(data.get("deterministic", False)),
+        child=child,
     )
 
 
@@ -642,6 +671,34 @@ def _validate_fan_in_edge(edge: EdgeDef, fan_out_workers: set[str]) -> None:
         )
 
 
+def _validate_subflow_node(node: NodeDef) -> None:
+    """Validate a ``type="subflow"`` node (G5): inline child, no nesting, strict
+    signature, and the mutually-exclusive-field rules.  Recursively validates the
+    child so a broken child fails at the parent's load time."""
+    if node.child is None:
+        raise WorkflowValidationError(f"Subflow node {node.id!r}: missing inline child workflow")
+    if node.code is not None:
+        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set 'code'")
+    if node.prompt or node.system_prompt:
+        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set a prompt")
+    if node.tools:
+        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set 'tools'")
+    # v1: no nested subflows (recursion is structurally impossible with inline
+    # children, but a child may still itself contain a subflow node — reject that).
+    if any(cn.type == "subflow" for cn in node.child.nodes):
+        raise WorkflowValidationError(
+            f"Subflow node {node.id!r}: nested sub-workflows are not supported (v1)"
+        )
+    # Recursively validate the child (a broken child fails here).
+    validate_workflow(node.child)
+    # Strict signature (option A): every derived input port must be typed.  A key
+    # that is neither declared in the child's in_schema nor inferable is dropped by
+    # workflow_input_schema, so an unfed parent mapping to it would fail the normal
+    # port check; but a fed key with a bare "string" fallback from an untyped
+    # consumer is still allowed (string is a concrete type).  Nothing more to do:
+    # the derived ports already ARE the strict signature.
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
     node_ids = [n.id for n in wf.nodes]
@@ -750,6 +807,8 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(f"Human node {node.id!r} must not set 'tools'")
             if len(node.output_ports) > 1:
                 raise WorkflowValidationError(f"Human node {node.id!r} may declare at most one output port")
+        elif node.type == "subflow":
+            _validate_subflow_node(node)
 
     # Edges: endpoints exist, ports exist, mappings are well-formed, loops bounded.
     # fed[(dst_node, dst_port)] counts feeding data edges — every input port needs
@@ -764,6 +823,20 @@ def validate_workflow(wf: WorkflowDef) -> None:
     loop_touched = {e.src for e in wf.edges if e.loop_max is not None} | {
         e.dst for e in wf.edges if e.loop_max is not None
     }
+    # v1 scope guards for subflow nodes: no subflow inside a loop or as a fan-out
+    # worker (the loop×subflow and fan×subflow interactions are out of scope; the
+    # fan-out limiter is the prerequisite for the latter).
+    for _n in wf.nodes:
+        if _n.type != "subflow":
+            continue
+        if _n.id in loop_touched:
+            raise WorkflowValidationError(
+                f"Subflow node {_n.id!r} may not be part of a bounded loop (v1)"
+            )
+        if _n.id in fan_out_workers:
+            raise WorkflowValidationError(
+                f"Subflow node {_n.id!r} may not be a fan-out worker (v1)"
+            )
     for edge in wf.edges:
         if edge.src == OUT_NODE_ID:
             raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")

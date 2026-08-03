@@ -1,6 +1,6 @@
 # flow — Sub-Workflows (G5) Design Doc
 
-Status: draft · Audience: flow maintainers · Prerequisite: read
+Status: **v1 shipped** · Audience: flow maintainers · Prerequisite: read
 [`expressiveness.md`](./expressiveness.md) §G5 first.
 
 `expressiveness.md` G5 notes that `WorkflowDef` is flat (`nodes + edges`) with no
@@ -102,14 +102,21 @@ This trade is **worth it**: it buys away the entire inline-expansion complexity
 
 ### 4.1 Model (`models.py`)
 
-`NodeDef.type` gains `"subflow"`; the child is named by the existing `run`-style
-reference (reused, no new field):
+`NodeDef.type` gains `"subflow"`; the child is carried **inline** as a nested
+workflow object (as shipped — see the note below):
 
 ```python
 type: Literal["agent", "script", "human", "subflow"] = "agent"
-# For a subflow node: `run` is a "module.path:workflow" ref OR a path to a child
-# workflow JSON (resolved like a script node's run-ref, relative to base_dir).
+# For a subflow node: `child` holds the INLINE child workflow (JSON key "subflow").
 ```
+
+> **As shipped (v1).** The child is authored **inline** (`"subflow": { ...child
+> workflow... }`), not a `run`-path ref. Inline was chosen because: (a) `parse_workflow`
+> has no `base_dir`, so resolving a path at parse time — where the ports must be
+> derived — is awkward; (b) codegen embeds the child as a literal anyway, so inline
+> is the natural source; (c) recursion is then *structurally impossible* (a finite
+> JSON document can't contain itself), so no cycle-detection pass is needed — a
+> child that itself contains a `subflow` node is simply rejected (no nesting in v1).
 
 **Ports are DERIVED from the child's signature, not declared.** A subflow node
 does not author its own `input_ports` / `output_ports` — they are generated from

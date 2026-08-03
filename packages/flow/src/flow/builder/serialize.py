@@ -64,6 +64,12 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["run"] = node.run
     if node.code is not None:
         data["code"] = node.code
+    if node.type == "subflow":
+        # A subflow node carries its INLINE child; its ports are DERIVED on re-parse,
+        # so they are NOT emitted (re-declaring them would fail validation).
+        if node.child is not None:
+            data["subflow"] = workflow_to_dict(node.child)
+        return data
     if node.input_ports:
         data["inputs"] = _ports_to_json(node.input_ports)
     if node.output_ports:

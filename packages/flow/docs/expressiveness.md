@@ -224,7 +224,7 @@ complicate all three.
 ### G5 — No sub-workflow / reusable unit
 
 `WorkflowDef` is flat: `nodes + edges`. There is no primitive to call another
-workflow as a single node. So a common sub-graph (e.g. a
+workflow as a single node.  **→ SHIPPED (v1). See [`subflow.md`](./subflow.md).** So a common sub-graph (e.g. a
 "draft → critic → revise" triad) must be copy-pasted into every workflow that
 needs it, and — combined with G1 — you can't say *"run this sub-flow once per
 item."*
@@ -304,7 +304,9 @@ ramifications.
   codegen; nested checkpoint namespacing; a cross-engine example. → designed in
   [`subflow.md`](./subflow.md) as an **opaque node** (child NOT inlined; both
   engines call the same `execute()`; generated module gains a scoped `flow`
-  dependency that `--portable` vendors). ~2–2.5 days, not yet implemented.
+  dependency that `--portable` vendors). **v1 shipped**: inline child, derived
+  ports, nested `execute()` + codegen `node_X` calling `execute()`, cross-engine
+  parity in `tests/test_subflow.py`.
 
 **Phase E3 — Dynamic fan-out (its own design doc first)**
 - G1: `fan_out` / `fan_in` edges; instance-keyed trace, state, and checkpoint;
