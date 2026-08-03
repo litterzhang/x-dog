@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import pathlib
 import stat
+import subprocess
+import sys
+import types
 from typing import Any
 
 import pytest
 from flow.builder.serialize import workflow_to_dict
+from flow.codegen import generate
 from flow.errors import WorkflowValidationError
 from flow.executor import execute
 from flow.loader import parse_workflow, validate_workflow
@@ -269,3 +273,55 @@ async def test_codex_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) 
     }
     r = await execute(parse_workflow(d))
     assert r.runtime["out"] == {"title": "S", "n": 1}
+
+
+# --- Phase 5: codegen CLI agent + parity (interpret == compile) ------------
+
+async def test_cli_agent_interpret_equals_compile(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """A CLI agent node produces identical output through execute() and codegen."""
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
+    d = {
+        "name": "p", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "model": "sonnet",
+                   "prompt": "hi", "allowed_tools": ["Read"],
+                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
+    }
+    wf = parse_workflow(d)
+    interp = await execute(wf)
+    src = generate(wf)
+    compile(src, "<g>", "exec")
+    mod = types.ModuleType("_gen_cli")
+    exec(compile(src, "<g>", "exec"), mod.__dict__)  # noqa: S102
+    await mod.main()  # type: ignore[attr-defined]
+    gen = mod._RUNTIME  # type: ignore[attr-defined]
+    assert gen["out"] == dict(interp.runtime["out"])
+    assert gen["state"] == dict(interp.runtime["state"])
+
+
+def test_cli_agent_codegen_calls_subprocess() -> None:
+    src = generate(parse_workflow(_cli_wf(backend="claude-cli", allowed_tools=["Read"])))
+    assert "_run_cli_agent('claude-cli'" in src
+    assert "create_subprocess_exec" in src  # the inlined CLI helper
+
+
+def test_non_cli_workflow_emits_no_subprocess() -> None:
+    """A script/SDK workflow's module must not contain the CLI subprocess helper call."""
+    d = {
+        "name": "plain", "provider": "copilot", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "hi", "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "result"}}],
+    }
+    src = generate(parse_workflow(d))
+    assert "_run_cli_agent('" not in src  # no CLI node -> no CLI call emitted (helper may be defined)
+
+
+def test_cli_agent_generated_module_ruff_clean(tmp_path: pathlib.Path) -> None:
+    src = generate(parse_workflow(_cli_wf(allowed_tools=["Read"])))
+    p = tmp_path / "cli_mod.py"
+    p.write_text(src, encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(p)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"ruff failed:\n{r.stdout}\n{r.stderr}"

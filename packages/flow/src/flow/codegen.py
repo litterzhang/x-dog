@@ -539,6 +539,56 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     return "\n".join(lines)
 
 
+def _render_cli_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
+    """Render a CLI agent node: shell out to a coding-agent CLI via the inlined
+    ``_run_cli_agent`` helper (no ``agent``/``ai`` import).
+
+    Same shape as ``_render_agent_node`` (reconstruct ``ins``, interpolate prompts,
+    coerce the result into output ports) — only the execution call differs.  Both
+    engines pass the identical (backend, model, prompts, schema, allowed_tools) so
+    interpret == compile holds.
+    """
+    model = node.model or wf.default_model
+    params = ["provider: object", "ctx: RuntimeContext"]
+    params += [f"{p.name}: object" for p in node.input_ports]
+    sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
+    lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
+    if node.input_ports:
+        pairs = ", ".join(f"{p.name!r}: {p.name}" for p in node.input_ports)
+        ins_line = f"    ins: dict[str, object] = {{{pairs}}}"
+        lines.append(ins_line if len(ins_line) <= 120 else ins_line + "  # noqa: E501")
+        ins_container: ContainerExpr = "ins"
+    else:
+        ins_container = "{}"
+    sys_prompt = _render_prompt(node.system_prompt, ins_container)
+    user_prompt = _render_prompt(node.prompt, ins_container)
+    lines.append(f"    _sys = {_wrap_string_expr(sys_prompt)}")
+    lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
+    _structured = agent_is_structured(node)
+    _schema_expr = f"{agent_output_schema(node)!r}" if _structured else "None"
+    _call = (
+        f"    result, _node_tokens = await _run_cli_agent({node.backend!r}, {model!r}, "
+        f"_sys, _usr, {_schema_expr}, {tuple(node.allowed_tools)!r})"
+    )
+    lines.append(_call if len(_call) <= 120 else _call + "  # noqa: E501")
+    lines.append("    _out: dict[str, object] = {}")
+    if node.output_ports:
+        if _structured and len(node.output_ports) > 1:
+            _not_obj_msg = f"Node {node.id!r}: multi-output agent must submit an object"
+            lines.append("    if not isinstance(result, dict):")
+            lines.append(f"        raise WorkflowExecutionError({_not_obj_msg!r})")
+            for p in node.output_ports:
+                _miss_msg = f"Node {node.id!r}: submitted result is missing field {p.name!r}"
+                lines.append(f"    if {p.name!r} not in result:")
+                lines.append(f"        raise WorkflowExecutionError({_miss_msg!r})")
+                store = f"    _out[{p.name!r}] = to_state(result[{p.name!r}], {p.type!r})"
+                lines.append(store if len(store) <= 120 else store + "  # noqa: E501")
+        else:
+            lines.append(f"    _out[{node.output_ports[0].name!r}] = result")
+    lines.append("    return _out, _node_tokens")
+    return "\n".join(lines)
+
+
 def _render_subflow_node(node: NodeDef, fn_name: str, safe: str) -> str:
     """Render a subflow node (G5) as a pure function calling ``execute()`` on the
     embedded child.
@@ -595,6 +645,8 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
         node_fn = _render_script_node(node, fn_name, safe, wf)
     elif node.type == "subflow":
         node_fn = _render_subflow_node(node, fn_name, safe)
+    elif node.backend is not None:
+        node_fn = _render_cli_agent_node(node, fn_name, wf)
     else:
         node_fn = _render_agent_node(node, fn_name, wf)
     blocks = [
@@ -935,12 +987,26 @@ def generate(wf: WorkflowDef) -> str:
     # _drive always references hashlib in its (deterministic-only) memo branch.
     hashlib_import = "import hashlib\n"
 
+    # Provider init: only an SDK agent node needs ai.provider(...).  A pure-CLI (or
+    # script-only) workflow leaves _PROVIDER = None and never imports a provider.
+    _has_sdk_agent = any(n.type == "agent" and n.backend is None for n in wf.nodes)
+    if _has_sdk_agent:
+        provider_init = (
+            '    provider = ai.provider(os.environ.get("FLOW_PROVIDER") or "$provider")\n'
+            "    global _PROVIDER\n"
+            "    _PROVIDER = provider"
+        )
+        provider_init = string.Template(provider_init).substitute(provider=wf.provider)
+    else:
+        provider_init = "    _ = ai  # no SDK agent node — provider unused (CLI/script backend)"
+
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
         in_seed=_render_in_seed(wf),
         in_node_id=repr(IN_NODE_ID),
         node_functions=node_functions,
         provider=wf.provider,
+        provider_init=provider_init,
         main_body=main_body,
         script_imports=_render_script_imports(wf, safe_ids),
         tool_registration=_render_tool_registration(wf),

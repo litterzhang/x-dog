@@ -4,6 +4,7 @@ import asyncio
 ${hashlib_import}import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterable
@@ -438,6 +439,125 @@ async def _run_agent(
     return "".join(accumulated), _node_tokens
 
 
+# ---------------------------------------------------------------------------
+# CLI agent backend: shell out to a coding-agent CLI for one turn (no agent/ai).
+# Mirrors flow.runners.CliRunner + the claude/codex adapters; kept in lock-step
+# with the interpreter by the interpret==compile parity tests.
+# ---------------------------------------------------------------------------
+def _cli_binary(backend: str) -> str:
+    _env = "FLOW_CLI_BIN_" + backend.upper().replace("-", "_")
+    _default = {"claude-cli": "claude", "codex-cli": "codex"}.get(backend, backend)
+    return os.environ.get(_env) or os.environ.get("FLOW_CLI_BIN") or _default
+
+
+def _cli_argv(
+    backend: str,
+    model: str,
+    system_prompt: str,
+    output_schema: dict[str, object] | None,
+    allowed_tools: "tuple[str, ...]",
+    scratch: Path,
+) -> "list[str]":
+    if backend == "claude-cli":
+        _args = ["-p", "--output-format", "json"]
+        if model:
+            _args += ["--model", model]
+        if system_prompt:
+            _args += ["--append-system-prompt", system_prompt]
+        if output_schema is not None:
+            _args += ["--json-schema", json.dumps(output_schema, sort_keys=True)]
+        if allowed_tools:
+            _args += ["--allowedTools", ",".join(allowed_tools)]
+        return _args
+    if backend == "codex-cli":
+        _args = ["exec", "--json", "--skip-git-repo-check"]
+        if model:
+            _args += ["-m", model]
+        if output_schema is not None:
+            _sf = scratch / "output_schema.json"
+            _sf.write_text(json.dumps(output_schema, sort_keys=True), encoding="utf-8")
+            _args += ["--output-schema", str(_sf)]
+        return _args
+    raise WorkflowExecutionError(f"unknown CLI backend {backend!r}")
+
+
+def _cli_stdin(backend: str, system_prompt: str, user_prompt: str) -> str:
+    if backend == "codex-cli" and system_prompt:
+        return f"{system_prompt}\n\n{user_prompt}"
+    return user_prompt
+
+
+def _cli_parse(backend: str, stdout: str, structured: bool) -> tuple[object, int]:
+    if backend == "claude-cli":
+        _env = json.loads(stdout)
+        if not isinstance(_env, dict):
+            raise WorkflowExecutionError("claude-cli: unexpected output (not a JSON object)")
+        _i, _o = _env.get("input_tokens"), _env.get("output_tokens")
+        _tok = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
+        if structured:
+            _obj = _env.get("structured_output")
+            if _obj is None:
+                raise WorkflowExecutionError("claude-cli: no structured_output in response")
+            return _obj, _tok
+        _res = _env.get("result", "")
+        return (_res if isinstance(_res, str) else json.dumps(_res)), _tok
+    if backend == "codex-cli":
+        _final: str | None = None
+        _tok = 0
+        for _line in stdout.splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _ev = json.loads(_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(_ev, dict):
+                continue
+            if _ev.get("type") == "item.completed":
+                _it = _ev.get("item")
+                if isinstance(_it, dict) and _it.get("type") == "agent_message" and isinstance(_it.get("text"), str):
+                    _final = _it["text"]
+            elif _ev.get("type") == "turn.completed":
+                _u = _ev.get("usage")
+                if isinstance(_u, dict):
+                    _i, _o = _u.get("input_tokens"), _u.get("output_tokens")
+                    _tok = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
+        if _final is None:
+            raise WorkflowExecutionError("codex-cli: no agent_message in output")
+        if structured:
+            return json.loads(_final), _tok
+        return _final, _tok
+    raise WorkflowExecutionError(f"unknown CLI backend {backend!r}")
+
+
+async def _run_cli_agent(
+    backend: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    output_schema: dict[str, object] | None,
+    allowed_tools: "tuple[str, ...]",
+) -> tuple[object, int]:
+    _structured = output_schema is not None
+    _scratch = Path(tempfile.mkdtemp(prefix="flow-cli-"))
+    try:
+        _argv = _cli_argv(backend, model, system_prompt, output_schema, allowed_tools, _scratch)
+        _stdin = _cli_stdin(backend, system_prompt, user_prompt)
+        _bin = _cli_binary(backend)
+        _proc = await asyncio.create_subprocess_exec(
+            _bin, *_argv,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _out_b, _err_b = await _proc.communicate(_stdin.encode())
+        if _proc.returncode != 0:
+            _err = _err_b.decode(errors="replace").strip()
+            raise WorkflowExecutionError(f"CLI {_bin!r} exited {_proc.returncode}: {_err or '(no stderr)'}")
+        return _cli_parse(backend, _out_b.decode(errors="replace"), _structured)
+    finally:
+        shutil.rmtree(_scratch, ignore_errors=True)
+
+
 async def _drive(
     node_id: str,
     node_fn: "Callable[..., Awaitable[tuple[dict[str, object], int]]]",
@@ -589,9 +709,7 @@ $signals_main_init
     _raw_inputs = os.environ.get("FLOW_INPUTS", "")
     if _raw_inputs.strip():
         _OUT[$in_node_id].update(json.loads(_raw_inputs))
-    provider = ai.provider(os.environ.get("FLOW_PROVIDER") or "$provider")
-    global _PROVIDER
-    _PROVIDER = provider
+$provider_init
 $main_body
     _last = _STACK[-1] if _STACK else {"step": -1, "node": ""}
     _RUNTIME.update(
