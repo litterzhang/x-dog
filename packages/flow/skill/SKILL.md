@@ -1,3 +1,8 @@
+---
+name: flow-workflows
+description: Author and run flow workflows — turn a recurring multi-step process into a saved, replayable workflow.json (typed agent/script/subflow nodes + edges) and execute it with xdog-flow. Agent nodes can call a coding-agent CLI (claude/codex) for their step, so no provider/API key is needed. Use when asked to crystallize/automate/save a process as a workflow, or to build a typed pipeline (classify→route, draft→critique→revise, research→summarize).
+---
+
 # flow — author & run workflows
 
 Use this skill to turn a recurring, multi-step process into a **saved, replayable

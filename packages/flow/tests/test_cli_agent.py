@@ -444,3 +444,29 @@ def test_pure_cli_bundle_drops_ai_agent(tmp_path: pathlib.Path) -> None:
     reqs = (out / "requirements.txt").read_text()
     assert "httpx" not in reqs and "pydantic" not in reqs
     assert "jsonpath-ng" in reqs
+
+
+# --- regression: real claude nests tokens under "usage" (found by dogfooding) ---
+
+_FAKE_CLAUDE_REAL_ENVELOPE = '''#!/usr/bin/env python3
+import sys, json
+sys.stdin.read()
+# mirror the REAL claude -p --output-format json envelope: tokens under "usage"
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": False,
+    "result": "hi there",
+    "usage": {"input_tokens": 123, "output_tokens": 45},
+    "total_cost_usd": 0.01,
+}))
+'''
+
+
+async def test_cli_runner_reads_tokens_from_usage(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """Real claude puts tokens under env['usage'], not top-level (regression)."""
+    monkeypatch.setenv(
+        "FLOW_CLI_BIN_CLAUDE_CLI",
+        _install_fake_cli(tmp_path, _FAKE_CLAUDE_REAL_ENVELOPE, name="fake_claude_real"),
+    )
+    r = await execute(parse_workflow(_cli_wf()))
+    assert r.runtime["out"]["result"] == "hi there"
+    assert r.runtime["tokens_used"] == 168  # 123 + 45 from usage, not 0

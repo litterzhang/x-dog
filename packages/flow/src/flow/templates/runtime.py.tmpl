@@ -396,7 +396,8 @@ def _cli_parse(backend: str, stdout: str, structured: bool) -> tuple[object, int
         _env = json.loads(stdout)
         if not isinstance(_env, dict):
             raise WorkflowExecutionError("claude-cli: unexpected output (not a JSON object)")
-        _i, _o = _env.get("input_tokens"), _env.get("output_tokens")
+        _usage = _env.get("usage") if isinstance(_env.get("usage"), dict) else _env
+        _i, _o = _usage.get("input_tokens"), _usage.get("output_tokens")
         _tok = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
         if structured:
             _obj = _env.get("structured_output")

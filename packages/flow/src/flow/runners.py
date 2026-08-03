@@ -289,19 +289,21 @@ class ClaudeAdapter:
 
     def parse(self, stdout: str, *, structured: bool) -> tuple[object, int]:
         env = json.loads(stdout)
-        tokens = 0
-        if isinstance(env, dict):
-            _i = env.get("input_tokens")
-            _o = env.get("output_tokens")
-            tokens = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
-            if structured:
-                obj = env.get("structured_output")
-                if obj is None:
-                    raise WorkflowExecutionError("claude-cli: no structured_output in response")
-                return obj, tokens
-            result = env.get("result", "")
-            return (result if isinstance(result, str) else json.dumps(result)), tokens
-        raise WorkflowExecutionError("claude-cli: unexpected output (not a JSON object)")
+        if not isinstance(env, dict):
+            raise WorkflowExecutionError("claude-cli: unexpected output (not a JSON object)")
+        # Real claude nests token counts under "usage"; fall back to top-level.
+        _u = env.get("usage")
+        usage: dict[str, object] = _u if isinstance(_u, dict) else env
+        _i = usage.get("input_tokens")
+        _o = usage.get("output_tokens")
+        tokens = (int(_i) if isinstance(_i, int) else 0) + (int(_o) if isinstance(_o, int) else 0)
+        if structured:
+            obj = env.get("structured_output")
+            if obj is None:
+                raise WorkflowExecutionError("claude-cli: no structured_output in response")
+            return obj, tokens
+        result = env.get("result", "")
+        return (result if isinstance(result, str) else json.dumps(result)), tokens
 
 
 class CodexAdapter:
