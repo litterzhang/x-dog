@@ -292,7 +292,37 @@ class BuilderApp(Component):
                 lines.append(style.fg(gl, style.MUTED))
             else:
                 lines.append(gl)
+        lines += self._workflow_signature_lines()
         return lines
+
+    def _workflow_signature_lines(self) -> list[str]:
+        """The whole workflow's typed $in/$output signature, shown under the graph.
+
+        ``$in`` uses the declared ``in_schema`` when present, else the inferred
+        signature (marked ``(inferred)``); ``$output`` is derived from the
+        ``$output`` edges.  Returns ``[]`` when the workflow has neither.
+        """
+        from flow.loader import workflow_input_schema, workflow_output_schema
+
+        wf = self._model.wf
+        in_props = workflow_input_schema(wf).get("properties")
+        out_props = workflow_output_schema(wf).get("properties")
+
+        def sig(props: object) -> str:
+            if not isinstance(props, dict) or not props:
+                return ""
+            return ", ".join(f"{k}:{_schema_label(v)}" for k, v in props.items() if isinstance(v, dict))
+
+        in_sig, out_sig = sig(in_props), sig(out_props)
+        if not in_sig and not out_sig:
+            return []
+        src = "" if wf.in_schema else style.dim(" (inferred)")
+        out: list[str] = ["", style.dim("── signature ──")]
+        if in_sig:
+            out.append(style.dim("$in     ") + in_sig + src)
+        if out_sig:
+            out.append(style.dim("$output ") + out_sig)
+        return out
 
     def _detail_lines(self) -> list[str]:
         """Field-by-field detail of the currently selected node (dim labels)."""
@@ -328,20 +358,6 @@ class BuilderApp(Component):
             out.append(row("inputs", ", ".join(_port_label(p) for p in node.input_ports)))
         if node.output_ports:
             out.append(row("outputs", ", ".join(_port_label(p) for p in node.output_ports)))
-        # Workflow-level typed signature (inferred when $in is not declared) — shown
-        # once, on the entry node, so the reader sees the whole workflow's I/O types.
-        if node.id == self._model.wf.entry:
-            from flow.loader import workflow_input_schema, workflow_output_schema
-
-            in_props = workflow_input_schema(self._model.wf).get("properties")
-            out_props = workflow_output_schema(self._model.wf).get("properties")
-            src = "" if self._model.wf.in_schema else " (inferred)"
-            if isinstance(in_props, dict) and in_props:
-                sig = ", ".join(f"{k}:{_schema_label(v)}" for k, v in in_props.items() if isinstance(v, dict))
-                out.append(row("$in", sig + style.dim(src)))
-            if isinstance(out_props, dict) and out_props:
-                sig = ", ".join(f"{k}:{_schema_label(v)}" for k, v in out_props.items() if isinstance(v, dict))
-                out.append(row("$output", sig))
         return out
 
     def _edge_detail_lines(self) -> list[str]:

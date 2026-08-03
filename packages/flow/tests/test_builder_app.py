@@ -784,13 +784,14 @@ def test_detail_shows_output_schema(tmp_path: pathlib.Path) -> None:
     assert "verdict:object{k:string}" in detail
 
 
-def test_entry_detail_shows_inferred_signature(tmp_path: pathlib.Path) -> None:
-    """The entry node shows the workflow $in/$output signature, marked inferred."""
+def test_graph_shows_inferred_signature(tmp_path: pathlib.Path) -> None:
+    """The GRAPH panel shows the workflow $in/$output signature under the diagram."""
     app = build_app(_subflow_wf_path(tmp_path))
-    detail = _detail_for(app, "plan")
-    assert "$in" in detail and "seed:string" in detail
-    assert "inferred" in detail  # $in was not declared -> inferred
-    assert "$output" in detail and "result:object{k:string}" in detail
+    graph = strip_ansi("\n".join(app._graph_diagram()))  # type: ignore[attr-defined]
+    assert "signature" in graph
+    assert "$in" in graph and "seed:string" in graph
+    assert "inferred" in graph  # $in was not declared -> inferred
+    assert "$output" in graph and "result:object{k:string}" in graph
 
 
 def test_schema_label_forms() -> None:
