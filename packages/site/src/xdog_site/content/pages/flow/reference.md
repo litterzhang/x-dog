@@ -36,7 +36,7 @@ must set exactly one of them.
 | Field | Required | Meaning |
 |---|---|---|
 | `id` | required | Unique node id. `$in` and `$output` are reserved and rejected. |
-| `type` | default `"agent"` | `"agent"`, `"script"`, or `"human"`. |
+| `type` | default `"agent"` | `"agent"`, `"script"`, `"human"`, or `"subflow"`. |
 | `model` | optional | Agent only: overrides `defaults.model` for this node. |
 | `system_prompt` | default `""` | Agent only: system prompt; `{{ $.port }}` reads this node's inputs. |
 | `prompt` | default `""` | Agent only: user prompt; `{{ $.port }}` is a JSONPath into this node's inputs. |
@@ -45,6 +45,7 @@ must set exactly one of them.
 | `web_search_model` | optional | Agent only: a distinct browsing model for `web_search`. |
 | `code` | optional | Script only: inline source defining exactly one ctx-first function. |
 | `run` | optional | Script only: a `"module.path:callable"` reference imported at run time. |
+| `subflow` | optional | Subflow only: the child workflow — an inline object or a `"./child.json"` path string. Ports are derived from the child's signature; do not declare `inputs`/`outputs`. |
 | `inputs` | default `[]` | Input ports (bare name, `{name, type, required}`, or `{name, schema, required}`). |
 | `outputs / output` | default `[]` | Output ports; `output` is singular sugar for one port. For an agent, >1 port (or one non-string port) makes it a structured `submit_result` node — the schema is derived from the ports. |
 
@@ -111,9 +112,13 @@ ports. `value` and `text` support `{{ $.port }}` JSONPath interpolation.
 |---|---|---|
 | `equals` | `{"equals": {"value": V, "text": T}}` | interpolate(value) == interpolate(text) |
 | `contains` | `{"contains": {"value": V, "text": T}}` | interpolate(text) in interpolate(value) |
+| `gt` / `gte` / `lt` / `lte` | `{"gte": {"value": V, "text": T}}` | numeric compare: float(value) ≥ float(text) (an empty operand is lenient-false; a non-numeric one errors) |
 | `not` | `{"not": <cond>}` | negation of one child condition |
 | `and` | `{"and": [<cond>, ...]}` | all children hold |
 | `or` | `{"or": [<cond>, ...]}` | any child holds |
+
+Every `{{ $.key }}` operand root is checked at load time against the source node's
+output ports (strict interpolation), so a typo fails validation.
 
 ## Runtime container
 

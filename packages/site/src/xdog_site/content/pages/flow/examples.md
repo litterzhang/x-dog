@@ -5,9 +5,9 @@ title: Examples
 <!-- ASCII diagrams below are generated verbatim from flow.graph.to_ascii_diagram
      over the shipped packages/flow/examples/*.json. Regenerate if an example changes. -->
 
-Two workflows ship with flow (`packages/flow/examples/*.json`). Both are loadable
-and runnable live on the [HaveFun](/havefun/flow) page — pick the example, fill its
-inputs, and watch the per-node execution log stream.
+Four workflows ship with flow (`packages/flow/examples/*.json`). The first two are
+loadable and runnable live on the [HaveFun](/havefun/flow) page — pick the example,
+fill its inputs, and watch the per-node execution log stream.
 
 ## Agent Calculator (script → agent + bash)
 
@@ -54,6 +54,40 @@ REVISE, loop≤2) sends the notes back so `draft` can improve the answer.
 to verify it; if it says REVISE the answer is rewritten and re-checked, up to
 twice, before the loop settles on an APPROVEd answer. This is the canonical
 generate-and-critique multi-agent pattern.
+
+## Essay Writer (a sub-workflow as one node)
+
+Three nodes, but the middle one is a whole workflow. `brief` (an agent) turns a
+question into a thesis and three supporting points; `compose` is a **subflow** node
+that references `./essay_compose.json` — a reusable draft → critique → revise triad
+authored as its own standalone, runnable workflow; `wrap` (a script) counts the
+words and gates on the critic's score. The `compose` node declares no ports: its
+`{thesis, points}` inputs and `{final_essay, score}` outputs are *derived* from the
+child's signature.
+
+```
+┌──────────────┐
+│ brief [agent]│
+└───────┬──────┘
+        │ thesis, key_poin
+        └─┐
+┌─────────▼────────┐
+│ compose [subflow]│
+└─────────┬────────┘
+          │ final_essay, s
+        ┌─┘
+┌───────▼──────┐
+│ wrap [script]│
+└──────────────┘
+```
+
+**What running it produces:** `brief` sets the argument; the `compose` child runs
+its own draft → critique → revise internally as one opaque step, returning the
+polished essay plus the critic's score; `wrap` reports the word count and whether
+the score cleared the bar. The child is a complete workflow — you can `run` it on
+its own. Both engines run `compose` by calling the same `execute()` on the child,
+so `interpret == compile` holds by construction. See the
+[*A Workflow as a Node*](/blog/a-workflow-as-a-node) post for the design.
 
 ## Run them
 

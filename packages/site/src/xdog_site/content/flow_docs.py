@@ -16,19 +16,23 @@ _FEATURES = (
     Feature("JSON Schema ports", "A port declares a JSON Schema (scalar or nested object/array); one `required` flag replaces the old optional.", "Modeling"),
     Feature("Type-native wire", "Port values are live Python (int/float/bool/list/dict), not stringified — structure flows between nodes intact.", "Modeling"),
     Feature("$in / $output nodes", "Reserved source + sink: state seeds $in; edges to $output collect the result. `entry` is optional (derived from $in).", "Modeling"),
-    Feature("Conditional edges", "equals / contains / and / or / not guards over a source output port.", "Modeling"),
-    Feature("Bounded loops + cycle detection", "Back-edges declare loop.max so cycles terminate; an unbounded cycle fails validation with its path.", "Modeling"),
+    Feature("Conditional edges", "equals / contains / numeric gt / gte / lt / lte / and / or / not guards over a source output port.", "Modeling"),
+    Feature("Bounded loops + cycle detection", "Back-edges declare loop.max so cycles terminate; an unbounded cycle fails validation with its path; a loop with no `when` guard warns.", "Modeling"),
     Feature("Script nodes", "Inline code or a run: module:func reference, imported with the workflow dir on path.", "Modeling"),
+    Feature("Sub-workflows", "A type:\"subflow\" node runs another workflow as one opaque node — inline or a `./child.json` path ref; ports are derived from the child's signature.", "Modeling"),
     Feature("Edge type checking", "An edge requires the source and destination port types to match — including a sub-field's type via its schema.", "Modeling"),
-    Feature("Validate before running", "Unknown ports, unfed inputs, ambiguous producers, unbounded cycles, port-type mismatches all fail fast.", "Modeling"),
+    Feature("Typed workflow signature", "$in carries an optional in_schema (else it's inferred from consumers); the $output signature is derived from the sink edges — so a workflow has a checkable I/O type.", "Modeling"),
+    Feature("Validate before running", "Unknown ports, unfed inputs, ambiguous producers, unbounded cycles, port-type mismatches, prompt-typo interpolation all fail fast.", "Modeling"),
     # --- Data flow: interpolation & mapping ---
     Feature("JSONPath interpolation", "A prompt reads a field with `{{ $.plan.tasks[0] }}`; both engines share one jsonpath-ng evaluator.", "Data flow"),
+    Feature("Strict interpolation", "Because ports are declared, every `{{ $.key }}` in a prompt or condition is checked at load time — a typo is a fail-fast, not a silently dropped section.", "Data flow"),
     Feature("Sub-field edge mapping", "An edge maps a nested field: `\"map\": {\"$.verdict.within_budget\": \"flag\"}`, type-checked against the source schema.", "Data flow"),
     Feature("Structured $in seed", "Initial state carries type-native JSON; a structured seed stays a dict/list, not a Python repr.", "Data flow"),
     # --- Execution: how a run behaves ---
     Feature("Parallel executor", "Readiness-based fan-out/fan-in; every ready node runs concurrently via gather. Multi-entry from the $in frontier.", "Execution"),
+    Feature("Dynamic fan-out", "A fan_out edge maps a node over a runtime-sized array (once per element, in parallel); a fan_in edge gathers the results into an index-ordered list.", "Execution"),
     Feature("Pure node + driver", "A node is a pure function (provider, ctx, inputs → outputs); a generic driver owns guards, retry, store, memo, budget, checkpoint.", "Execution"),
-    Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once via a semaphore (default: unlimited).", "Execution"),
+    Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once; a separate fan_max_concurrency bounds instances within one fan-out (both default to unlimited).", "Execution"),
     Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo, tokens_used}: outputs plus a per-node trace.", "Execution"),
     Feature("Structured event stream", "on_event streams NodeStarted / NodeFinished / NodeFailed with per-node duration and tokens.", "Execution"),
     Feature("Metrics aggregation", "A MetricsCollector consumes the event stream into a per-node + per-run snapshot (runs, duration, tokens, failures).", "Execution"),
@@ -50,8 +54,8 @@ _FEATURES = (
     Feature("Interpret == compile", "Interpreter and generated module agree node-for-node — enforced by a cross-engine parity suite on every feature.", "Codegen & authoring"),
     Feature("Portable bundle", "generate --portable emits a self-contained dir (vendored ai/agent, pinned deps); --offline downloads wheels for a no-network install.", "Codegen & authoring"),
     Feature("Runtime overrides", "The generated module honours FLOW_INPUTS (JSON merged into $in) and FLOW_PROVIDER — parity with the interpreter's --input / --provider.", "Codegen & authoring"),
-    Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; round-trips JSON.", "Codegen & authoring"),
-    Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid.", "Codegen & authoring"),
+    Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; shows subflow nodes and the workflow's typed signature; round-trips JSON.", "Codegen & authoring"),
+    Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid; node boxes are colour-coded by type (agent/script/human/subflow).", "Codegen & authoring"),
 )
 
 _FEATURE_CATEGORIES = (
@@ -133,18 +137,29 @@ _ROADMAP = (
         "Every item shipped with interpreter + codegen + a cross-engine parity test, so "
         "interpret == compile holds throughout. See docs/expressiveness.md.",
     ), done=True),
-    Phase("P6", "Expressiveness — what still isn't expressible", (
-        "Planned: numeric condition ops (gt/gte/lt/lte) so a loop can branch on a "
-        "score, not just a string match; and strict interpolation — because ports are "
-        "declared, every `{{ $.key }}` in a prompt is checked against the node's inputs "
-        "at load time, turning a silent typo into a fail-fast.",
-        "Sub-workflows: a type:\"subflow\" node that runs another workflow JSON as a "
-        "single node, so a common draft→critic→revise triad is reused, not copied.",
-        "Dynamic fan-out (the one real capability gap, own design doc first): map a "
-        "node over a runtime-sized list and gather the results — scatter/gather that "
-        "today needs a compile-time constant. Single-machine parallelism through the "
-        "existing semaphore; NOT a reopening of the distributed non-goal.",
-    )),
+    Phase("P6", "Expressiveness — closing the gaps", (
+        "Done: numeric condition ops (gt/gte/lt/lte) so a loop can branch on a "
+        "score, not just a string match; and strict interpolation — because ports "
+        "are declared, every `{{ $.key }}` in a prompt or condition is checked "
+        "against the declared ports at load time, turning a silent typo into a "
+        "fail-fast. A loop with no `when` guard now warns.",
+        "Done: a typed workflow signature. $in carries an optional in_schema (else "
+        "it's inferred from how each seed is consumed — the consumer's type, not the "
+        "seed's value); the $output signature is derived from the sink edges. This "
+        "gives a workflow a checkable I/O type at both ends.",
+        "Done: sub-workflows — a type:\"subflow\" node runs another workflow as one "
+        "OPAQUE node (not inlined), authored inline or as a `./child.json` path ref. "
+        "Its ports are derived from the child's signature; both engines call the "
+        "same execute() on the child, so interpret == compile holds by construction. "
+        "A generated module that uses one imports flow (vendored by --portable). See "
+        "docs/subflow.md.",
+        "Done: dynamic fan-out — a fan_out edge maps a node over a runtime-sized "
+        "array and a fan_in edge gathers the results into an index-ordered list, with "
+        "a dedicated fan_max_concurrency cap. The fan group stays ONE scheduler node, "
+        "so the static graph stays static. See docs/fan-out.md.",
+        "Every item shipped with interpreter + codegen + a cross-engine parity test, "
+        "and the builder/graph views render subflow nodes and the typed signature.",
+    ), done=True),
     Phase("2026", "Beyond the kernel — as a library, not a platform", (
         "Deeper host-integration examples: run a flow graph as one activity inside a "
         "durable engine (e.g. Temporal) for cross-machine scale.",
@@ -160,12 +175,12 @@ DOCS = PackageDocs(
                    "examples and specified precisely in the Reference.",
     feature_categories=_FEATURE_CATEGORIES,
     features=_FEATURES,
-    roadmap_intro="The runtime-resilience roadmap (P1–P4) and the expressiveness push (P5) are complete — "
-                  "structured type-native wire, JSON Schema ports, JSONPath interpolation/mapping with "
-                  "end-to-end type checking, multi-output agents, cycle detection, and generated-code "
-                  "overrides, each landing with a cross-engine parity test so interpret == compile holds. "
-                  "What remains (P6) is numeric conditions, strict interpolation, sub-workflows, and "
-                  "dynamic fan-out. flow stays a single-machine, compilable kernel by design; distributed "
-                  "execution remains a deliberate non-goal. See Design for the non-goals.",
+    roadmap_intro="The runtime-resilience roadmap (P1–P4), the expressiveness push (P5), and the "
+                  "expressiveness-gap closing (P6) are complete — structured type-native wire, JSON "
+                  "Schema ports, JSONPath interpolation/mapping with end-to-end type checking, numeric "
+                  "conditions, strict interpolation, a typed workflow signature (declared or inferred), "
+                  "sub-workflows, and dynamic fan-out — each landing with a cross-engine parity test so "
+                  "interpret == compile holds. flow stays a single-machine, compilable kernel by design; "
+                  "distributed execution remains a deliberate non-goal. See Design for the non-goals.",
     roadmap=_ROADMAP,
 )
