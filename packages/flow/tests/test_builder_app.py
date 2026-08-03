@@ -723,3 +723,79 @@ def test_shift_tab_resets_scroll(tmp_path: pathlib.Path, monkeypatch) -> None:  
     assert app._scroll > 0
     _shift_tab(app)  # -> builder
     assert app._scroll == 0
+
+
+# --- subflow display + schema detail (P6 visualization) --------------------
+
+
+def _subflow_wf_path(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A parent workflow with a subflow node, structured output, undeclared $in."""
+    child = {
+        "name": "up", "provider": "copilot", "entry": "u", "state": {"topic": "x"},
+        "nodes": [{"id": "u", "type": "script", "inputs": [{"name": "topic", "type": "string"}],
+                   "code": "def u(ctx, topic):\n    return topic.upper()",
+                   "outputs": [{"name": "verdict",
+                                "schema": {"type": "object", "properties": {"k": {"type": "string"}}}}]}],
+        "edges": [{"from": "$in", "to": "u", "map": {"topic": "topic"}},
+                  {"from": "u", "to": "$output", "map": {"verdict": "verdict"}}],
+    }
+    parent = {
+        "name": "main", "provider": "copilot", "entry": "plan", "state": {"seed": "hi"},
+        "nodes": [
+            {"id": "plan", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
+             "code": "def p(ctx, seed):\n    return seed", "outputs": ["topic"]},
+            {"id": "review", "type": "subflow", "subflow": child},
+        ],
+        "edges": [{"from": "$in", "to": "plan", "map": {"seed": "seed"}},
+                  {"from": "plan", "to": "review", "map": {"topic": "topic"}},
+                  {"from": "review", "to": "$output", "map": {"verdict": "result"}}],
+    }
+    import json
+    p = tmp_path / "sub.json"
+    p.write_text(json.dumps(parent), encoding="utf-8")
+    return p
+
+
+def _detail_for(app: BuilderApp, node_id: str) -> str:
+    from flow.builder import actions
+
+    app._model = actions.select(app.model, node_id)  # type: ignore[attr-defined]
+    return strip_ansi("\n".join(app._detail_lines()))  # type: ignore[attr-defined]
+
+
+def test_subflow_node_shown_in_list(tmp_path: pathlib.Path) -> None:
+    app = build_app(_subflow_wf_path(tmp_path))
+    rendered = strip_ansi("\n".join(app.render(120)))
+    assert "review [subflow]" in rendered
+
+
+def test_subflow_detail_shows_child(tmp_path: pathlib.Path) -> None:
+    app = build_app(_subflow_wf_path(tmp_path))
+    detail = _detail_for(app, "review")
+    assert "type" in detail and "subflow" in detail
+    assert "child" in detail and "up" in detail
+    assert "node(s)" in detail
+
+
+def test_detail_shows_output_schema(tmp_path: pathlib.Path) -> None:
+    """A structured output port shows its full schema, not just 'object'."""
+    app = build_app(_subflow_wf_path(tmp_path))
+    detail = _detail_for(app, "review")
+    assert "verdict:object{k:string}" in detail
+
+
+def test_entry_detail_shows_inferred_signature(tmp_path: pathlib.Path) -> None:
+    """The entry node shows the workflow $in/$output signature, marked inferred."""
+    app = build_app(_subflow_wf_path(tmp_path))
+    detail = _detail_for(app, "plan")
+    assert "$in" in detail and "seed:string" in detail
+    assert "inferred" in detail  # $in was not declared -> inferred
+    assert "$output" in detail and "result:object{k:string}" in detail
+
+
+def test_schema_label_forms() -> None:
+    from flow.builder.app import _schema_label
+
+    assert _schema_label({"type": "string"}) == "string"
+    assert _schema_label({"type": "array", "items": {"type": "integer"}}) == "array<integer>"
+    assert _schema_label({"type": "object", "properties": {"a": {"type": "string"}}}) == "object{a:string}"

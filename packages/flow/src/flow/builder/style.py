@@ -61,6 +61,8 @@ def dim(text: str) -> str:
 TITLE = "#8ab4f8"      # header bar
 AGENT = "#8ab4f8"      # agent node accent (blue)
 SCRIPT = "#81c995"     # script node accent (green)
+HUMAN = "#c58af9"      # human node accent (purple)
+SUBFLOW = "#f8b48a"    # subflow node accent (orange)
 ENTRY = "#fdd663"      # entry marker (amber)
 SELECT_BG = "#334155"  # selected-row highlight background
 OK = "#81c995"         # valid status (green)

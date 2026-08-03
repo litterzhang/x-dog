@@ -29,13 +29,50 @@ from flow.builder import actions, style
 from flow.builder.io import dump_any, load_any
 from flow.builder.model import BuilderModel, empty_model, model_from_workflow
 from flow.graph import to_ascii_diagram
-from flow.models import NodeDef
+from flow.models import NodeDef, Port
 from flow.tools import ToolInfo, describe_tools, read_run_source
 
 _MIN_WIDTH = 60
 _LEFT_MAX = 40
 _GAP = "  "
 _KEYHINT = "S-tab page   tab block   a/s add   j/k move   PgUp/PgDn scroll   d del   p prompt   e edge   w save   q"
+
+# Node-type -> accent colour for the nodes list + detail tag.
+_NODE_ACCENT = {
+    "agent": style.AGENT,
+    "script": style.SCRIPT,
+    "human": style.HUMAN,
+    "subflow": style.SUBFLOW,
+}
+
+
+def _schema_label(schema: dict[str, object]) -> str:
+    """Compact one-line rendering of a port's JSON Schema.
+
+    ``{"type":"string"}`` -> ``string``; an object -> ``object{k:string, ...}``;
+    an array -> ``array<string>``.  Nested structure is shown one level deep so a
+    detail row stays readable.
+    """
+    t = schema.get("type")
+    t = t if isinstance(t, str) else "string"
+    if t == "object":
+        props = schema.get("properties")
+        if isinstance(props, dict) and props:
+            inner = ", ".join(
+                f"{k}:{(v.get('type') if isinstance(v, dict) else None) or 'string'}" for k, v in props.items()
+            )
+            return f"object{{{inner}}}"
+        return "object"
+    if t == "array":
+        items = schema.get("items")
+        item_t = (items.get("type") if isinstance(items, dict) else None) or "any"
+        return f"array<{item_t}>"
+    return t
+
+
+def _port_label(p: Port) -> str:
+    """``name:<schema>`` with a trailing ``?`` for a non-required input port."""
+    return f"{p.name}:{_schema_label(p.schema)}{'' if p.required else '?'}"
 
 # The three left-panel blocks, in Tab-cycle order.
 _FOCI = ("graph", "nodes", "edges")
@@ -197,7 +234,7 @@ class BuilderApp(Component):
             return [style.dim("(press 'a' to add a node)")]
         lines: list[str] = []
         for node in model.wf.nodes:
-            accent = style.AGENT if node.type == "agent" else style.SCRIPT
+            accent = _NODE_ACCENT.get(node.type, style.SCRIPT)
             tag = style.fg(f"[{node.type}]", accent)
             entry = style.fg(" *", style.ENTRY) if node.id == model.wf.entry else ""
             selected = node.id == model.selected
@@ -274,6 +311,11 @@ class BuilderApp(Component):
                 out.append(row("code", first))
             else:
                 out.append(row("run", node.run or "(unset)"))
+        elif node.type == "subflow":
+            child = node.child
+            if child is not None:
+                out.append(row("child", child.name or "(unnamed)"))
+                out.append(row("nodes", f"{len(child.nodes)} node(s), {len(child.edges)} edge(s)"))
         else:
             out.append(row("model", node.model or "(default)"))
             if node.system_prompt:
@@ -283,11 +325,23 @@ class BuilderApp(Component):
             if node.tools:
                 out.append(row("tools", ", ".join(node.tools)))
         if node.input_ports:
-            out.append(
-                row("inputs", ", ".join(f"{p.name}:{p.type}{'' if p.required else '?'}" for p in node.input_ports))
-            )
+            out.append(row("inputs", ", ".join(_port_label(p) for p in node.input_ports)))
         if node.output_ports:
-            out.append(row("outputs", ", ".join(f"{p.name}:{p.type}" for p in node.output_ports)))
+            out.append(row("outputs", ", ".join(_port_label(p) for p in node.output_ports)))
+        # Workflow-level typed signature (inferred when $in is not declared) — shown
+        # once, on the entry node, so the reader sees the whole workflow's I/O types.
+        if node.id == self._model.wf.entry:
+            from flow.loader import workflow_input_schema, workflow_output_schema
+
+            in_props = workflow_input_schema(self._model.wf).get("properties")
+            out_props = workflow_output_schema(self._model.wf).get("properties")
+            src = "" if self._model.wf.in_schema else " (inferred)"
+            if isinstance(in_props, dict) and in_props:
+                sig = ", ".join(f"{k}:{_schema_label(v)}" for k, v in in_props.items() if isinstance(v, dict))
+                out.append(row("$in", sig + style.dim(src)))
+            if isinstance(out_props, dict) and out_props:
+                sig = ", ".join(f"{k}:{_schema_label(v)}" for k, v in out_props.items() if isinstance(v, dict))
+                out.append(row("$output", sig))
         return out
 
     def _edge_detail_lines(self) -> list[str]:

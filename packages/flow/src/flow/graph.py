@@ -295,6 +295,15 @@ _BOX_H = 50
 _GAP = 40
 _LANE = 80
 
+# Node-type -> box fill colour (SVG).  agent blue, script grey, human purple,
+# subflow orange — matches the builder's node-list accents.
+_NODE_FILL = {
+    "agent": "#e8f0fe",
+    "script": "#f5f5f5",
+    "human": "#f3e8fd",
+    "subflow": "#fdefe3",
+}
+
 
 def to_svg(wf: WorkflowDef) -> str:
     """Return an SVG document rendering *wf*.
@@ -317,7 +326,7 @@ def to_svg(wf: WorkflowDef) -> str:
         known: set[str] = set()
         for node in wf.nodes:
             known.add(node.id)
-            fillcolor = "#e8f0fe" if node.type == "agent" else "#f5f5f5"
+            fillcolor = _NODE_FILL.get(node.type, "#f5f5f5")
             name = node.id if node.id.isidentifier() else f'"{node.id}"'
             node_label = f"{node.id}\\n[{node.type}]" + ("  *" if node.id == wf.entry else "")
             graph.add_node(
@@ -382,7 +391,8 @@ def _to_svg_fallback(wf: WorkflowDef) -> str:
     for node in wf.nodes:
         x, y = positions[node.id]
         cx, cy = centers[node.id]
-        parts.append(f'<rect x="{x}" y="{y}" width="{_BOX_W}" height="{_BOX_H}" rx="6" fill="#f5f5f5" stroke="#333"/>')
+        fill = _NODE_FILL.get(node.type, "#f5f5f5")
+        parts.append(f'<rect x="{x}" y="{y}" width="{_BOX_W}" height="{_BOX_H}" rx="6" fill="{fill}" stroke="#333"/>')
         type_label = f"[{node.type}]" + ("  *" if node.id == wf.entry else "")
         parts.append(
             f'<text x="{cx}" y="{cy - 6}" text-anchor="middle" dominant-baseline="central" '
