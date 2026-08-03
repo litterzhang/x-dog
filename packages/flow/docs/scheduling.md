@@ -1,7 +1,7 @@
 # flow — Workflow Scheduling & `xdog-flow install`
 
-Status: draft · Audience: flow maintainers · Prerequisite: skim `cli-agent.md`
-(the bundle is the deployable artifact a scheduler wraps).
+Status: **v1 shipped** (Linux/systemd) · Audience: flow maintainers · Prerequisite:
+skim `cli-agent.md` (the bundle is the deployable artifact a scheduler wraps).
 
 Today a workflow runs once, on demand (`xdog-flow run`, or `python <bundle>`).
 This doc designs **scheduling** — making a workflow fire on its own — plus an

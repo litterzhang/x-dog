@@ -52,6 +52,8 @@ def _ports_to_json(ports: tuple[Port, ...]) -> list[Any]:
 def _node_to_dict(node: NodeDef) -> dict[str, Any]:
     """Inverse of ``flow.loader._parse_node`` — emit only non-default fields."""
     data: dict[str, Any] = {"id": node.id, "type": node.type}
+    if node.signal:
+        data["signal"] = node.signal
     if node.model is not None:
         data["model"] = node.model
     if node.system_prompt:

@@ -115,16 +115,42 @@ xdog-flow run      workflow.json     # execute; prints the collected $output as 
 xdog-flow run      workflow.json --input key=value   # override a $in seed
 xdog-flow generate workflow.json -o out.py           # compile to a Python module
 xdog-flow graph    workflow.json     # print the ASCII diagram
+xdog-flow install  workflow.json     # install a scheduled workflow (see Scheduling)
 ```
 
 Workflow: **write JSON → `validate` (fix any reported errors — they are precise) →
 `run`.** Iterate on the JSON, not on prose.
+
+## Scheduling (optional) — make a workflow fire on its own
+
+Add a top-level `schedule` block, then `xdog-flow install <wf.json>` (Linux/systemd):
+
+```jsonc
+// active / timer — fire on a schedule
+"schedule": { "mode": "timer", "every": "15m", "inputs": { "report": "..." } }
+"schedule": { "mode": "timer", "cron": "0 9 * * 1-5" }   // or a 5-field cron
+
+// passive / hook — fire when an event delivers a signal (needs a `human` node
+// with the same signal, which then proceeds instead of pausing)
+"schedule": { "mode": "hook", "signal": "new-ticket",
+              "listen": { "type": "http", "path": "/hooks/triage", "port": 8787 } }
+```
+
+- `xdog-flow install <wf.json>` — build the bundle + install the scheduler
+  (`--dry-run` to preview the systemd units without touching the OS).
+- `xdog-flow install --list` — list installed scheduled workflows.
+- `xdog-flow install --delete <name>` — uninstall one.
+
+Each firing is an independent `python <bundle>` run; the engine is unchanged.
+See `examples/digest_timer.json` (timer) and `examples/triage_hook.json` (hook).
 
 ## Examples to imitate
 
 In `examples/`:
 - `cli_triage.json` — a CLI agent node (classify) + a script router. Pure-CLI, no
   provider. The canonical shape for this skill.
+- `digest_timer.json` — a **timer**-scheduled workflow (weekday 9am cron).
+- `triage_hook.json` — a **hook**-scheduled workflow (webhook delivers a signal).
 - `essay_writer.json` + `essay_compose.json` — a subflow (draft→critique→revise) via
   a path reference; structured output across the boundary.
 - `trip_planner.json` — typed multi-agent pipeline with JSONPath sub-field mapping.

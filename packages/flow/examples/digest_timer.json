@@ -1,0 +1,46 @@
+{
+  "name": "digest-timer",
+  "entry": "summarize",
+  "schedule": {
+    "mode": "timer",
+    "cron": "0 9 * * 1-5",
+    "inputs": {
+      "source": "the team's overnight CI + error-tracker activity"
+    }
+  },
+  "state": {
+    "source": "the team's overnight CI + error-tracker activity"
+  },
+  "nodes": [
+    {
+      "id": "summarize",
+      "type": "agent",
+      "backend": "claude-cli",
+      "model": "sonnet",
+      "inputs": [{"name": "source", "type": "string"}],
+      "system_prompt": "You are a concise engineering-ops summarizer.",
+      "prompt": "Write a short weekday-morning digest for: {{$.source}}\n\nFields:\n- headline: one line, the single most important thing\n- items: an array of up to 3 short bullet strings\n- needs_attention: true if anything looks urgent",
+      "outputs": [
+        {"name": "headline", "type": "string"},
+        {"name": "items", "type": "array"},
+        {"name": "needs_attention", "type": "boolean"}
+      ]
+    },
+    {
+      "id": "format",
+      "type": "script",
+      "inputs": [
+        {"name": "headline", "type": "string"},
+        {"name": "items", "type": "array"},
+        {"name": "needs_attention", "type": "boolean"}
+      ],
+      "code": "def format(ctx, headline, items, needs_attention):\n    flag = ' [!]' if needs_attention else ''\n    body = '\\n'.join(f'- {i}' for i in items)\n    return {'digest': f'{headline}{flag}\\n{body}'}",
+      "outputs": [{"name": "digest", "type": "object"}]
+    }
+  ],
+  "edges": [
+    {"from": "$in", "to": "summarize", "map": {"source": "source"}},
+    {"from": "summarize", "to": "format", "map": {"headline": "headline", "items": "items", "needs_attention": "needs_attention"}},
+    {"from": "format", "to": "$output", "map": {"digest": "digest"}}
+  ]
+}

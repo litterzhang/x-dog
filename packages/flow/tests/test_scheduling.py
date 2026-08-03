@@ -377,3 +377,18 @@ async def test_listener_signal_reaches_human_node(tmp_path: Path) -> None:
     # Signal delivered (as the listener would via FLOW_SIGNALS) -> proceeds.
     r = await execute(wf, signals={"go"})
     assert r.runtime["out"]["result"] == "approved"
+
+
+# --- regression: human-node signal round-trips (found via a hook example) ---
+
+
+def test_human_signal_roundtrips() -> None:
+    wf = parse_workflow({
+        "name": "g", "entry": "gate",
+        "nodes": [{"id": "gate", "type": "human", "signal": "go", "outputs": ["ok"]}],
+        "edges": [{"from": "gate", "to": "$output", "map": {"ok": "r"}}],
+    })
+    assert wf.nodes[0].signal == "go"
+    rt = parse_workflow(workflow_to_dict(wf))
+    assert rt == wf
+    assert rt.nodes[0].signal == "go"
