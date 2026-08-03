@@ -941,10 +941,18 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
 
     lines.append(f"{ind()}_ran: set[str] = set()")
 
+    # Active-loop stack: (loop-edge key, loop variable) so the exit node can tick
+    # the persisted counter with the SAME variable the entry opened (fixes the old
+    # shared `_loop_i` shadowing under nesting, and enables mid-loop resume).
+    loop_stack: list[tuple[str, str]] = []
+
     for node_id in order:
         if node_id in loop_entry_map:
-            _, lmax = loop_entry_map[node_id]
-            lines.append(f"{ind()}for _loop_i in range({lmax}):")
+            src, lmax = loop_entry_map[node_id]
+            key = f"{src}->{node_id}"
+            var = f"_loop_i_{loop_depth}"
+            lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
+            loop_stack.append((key, var))
             loop_depth += 1
 
         gate = _node_run_gate(node_id, wf, fwd_preds, safe_ids)
@@ -961,6 +969,10 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
             lines.append(f"{ind()}    _ran.add('{_ESC(node_id)}')")
 
         if node_id in loop_exit_set:
+            key, var = loop_stack.pop()
+            # Persist this iteration's completion before deciding to break, so a
+            # resume continues at the next iteration (aligned with the interpreter).
+            lines.append(f"{ind()}_loop_tick({key!r}, {var})")
             break_cond = loop_exit_break.get(node_id)
             if break_cond is not None:
                 lines.append(f"{ind()}if {break_cond}:")
@@ -979,6 +991,7 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
     pending: list[str] = list(entry_frontier(wf))
     lines: list[str] = []
     loop_depth = 0
+    loop_stack: list[tuple[str, str]] = []  # (loop-edge key, loop variable) per active loop
 
     def ind() -> str:
         return "    " * (1 + loop_depth)
@@ -992,8 +1005,11 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
 
         for n in ready:
             if n in loop_entry_map:
-                _, lmax = loop_entry_map[n]
-                lines.append(f"{ind()}for _loop_i in range({lmax}):")
+                src, lmax = loop_entry_map[n]
+                key = f"{src}->{n}"
+                var = f"_loop_i_{loop_depth}"
+                lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
+                loop_stack.append((key, var))
                 loop_depth += 1
                 break
 
@@ -1017,6 +1033,8 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
 
         for n in ready:
             if n in loop_exit_set:
+                key, var = loop_stack.pop()
+                lines.append(f"{ind()}_loop_tick({key!r}, {var})")
                 break_cond = loop_exit_break.get(n)
                 if break_cond is not None:
                     lines.append(f"{ind()}if {break_cond}:")

@@ -198,7 +198,11 @@ def _make_loop_wf() -> WorkflowDef:
 
 def test_generate_loop() -> None:
     src = generate(_make_loop_wf())
-    assert "range(3)" in src
+    # A bounded loop compiles to a for-range that resumes from its persisted counter
+    # (depth-indexed loop var; ticks the counter each iteration).
+    assert "range(_loop_start(" in src and ", 3):" in src
+    assert "_loop_i_0" in src
+    assert "_loop_tick(" in src
     ok, msg = _ruff_clean(src)
     assert ok, f"ruff failed:\n{msg}"
 

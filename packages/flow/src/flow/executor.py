@@ -323,9 +323,13 @@ async def execute(
         """Persist a snapshot of the current run state (called inside _state_lock).
 
         The generated module's checkpoint (templates/runtime.py.tmpl) shares this
-        schema EXCEPT ``loop_counters``: codegen compiles bounded loops to native
-        ``for`` ranges with no runtime counter to persist, so cross-engine resume
-        mid-loop is a codegen limitation, not a schema bug.
+        schema, including ``loop_counters``: codegen now persists a loop's position
+        (``"<src>-><dst>" -> iterations``) and a resumed generated module continues a
+        bounded loop from that count instead of re-running it — so both engines
+        checkpoint/resume mid-loop.  (The counter's numeric meaning differs slightly —
+        the interpreter counts back-edge firings, codegen counts for-iterations — but
+        a run uses one engine, so each resumes itself correctly; checkpoints are not
+        shared across engines.)
         """
         if not _ckpt_active:
             return

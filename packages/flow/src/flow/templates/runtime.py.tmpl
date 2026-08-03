@@ -211,6 +211,9 @@ _TOKENS_USED: int = 0
 _MAX_TOKENS: int | None = None
 # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
 _MEMO: dict[str, dict[str, object]] = {}
+# Loop position ledger: "<src>-><dst>" -> iterations completed (persisted; enables
+# mid-loop resume, aligned with the interpreter's loop_counters).
+_LOOP_COUNTERS: dict[str, int] = {}
 # Run-wide context the driver hands each pure node function.
 _WORKFLOW_NAME = "$workflow_name"
 _PROVIDER: object = None
@@ -262,6 +265,11 @@ def _load_checkpoint() -> None:
     _tok = _snap.get("tokens_used")
     if isinstance(_tok, int):
         _TOKENS_USED = _tok
+    _lc = _snap.get("loop_counters")
+    if isinstance(_lc, dict):
+        for _lk, _lv in _lc.items():
+            if isinstance(_lv, int):
+                _LOOP_COUNTERS[str(_lk)] = _lv
 
 
 def _save_checkpoint() -> None:
@@ -276,6 +284,7 @@ def _save_checkpoint() -> None:
         "out_live": _OUTPUT,
         "memo": _MEMO,
         "tokens_used": _TOKENS_USED,
+        "loop_counters": _LOOP_COUNTERS,
     }
     _fd, _tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
     try:
@@ -288,6 +297,20 @@ def _save_checkpoint() -> None:
         except OSError:
             pass
         raise
+
+
+# Loop-position tracking for checkpoint/resume, aligned with the interpreter's
+# loop_counters ("<src>-><dst>" -> iterations completed).  A resumed run continues
+# a mid-loop from the persisted count instead of re-running the whole loop.
+def _loop_start(key: str) -> int:
+    _n = _LOOP_COUNTERS.get(key, 0)
+    return _n if isinstance(_n, int) else 0
+
+
+def _loop_tick(key: str, i: int) -> None:
+    _LOOP_COUNTERS[key] = i + 1
+    _save_checkpoint()
+
 
 $sdk_run_agent
 
