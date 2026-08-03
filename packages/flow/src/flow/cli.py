@@ -198,6 +198,54 @@ def _cmd_build(config_path: str) -> None:
     run_builder(config_path)
 
 
+def _cmd_install(
+    config_path: str | None,
+    *,
+    list_: bool,
+    delete: str | None,
+    name: str | None,
+    dry_run: bool,
+) -> None:
+    """Install a scheduled workflow, or list/delete installed ones."""
+    from flow.scheduler.install import Installer, default_data_dir, default_unit_dir
+
+    inst = Installer(unit_dir=default_unit_dir(), data_dir=default_data_dir())
+
+    if list_:
+        rows = inst.list_installed()
+        if not rows:
+            print("(no scheduled workflows installed)")
+            return
+        for e in rows:
+            extra = e.get("signal") if e.get("mode") == "hook" else ""
+            print(f"{e['name']:24} {e['mode']:6} {e.get('bundle', '')}  {extra}".rstrip())
+        return
+
+    if delete is not None:
+        try:
+            inst.delete(delete, dry_run=dry_run)
+        except ValueError as exc:
+            print(str(exc))
+            raise SystemExit(1)
+        print(f"Deleted {delete}" if not dry_run else f"(dry-run) would delete {delete}")
+        return
+
+    if config_path is None:
+        print("install: give a <workflow.json>, or use --list / --delete NAME")
+        raise SystemExit(2)
+    try:
+        wf = load_any(config_path)
+    except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
+        print(str(exc))
+        raise SystemExit(1)
+    try:
+        installed = inst.install(wf, name=name, dry_run=dry_run)
+    except ValueError as exc:
+        print(str(exc))
+        raise SystemExit(1)
+    print(f"Installed {installed}" if not dry_run else f"(dry-run) would install {installed}")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -259,6 +307,14 @@ def main(argv: list[str] | None = None) -> None:
     build_p = sub.add_parser("build", help="Interactively build/edit a workflow (TUI)")
     build_p.add_argument("config", help="Path to workflow JSON file (created if missing)")
 
+    # -- install -------------------------------------------------------------
+    inst_p = sub.add_parser("install", help="Install a scheduled workflow (or --list / --delete)")
+    inst_p.add_argument("config", nargs="?", help="Path to workflow .json/.svg (omit for --list/--delete)")
+    inst_p.add_argument("--name", help="Install name (default: the workflow name)")
+    inst_p.add_argument("--list", action="store_true", dest="list_", help="List installed scheduled workflows")
+    inst_p.add_argument("--delete", metavar="NAME", help="Uninstall a scheduled workflow by name")
+    inst_p.add_argument("--dry-run", action="store_true", help="Print units/actions without touching the OS")
+
     args = parser.parse_args(argv)
 
     if args.command == "validate":
@@ -284,6 +340,14 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_graph(args.config, mermaid=args.mermaid, svg=args.svg)
     elif args.command == "build":
         _cmd_build(args.config)
+    elif args.command == "install":
+        _cmd_install(
+            args.config,
+            list_=args.list_,
+            delete=args.delete,
+            name=args.name,
+            dry_run=args.dry_run,
+        )
     else:
         parser.print_help()
 

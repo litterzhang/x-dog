@@ -7,6 +7,7 @@ flow.scheduler renders the systemd units / crontab lines.
 
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from flow.builder.serialize import workflow_to_dict
 from flow.errors import WorkflowValidationError
 from flow.loader import parse_workflow, validate_workflow
 from flow.models import ScheduleDef
+from flow.scheduler.install import Installer
 from flow.scheduler.systemd import (
     cron_to_oncalendar,
     render_listener_service,
@@ -167,3 +169,115 @@ def test_listener_service_render() -> None:
     assert "flow.scheduler.listener --registry" in svc
     assert "Restart=on-failure" in svc
     assert "WantedBy=default.target" in svc
+
+
+# --- Phase 3: install / --list / --delete + registry -----------------------
+
+
+def _installer(tmp_path: Path) -> tuple[Installer, Path]:
+    """An Installer wired to tmp dirs with a stub systemctl that logs calls."""
+    import stat as _stat
+
+    stub = tmp_path / "systemctl"
+    log = tmp_path / "calls.log"
+    stub.write_text(f'#!/usr/bin/env bash\necho "systemctl $@" >> "{log}"\n', encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH)
+    inst = Installer(unit_dir=tmp_path / "units", data_dir=tmp_path / "data", systemctl=(str(stub),))
+    return inst, log
+
+
+def _timer_wf(name: str = "triage") -> Any:
+    return parse_workflow({
+        "name": name, "entry": "a",
+        "schedule": {"mode": "timer", "every": "15m", "inputs": {"report": "x"}},
+        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "prompt": "hi", "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    })
+
+
+def _hook_wf(name: str = "deploy") -> Any:
+    return parse_workflow({
+        "name": name, "entry": "a",
+        "schedule": {"mode": "hook", "signal": "go",
+                     "listen": {"type": "http", "path": f"/hooks/{name}", "port": 8787}},
+        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "prompt": "hi", "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    })
+
+
+def test_install_timer_writes_units_and_registry(tmp_path: Path) -> None:
+    inst, log = _installer(tmp_path)
+    inst.install(_timer_wf())
+    units = {p.name for p in (tmp_path / "units").iterdir()}
+    assert units == {"triage.service", "triage.timer"}
+    reg = _json.loads(inst.registry_path.read_text())
+    assert reg["triage"]["mode"] == "timer"
+    calls = log.read_text()
+    assert "daemon-reload" in calls
+    assert "enable --now triage.timer" in calls
+
+
+def test_install_hook_creates_shared_listener_once(tmp_path: Path) -> None:
+    inst, _ = _installer(tmp_path)
+    inst.install(_hook_wf("deploy"))
+    inst.install(_hook_wf("triage2"))
+    units = {p.name for p in (tmp_path / "units").iterdir()}
+    # ONE shared listener, no per-workflow hook unit
+    assert units == {"xdog-flow-listener.service"}
+    reg = _json.loads(inst.registry_path.read_text())
+    assert set(reg) == {"deploy", "triage2"}
+    assert reg["deploy"]["signal"] == "go"
+
+
+def test_list_installed(tmp_path: Path) -> None:
+    inst, _ = _installer(tmp_path)
+    inst.install(_timer_wf("t1"))
+    inst.install(_hook_wf("h1"))
+    names = {e["name"]: e["mode"] for e in inst.list_installed()}
+    assert names == {"t1": "timer", "h1": "hook"}
+
+
+def test_delete_timer_round_trips(tmp_path: Path) -> None:
+    inst, _ = _installer(tmp_path)
+    inst.install(_timer_wf())
+    inst.delete("triage")
+    assert not any((tmp_path / "units").iterdir())
+    assert inst.list_installed() == []
+
+
+def test_delete_last_hook_tears_down_listener(tmp_path: Path) -> None:
+    inst, log = _installer(tmp_path)
+    inst.install(_hook_wf("h1"))
+    inst.install(_hook_wf("h2"))
+    inst.delete("h1")
+    # listener stays while h2 remains
+    assert (tmp_path / "units" / "xdog-flow-listener.service").exists()
+    inst.delete("h2")
+    # last hook gone -> listener torn down
+    assert not (tmp_path / "units" / "xdog-flow-listener.service").exists()
+    assert "disable --now xdog-flow-listener.service" in log.read_text()
+
+
+def test_delete_unknown_raises(tmp_path: Path) -> None:
+    inst, _ = _installer(tmp_path)
+    with pytest.raises(ValueError, match="no installed workflow named"):
+        inst.delete("nope")
+
+
+def test_install_no_schedule_raises(tmp_path: Path) -> None:
+    inst, _ = _installer(tmp_path)
+    wf = parse_workflow({
+        "name": "x", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "prompt": "hi", "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    })
+    with pytest.raises(ValueError, match="no 'schedule' block"):
+        inst.install(wf)
+
+
+def test_install_dry_run_touches_nothing(tmp_path: Path) -> None:
+    inst, log = _installer(tmp_path)
+    inst.install(_timer_wf(), dry_run=True)
+    assert not (tmp_path / "units").exists()
+    assert not inst.registry_path.exists()
+    assert not log.exists()  # no systemctl actually invoked
