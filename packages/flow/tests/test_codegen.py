@@ -982,10 +982,13 @@ async def test_generated_module_does_not_import_flow_internal() -> None:
     # No import of the flow package whatsoever.
     assert "from flow." not in src
     assert "import flow" not in src
-    # The helpers and registry are inlined instead.
+    # The helpers are inlined instead.
     assert "def to_python" in src and "def to_state" in src
     assert "class RuntimeContext" in src
-    assert "def default_registry" in src and "class ToolRegistry" in src
+    # This is a SCRIPT-ONLY workflow, so the SDK tool registry + agent/ai imports
+    # are omitted (only an SDK agent node needs them); see docs/cli-agent.md.
+    assert "def default_registry" not in src and "class ToolRegistry" not in src
+    assert "import ai" not in src and "from agent" not in src
 
     # And the inlined coercion actually works end to end (41 -> "42").
     ok, msg = _ruff_clean(src)

@@ -37,6 +37,162 @@ ContainerExpr = str
 _PLACEHOLDER = re.compile(r"\{\{\s*(.+?)\s*\}\}")
 
 
+# ---------------------------------------------------------------------------
+# SDK block (emitted only when the workflow has an SDK agent node / tool manifest).
+# A pure-CLI/script module omits all of this and imports no agent/ai.
+# ---------------------------------------------------------------------------
+_SDK_IMPORTS = (
+    "import ai\n"
+    "from agent import Agent\n"
+    "from agent.core import AgentConfig, AgentTool, AgentToolResult, StreamFn\n"
+    "from agent.events import TurnEndEvent\n"
+    "from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
+    "from agent.tools import create_submit_result_tool\n"
+    "from ai.types import AssistantMessage, TextContent\n"
+)
+
+_SDK_REGISTRY = '''# ---------------------------------------------------------------------------
+# Inlined tool registry (equivalent to flow.tools) so this module does not
+# import the flow package for tool resolution either.  Tools themselves are an
+# agent concept, so this still depends on agent.core / agent.tools / ai.types.
+# ---------------------------------------------------------------------------
+class ToolRegistry:
+    """Registry mapping tool names to agent AgentTool objects."""
+
+    def __init__(self) -> None:
+        self._tools: dict[str, AgentTool] = {}
+
+    def register(self, tool: AgentTool) -> None:
+        self._tools = {**self._tools, tool.name: tool}
+
+    def get(self, name: str) -> AgentTool:
+        try:
+            return self._tools[name]
+        except KeyError:
+            known = ", ".join(sorted(self._tools)) or "<none>"
+            raise WorkflowExecutionError(f"Unknown tool {name!r}. Known tools: {known}") from None
+
+    def resolve(self, names: "tuple[str, ...]") -> tuple[AgentTool, ...]:
+        return tuple(self.get(n) for n in names)
+
+
+async def _echo_execute(
+    tool_call_id: str,
+    params: dict[str, Any],
+    cancel: Any = None,
+    on_update: Any = None,
+    ctx: dict[str, Any] | None = None,
+) -> AgentToolResult:
+    text: str = params.get("text", "")
+    return AgentToolResult(content=(TextContent(text=text),))
+
+
+_ECHO_TOOL = AgentTool(
+    name="echo",
+    description="Echo the given text.",
+    parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+    label="Echo",
+    execute=_echo_execute,
+)
+
+
+def _agent_builtin_tools() -> tuple[AgentTool, ...]:
+    try:
+        from agent.tools.registry import get_registered_tools
+    except ImportError:
+        return ()
+    return tuple(get_registered_tools())
+
+
+def default_registry() -> ToolRegistry:
+    """A fresh registry with the echo demo tool plus every agent-package builtin."""
+    registry = ToolRegistry()
+    registry.register(_ECHO_TOOL)
+    for tool in _agent_builtin_tools():
+        registry.register(tool)
+    return registry
+
+
+def _coerce_tool(obj: object) -> AgentTool:
+    if isinstance(obj, AgentTool):
+        return obj
+    if callable(obj):
+        built = obj()
+        if not isinstance(built, AgentTool):
+            raise WorkflowExecutionError(
+                f"Tool factory {getattr(obj, '__name__', obj)!r} must return an AgentTool, "
+                f"got {type(built).__name__}"
+            )
+        return built
+    raise WorkflowExecutionError(
+        f"Tool ref must resolve to an AgentTool or a factory returning one, got {type(obj).__name__}"
+    )
+
+
+def bind_tool(obj: object, name: str) -> AgentTool:
+    """Coerce *obj* to an AgentTool and rename it to *name* (for manifest tools)."""
+    from dataclasses import replace
+    return replace(_coerce_tool(obj), name=name)
+'''
+
+_SDK_RUN_AGENT = '''async def _run_agent(
+    provider: object,
+    model: str,
+    system_prompt: str,
+    prompt: str,
+    tools: tuple[AgentTool, ...] = (),
+    output_schema: dict[str, object] | None = None,
+    web_search_model: str | None = None,
+) -> tuple[object, int]:
+    stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
+    # Structured output: register submit_result + a result sink, and instruct the
+    # agent to call it.  The submitted object becomes the node's structured output.
+    _sink: dict[str, object] = {}
+    _tool_ctx: dict[str, object] | None = None
+    _sys = system_prompt
+    if output_schema is not None:
+        tools = tools + (create_submit_result_tool(),)
+        _tool_ctx = {"flow_output_schema": output_schema, "flow_result_sink": _sink}
+        _props = output_schema.get("properties")
+        _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
+        _sys = system_prompt + (
+            "\\nWhen finished, you MUST call the submit_result tool"
+            f" with an object containing these fields: {_fields}."
+        )
+    # Built-in web_search tool (search model may differ from the node model).
+    _web_search_fn: Callable[[str], Awaitable[str]] | None = None
+    if web_search_model is not None:
+        _web_search_fn = web_search_fn_from_provider(provider, web_search_model)  # type: ignore[arg-type]
+    agent = Agent(
+        stream_fn,
+        config=AgentConfig(model=model, system_prompt=_sys),
+        tools=tools,
+        tool_ctx=_tool_ctx,
+        web_search_fn=_web_search_fn,
+    )
+    accumulated: list[str] = []
+    _node_tokens = 0
+    event_stream = await agent.prompt(prompt)
+    async for event in event_stream:
+        if isinstance(event, TurnEndEvent) and event.message is not None:
+            msg = event.message
+            if isinstance(msg, AssistantMessage):
+                for part in msg.content:
+                    if isinstance(part, TextContent):
+                        accumulated.append(part.text)
+                _u = msg.usage
+                # Mirrors flow.executor's token accounting: some providers leave
+                # total_tokens at 0 but fill input/output, so fall back to their sum.
+                _node_tokens += _u.total_tokens or (_u.input + _u.output)
+    if output_schema is not None:
+        _result_obj = _sink.get("result")
+        if _result_obj is None:
+            raise WorkflowExecutionError("agent did not submit a result via submit_result")
+        # Keep the submitted object structured — do NOT flatten to a JSON string.
+        return _result_obj, _node_tokens
+    return "".join(accumulated), _node_tokens'''
+
+
 def _safe_id(node_id: str) -> str:
     """Convert a node id to a valid Python identifier."""
     return re.sub(r"[^0-9a-zA-Z_]", "_", node_id)
@@ -988,9 +1144,23 @@ def generate(wf: WorkflowDef) -> str:
     # _drive always references hashlib in its (deterministic-only) memo branch.
     hashlib_import = "import hashlib\n"
 
-    # Provider init: only an SDK agent node needs ai.provider(...).  A pure-CLI (or
-    # script-only) workflow leaves _PROVIDER = None and never imports a provider.
+    # The SDK block (agent/ai imports + inlined tool registry + _run_agent + the
+    # _REGISTRY line) is emitted ONLY when the workflow has an SDK agent node (or a
+    # tool manifest, which only an SDK agent uses).  A pure-CLI/script module then
+    # imports no agent/ai — its --portable bundle need not vendor them.
     _has_sdk_agent = any(n.type == "agent" and n.backend is None for n in wf.nodes)
+    _needs_sdk = _has_sdk_agent or bool(wf.tool_refs)
+    if _needs_sdk:
+        sdk_imports = _SDK_IMPORTS
+        sdk_registry = _SDK_REGISTRY
+        sdk_run_agent = _SDK_RUN_AGENT
+        registry_line = f"_REGISTRY = default_registry(){_render_tool_registration(wf)}"
+    else:
+        sdk_imports = ""
+        sdk_registry = "# (no SDK agent node — agent/ai tool registry omitted)"
+        sdk_run_agent = "# (no SDK agent node — SDK turn helper omitted)"
+        registry_line = ""
+
     if _has_sdk_agent:
         provider_init = (
             '    provider = ai.provider(os.environ.get("FLOW_PROVIDER") or "$provider")\n'
@@ -999,7 +1169,7 @@ def generate(wf: WorkflowDef) -> str:
         )
         provider_init = string.Template(provider_init).substitute(provider=wf.provider)
     else:
-        provider_init = "    _ = ai  # no SDK agent node — provider unused (CLI/script backend)"
+        provider_init = "    pass  # no SDK agent node — no provider needed"
 
     result = string.Template(tmpl_text).substitute(
         workflow_name=wf.name,
@@ -1008,6 +1178,10 @@ def generate(wf: WorkflowDef) -> str:
         node_functions=node_functions,
         provider=wf.provider,
         provider_init=provider_init,
+        sdk_imports=sdk_imports,
+        sdk_registry=sdk_registry,
+        sdk_run_agent=sdk_run_agent,
+        registry_line=registry_line,
         main_body=main_body,
         script_imports=_render_script_imports(wf, safe_ids),
         tool_registration=_render_tool_registration(wf),

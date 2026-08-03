@@ -8,19 +8,11 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import replace
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-import ai
-from agent import Agent
-from agent.core import AgentConfig, AgentTool, AgentToolResult, StreamFn
-from agent.events import TurnEndEvent
-from agent.helpers import stream_fn_from_provider, web_search_fn_from_provider
-from agent.tools import create_submit_result_tool
-from ai.types import AssistantMessage, TextContent
-from jsonpath_ng import parse as _jsonpath_parse
+${sdk_imports}from jsonpath_ng import parse as _jsonpath_parse
 $script_imports
 _EVENT_LOG = logging.getLogger("flow.generated.events")
 
@@ -203,90 +195,7 @@ def to_state(value: object, json_type: str) -> object:
     raise ValueError(f"unknown json type {json_type!r}")
 
 
-# ---------------------------------------------------------------------------
-# Inlined tool registry (equivalent to flow.tools) so this module does not
-# import the flow package for tool resolution either.  Tools themselves are an
-# agent concept, so this still depends on agent.core / agent.tools / ai.types.
-# ---------------------------------------------------------------------------
-class ToolRegistry:
-    """Registry mapping tool names to agent AgentTool objects."""
-
-    def __init__(self) -> None:
-        self._tools: dict[str, AgentTool] = {}
-
-    def register(self, tool: AgentTool) -> None:
-        self._tools = {**self._tools, tool.name: tool}
-
-    def get(self, name: str) -> AgentTool:
-        try:
-            return self._tools[name]
-        except KeyError:
-            known = ", ".join(sorted(self._tools)) or "<none>"
-            raise WorkflowExecutionError(f"Unknown tool {name!r}. Known tools: {known}") from None
-
-    def resolve(self, names: Iterable[str]) -> tuple[AgentTool, ...]:
-        return tuple(self.get(n) for n in names)
-
-
-async def _echo_execute(
-    tool_call_id: str,
-    params: dict[str, Any],
-    cancel: Any = None,
-    on_update: Any = None,
-    ctx: dict[str, Any] | None = None,
-) -> AgentToolResult:
-    text: str = params.get("text", "")
-    return AgentToolResult(content=(TextContent(text=text),))
-
-
-_ECHO_TOOL = AgentTool(
-    name="echo",
-    description="Echo the given text.",
-    parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-    label="Echo",
-    execute=_echo_execute,
-)
-
-
-def _agent_builtin_tools() -> tuple[AgentTool, ...]:
-    try:
-        from agent.tools.registry import get_registered_tools
-    except ImportError:
-        return ()
-    return tuple(get_registered_tools())
-
-
-def default_registry() -> ToolRegistry:
-    """A fresh registry with the echo demo tool plus every agent-package builtin."""
-    registry = ToolRegistry()
-    registry.register(_ECHO_TOOL)
-    for tool in _agent_builtin_tools():
-        registry.register(tool)
-    return registry
-
-
-def _coerce_tool(obj: object) -> AgentTool:
-    if isinstance(obj, AgentTool):
-        return obj
-    if callable(obj):
-        built = obj()
-        if not isinstance(built, AgentTool):
-            raise WorkflowExecutionError(
-                f"Tool factory {getattr(obj, '__name__', obj)!r} must return an AgentTool, "
-                f"got {type(built).__name__}"
-            )
-        return built
-    raise WorkflowExecutionError(
-        f"Tool ref must resolve to an AgentTool or a factory returning one, got {type(obj).__name__}"
-    )
-
-
-def bind_tool(obj: object, name: str) -> AgentTool:
-    """Coerce *obj* to an AgentTool and rename it to *name* (for manifest tools)."""
-    return replace(_coerce_tool(obj), name=name)
-
-
-
+$sdk_registry
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
 _OUT: dict[str, dict[str, object]] = $in_seed
@@ -309,8 +218,7 @@ _PROVIDER: object = None
 $signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
 _RUNTIME: dict[str, object] = {}
-
-_REGISTRY = default_registry()$tool_registration
+$registry_line
 $concurrency_boilerplate
 
 # ---------------------------------------------------------------------------
@@ -381,64 +289,7 @@ def _save_checkpoint() -> None:
             pass
         raise
 
-
-async def _run_agent(
-    provider: object,
-    model: str,
-    system_prompt: str,
-    prompt: str,
-    tools: tuple[AgentTool, ...] = (),
-    output_schema: dict[str, object] | None = None,
-    web_search_model: str | None = None,
-) -> tuple[object, int]:
-    stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
-    # Structured output: register submit_result + a result sink, and instruct the
-    # agent to call it.  The submitted object becomes the node's structured output.
-    _sink: dict[str, object] = {}
-    _tool_ctx: dict[str, object] | None = None
-    _sys = system_prompt
-    if output_schema is not None:
-        tools = tools + (create_submit_result_tool(),)
-        _tool_ctx = {"flow_output_schema": output_schema, "flow_result_sink": _sink}
-        _props = output_schema.get("properties")
-        _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
-        _sys = system_prompt + (
-            "\nWhen finished, you MUST call the submit_result tool"
-            f" with an object containing these fields: {_fields}."
-        )
-    # Built-in web_search tool (search model may differ from the node model).
-    _web_search_fn: Callable[[str], Awaitable[str]] | None = None
-    if web_search_model is not None:
-        _web_search_fn = web_search_fn_from_provider(provider, web_search_model)  # type: ignore[arg-type]
-    agent = Agent(
-        stream_fn,
-        config=AgentConfig(model=model, system_prompt=_sys),
-        tools=tools,
-        tool_ctx=_tool_ctx,
-        web_search_fn=_web_search_fn,
-    )
-    accumulated: list[str] = []
-    _node_tokens = 0
-    event_stream = await agent.prompt(prompt)
-    async for event in event_stream:
-        if isinstance(event, TurnEndEvent) and event.message is not None:
-            msg = event.message
-            if isinstance(msg, AssistantMessage):
-                for part in msg.content:
-                    if isinstance(part, TextContent):
-                        accumulated.append(part.text)
-                _u = msg.usage
-                # Mirrors flow.executor's token accounting: some providers leave
-                # total_tokens at 0 but fill input/output, so fall back to their sum.
-                _node_tokens += _u.total_tokens or (_u.input + _u.output)
-    if output_schema is not None:
-        _result_obj = _sink.get("result")
-        if _result_obj is None:
-            raise WorkflowExecutionError("agent did not submit a result via submit_result")
-        # Keep the submitted object structured — do NOT flatten to a JSON string.
-        return _result_obj, _node_tokens
-    return "".join(accumulated), _node_tokens
-
+$sdk_run_agent
 
 # ---------------------------------------------------------------------------
 # CLI agent backend: shell out to a coding-agent CLI for one turn (no agent/ai).

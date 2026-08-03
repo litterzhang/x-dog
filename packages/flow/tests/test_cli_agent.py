@@ -398,3 +398,49 @@ def test_codex_mcp_config_helper() -> None:
     assert "[mcp_servers.gh]" in toml
     assert 'command = "npx"' in toml
     assert 'args = ["-y", "srv"]' in toml
+
+
+# --- Phase 6b: conditional SDK imports + lean bundle -----------------------
+
+
+def test_pure_cli_module_imports_no_agent_ai() -> None:
+    src = generate(parse_workflow(_cli_wf()))
+    assert "import ai" not in src
+    assert "from agent" not in src
+    assert "class ToolRegistry" not in src
+    assert "async def _run_agent" not in src
+
+
+def test_script_only_module_imports_no_agent_ai() -> None:
+    d = {
+        "name": "s", "entry": "a",
+        "nodes": [{"id": "a", "type": "script", "inputs": [{"name": "x", "type": "string"}],
+                   "code": "def a(ctx, x):\n    return x.upper()", "outputs": ["y"]}],
+        "edges": [{"from": "$in", "to": "a", "map": {"x": "x"}}, {"from": "a", "to": "$output", "map": {"y": "r"}}],
+        "state": {"x": "hi"},
+    }
+    src = generate(parse_workflow(d))
+    assert "import ai" not in src and "from agent" not in src
+
+
+def test_sdk_module_still_imports_agent_ai() -> None:
+    d = {
+        "name": "sdk", "provider": "copilot", "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "hi", "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    }
+    src = generate(parse_workflow(d))
+    assert "import ai" in src and "from agent import Agent" in src
+    assert "class ToolRegistry" in src
+
+
+def test_pure_cli_bundle_drops_ai_agent(tmp_path: pathlib.Path) -> None:
+    from flow.bundle import build_bundle
+
+    out = build_bundle(parse_workflow(_cli_wf()), tmp_path / "bundle")
+    vendor = out / "_vendor"
+    assert not (vendor / "ai").exists()
+    assert not (vendor / "agent").exists()
+    reqs = (out / "requirements.txt").read_text()
+    assert "httpx" not in reqs and "pydantic" not in reqs
+    assert "jsonpath-ng" in reqs

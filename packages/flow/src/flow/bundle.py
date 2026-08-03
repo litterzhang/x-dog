@@ -178,10 +178,13 @@ def build_bundle(wf: WorkflowDef, out_dir: Path, *, offline: bool = False) -> Pa
     # 1) The generated workflow module.
     (out_dir / "workflow.py").write_text(generate(wf), encoding="utf-8")
 
-    # 2) Vendored package sources.  A subflow-using workflow's generated module
-    # imports ``flow`` (to call execute() on the embedded child), so ``flow`` is
-    # vendored too — otherwise the bundle stays flow-independent (ai/agent only).
-    vendored: tuple[str, ...] = _VENDORED_PACKAGES
+    # 2) Vendored package sources.  ai/agent are vendored ONLY when the generated
+    # module imports them — i.e. the workflow has an SDK agent node (or a tool
+    # manifest).  A pure-CLI/script workflow drops them entirely.  A subflow-using
+    # workflow additionally vendors ``flow`` (its module calls execute() on the
+    # embedded child).
+    _needs_sdk = any(n.type == "agent" and n.backend is None for n in wf.nodes) or bool(wf.tool_refs)
+    vendored: tuple[str, ...] = _VENDORED_PACKAGES if _needs_sdk else ()
     if any(n.type == "subflow" for n in wf.nodes):
         vendored = (*vendored, "flow")
     for name in vendored:
@@ -190,8 +193,10 @@ def build_bundle(wf: WorkflowDef, out_dir: Path, *, offline: bool = False) -> Pa
     # 3) Entry point.
     (out_dir / "__main__.py").write_text(_render_main(), encoding="utf-8")
 
-    # 4) Pinned requirements.
-    requirements = [_pin(d) for d in _THIRD_PARTY]
+    # 4) Pinned requirements.  jsonpath-ng is always needed (interpolation); the
+    # ai/agent third-party deps (httpx/pydantic/fastjsonschema) only when SDK.
+    _third_party = _THIRD_PARTY if _needs_sdk else ("jsonpath-ng",)
+    requirements = [_pin(d) for d in _third_party]
     (out_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
 
     # 5) Optional offline wheels.

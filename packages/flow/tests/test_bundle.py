@@ -11,6 +11,7 @@ from flow.bundle import build_bundle
 from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 IN = "$in"
+OUT = "$output"
 
 
 def _script_wf() -> WorkflowDef:
@@ -34,16 +35,38 @@ def _script_wf() -> WorkflowDef:
     )
 
 
+def _agent_wf() -> WorkflowDef:
+    """An SDK-agent workflow — its bundle vendors ai/agent."""
+    return WorkflowDef(
+        name="bundle-agent",
+        provider="copilot",
+        entry="a",
+        default_model="m",
+        nodes=(NodeDef(id="a", type="agent", prompt="hi", output_ports=(Port("out"),)),),
+        edges=(EdgeDef(src="a", dst=OUT, mapping=(("out", "result"),)),),
+    )
+
+
 def test_bundle_layout(tmp_path: Path) -> None:
-    out = build_bundle(_script_wf(), tmp_path / "b")
+    out = build_bundle(_agent_wf(), tmp_path / "b")
     # Top-level files.
     for name in ("workflow.py", "__main__.py", "requirements.txt", "README.md"):
         assert (out / name).is_file(), f"missing {name}"
-    # Vendored packages present and non-trivial.
+    # An SDK-agent bundle vendors ai/agent.
     assert (out / "_vendor" / "ai" / "__init__.py").is_file()
     assert (out / "_vendor" / "agent" / "__init__.py").is_file()
     assert sum(1 for _ in (out / "_vendor" / "ai").rglob("*.py")) > 10
     assert sum(1 for _ in (out / "_vendor" / "agent").rglob("*.py")) > 5
+
+
+def test_bundle_script_only_drops_ai_agent(tmp_path: Path) -> None:
+    """A pure-script (or pure-CLI) bundle vendors no ai/agent and trims requirements."""
+    out = build_bundle(_script_wf(), tmp_path / "b")
+    assert not (out / "_vendor" / "ai").exists()
+    assert not (out / "_vendor" / "agent").exists()
+    reqs = (out / "requirements.txt").read_text(encoding="utf-8")
+    assert "httpx" not in reqs and "pydantic" not in reqs
+    assert "jsonpath-ng" in reqs
 
 
 def test_bundle_excludes_caches_and_tests(tmp_path: Path) -> None:
@@ -62,7 +85,7 @@ def test_bundle_workflow_compiles_without_flow_import(tmp_path: Path) -> None:
 
 
 def test_bundle_requirements_are_pinned(tmp_path: Path) -> None:
-    out = build_bundle(_script_wf(), tmp_path / "b")
+    out = build_bundle(_agent_wf(), tmp_path / "b")
     reqs = (out / "requirements.txt").read_text(encoding="utf-8")
     assert "httpx==" in reqs
     assert "pydantic==" in reqs
