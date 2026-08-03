@@ -109,6 +109,8 @@ def workflow_to_dict(wf: WorkflowDef) -> dict[str, Any]:
         data["tools"] = {name: ref for name, ref in wf.tool_refs}
     if wf.initial_state:
         data["state"] = {k: v for k, v in wf.initial_state}
+    if wf.in_schema:
+        data["in_schema"] = {k: v for k, v in wf.in_schema}
     if wf.max_concurrency:
         data["max_concurrency"] = wf.max_concurrency
     if wf.fan_max_concurrency:

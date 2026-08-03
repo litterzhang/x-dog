@@ -163,6 +163,12 @@ class WorkflowDef:
     # Values are type-native (str / int / float / bool / list / dict) to match the
     # structured wire format.
     initial_state: tuple[tuple[str, object], ...] = field(default=())
+    # Optional JSON Schema per ``$in`` seed key (name -> schema).  OPT-IN: a state
+    # key with no entry here stays untyped (edges out of it are exempt from type
+    # checking, as before).  A key WITH a schema is type-checked at load time — its
+    # consuming edges must match, and an array schema lets it drive a ``fan_out``.
+    # This is the workflow's typed input signature; pairs mirror ``initial_state``.
+    in_schema: tuple[tuple[str, dict[str, object]], ...] = field(default=())
     # Custom tool manifest: (tool_name, "module:attr") pairs.  Each ref is loaded
     # at run/generate time (like a script node's ``run``) and registered into the
     # tool registry under ``tool_name``, so agent nodes can name it in ``tools``.

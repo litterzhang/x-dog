@@ -221,6 +221,20 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
     else:
         initial_state = ()
 
+    # Optional per-$in JSON Schema (opt-in typed input signature).  A ``state`` key
+    # without a schema here stays untyped; a key WITH one is type-checked.
+    raw_in_schema = data.get("in_schema", {})
+    in_schema: tuple[tuple[str, dict[str, object]], ...]
+    if isinstance(raw_in_schema, dict) and raw_in_schema:
+        parsed: list[tuple[str, dict[str, object]]] = []
+        for k, v in raw_in_schema.items():
+            if not isinstance(v, dict):
+                raise WorkflowValidationError(f"in_schema[{k!r}] must be a JSON Schema object")
+            parsed.append((str(k), v))
+        in_schema = tuple(parsed)
+    else:
+        in_schema = ()
+
     raw_tools = data.get("tools", {})
     tool_refs: tuple[tuple[str, str], ...]
     if isinstance(raw_tools, dict) and raw_tools:
@@ -249,6 +263,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         edges=edges,
         default_model=default_model,
         initial_state=initial_state,
+        in_schema=in_schema,
         tool_refs=tool_refs,
         max_concurrency=max_concurrency,
         fan_max_concurrency=fan_max_concurrency,
@@ -421,9 +436,12 @@ def _schema_subtype(schema: dict[str, object], steps: list[str]) -> str | None:
 def _output_port_schemas(wf: WorkflowDef, node_id: str) -> dict[str, dict[str, object]]:
     """Map a node's output port name -> its full JSON Schema.
 
-    ``$in`` seed values carry no declared schema (untyped state), so it returns an
-    empty map — sub-field keys out of ``$in`` are exempt from type checking.
+    ``$in`` seed keys are untyped UNLESS the workflow declares ``in_schema`` for
+    them (opt-in): a declared key returns its schema (so sub-field / fan_out type
+    checks apply); an undeclared key is absent (exempt), as before.
     """
+    if node_id == IN_NODE_ID:
+        return {k: v for k, v in wf.in_schema}
     for n in wf.nodes:
         if n.id == node_id:
             return {p.name: p.schema for p in n.output_ports}
@@ -433,13 +451,55 @@ def _output_port_schemas(wf: WorkflowDef, node_id: str) -> dict[str, dict[str, o
 def _output_port_types(wf: WorkflowDef, node_id: str) -> dict[str, str]:
     """Map a node's output port name -> declared type.
 
-    ``$in`` seed values carry no declared type (state is authored untyped), so it
-    returns an empty map — edges out of ``$in`` are exempt from type checking.
+    ``$in`` seed keys are untyped UNLESS declared in ``in_schema`` (opt-in): a
+    declared key returns its top-level ``type``; an undeclared key is absent
+    (edges out of it are exempt from type checking), as before.
     """
+    if node_id == IN_NODE_ID:
+        out: dict[str, str] = {}
+        for k, schema in wf.in_schema:
+            t = schema.get("type")
+            if isinstance(t, str):
+                out[k] = t
+        return out
     for n in wf.nodes:
         if n.id == node_id:
             return {p.name: p.type for p in n.output_ports}
     return {}
+
+
+def workflow_input_schema(wf: WorkflowDef) -> dict[str, object]:
+    """The workflow's typed input signature as a JSON Schema object.
+
+    Built from ``in_schema`` (the opt-in per-``$in`` declarations): an object whose
+    properties are the declared seed keys.  Undeclared seed keys are omitted (they
+    are untyped).  Returns an empty-properties object when nothing is declared.
+    """
+    props = {k: v for k, v in wf.in_schema}
+    return {"type": "object", "properties": props, "required": sorted(props)}
+
+
+def workflow_output_schema(wf: WorkflowDef) -> dict[str, object]:
+    """The workflow's output signature as a JSON Schema object, derived statically.
+
+    For every edge into the ``$output`` sink, the mapped output key takes the
+    schema of its source node's output port (looked up by port name).  The result
+    is ``{"type": "object", "properties": {out_key: port_schema, ...}}``.  A key
+    whose source port has no schema, or comes from an untyped ``$in`` seed, is
+    typed as a bare ``string`` (the wire default).  A ``when``-guarded ``$output``
+    edge still contributes its key (the schema is static; the guard is runtime).
+    """
+    props: dict[str, object] = {}
+    for edge in wf.edges:
+        if edge.dst != OUT_NODE_ID:
+            continue
+        src_schemas = _output_port_schemas(wf, edge.src)
+        for sport, okey in edge.mapping:
+            # $output mappings map whole ports (sub-field keys are rejected in
+            # validation), so the source key is a plain port name.
+            schema = src_schemas.get(sport)
+            props[okey] = dict(schema) if isinstance(schema, dict) else {"type": "string"}
+    return {"type": "object", "properties": props, "required": sorted(props)}
 
 
 def _detect_cycle(wf: WorkflowDef) -> list[str] | None:
@@ -499,11 +559,16 @@ def _validate_fan_out_edge(
         raise WorkflowValidationError(
             f"{label}: fan_out names {edge.fan_out!r} which is not an output port of {edge.src!r}"
         )
-    # The fan_out port must be declared as an array on a real node source
-    # ($in seeds are untyped and can't drive a typed fan-out).
-    if edge.src == IN_NODE_ID:
-        raise WorkflowValidationError(f"{label}: fan_out from {IN_NODE_ID} is not supported (untyped seed)")
+    # The fan_out port must be declared as an array.  A real node's output port
+    # carries its schema; a ``$in`` seed carries one only when declared in
+    # ``in_schema`` (opt-in typed input) — an undeclared ``$in`` key stays untyped
+    # and cannot drive a typed fan-out.
     src_schemas = _output_port_schemas(wf, edge.src)
+    if edge.src == IN_NODE_ID and edge.fan_out not in src_schemas:
+        raise WorkflowValidationError(
+            f"{label}: fan_out from {IN_NODE_ID} requires an array in_schema for {edge.fan_out!r} "
+            f"(untyped seed cannot drive fan-out)"
+        )
     src_schema = src_schemas.get(edge.fan_out, {})
     if src_schema.get("type") != "array":
         raise WorkflowValidationError(
