@@ -11,6 +11,15 @@ class WorkflowValidationError(WorkflowError):
     """Raised when a workflow definition fails validation."""
 
 
+class FlowWarning(UserWarning):
+    """A non-fatal validation concern — the workflow is runnable but likely wrong.
+
+    Emitted via :func:`warnings.warn` (not raised) so a run still proceeds; tests
+    capture it with :func:`pytest.warns`.  Example: a ``loop.max`` back-edge with
+    no ``when`` guard (an unconditional N-times loop is usually a mistake).
+    """
+
+
 class WorkflowExecutionError(WorkflowError):
     """Raised when a workflow fails during execution."""
 

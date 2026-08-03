@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pytest
-from flow.errors import WorkflowValidationError
+from flow.errors import FlowWarning, WorkflowValidationError
 from flow.loader import load_workflow, parse_workflow, validate_workflow
 from flow.models import Port, WorkflowDef
 
@@ -60,7 +61,9 @@ def test_cyclic_edge_with_loop_max_ok() -> None:
         ],
     }
     wf = parse_workflow(data)
-    validate_workflow(wf)  # should not raise
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FlowWarning)  # unconditional loop; G6 warning tested elsewhere
+        validate_workflow(wf)  # should not raise
     assert wf.edges[1].loop_max == 3
 
 
@@ -773,7 +776,9 @@ def test_validate_bounded_loop_not_flagged_as_cycle() -> None:
         ],
     }
     wf = parse_workflow(data)
-    validate_workflow(wf)  # no raise
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FlowWarning)  # unconditional loop; G6 warning tested elsewhere
+        validate_workflow(wf)  # no raise
 
 
 def test_validate_self_loop_unbounded_fails() -> None:
@@ -1142,3 +1147,45 @@ def test_fan_out_roundtrips() -> None:
 
     wf = parse_workflow(_map_reduce_wf())
     assert parse_workflow(workflow_to_dict(wf)) == wf
+
+
+# --- G6: unconditional-loop warning ----------------------------------------
+
+
+def test_loop_without_when_warns() -> None:
+    """A bounded loop with no `when` guard warns (runs all N iterations blindly)."""
+    data = {
+        "name": "loop-nowhen",
+        "provider": "copilot",
+        "entry": "a",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "a", "loop": {"max": 3}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with pytest.warns(FlowWarning, match="no 'when' guard"):
+        validate_workflow(wf)
+
+
+def test_loop_with_when_does_not_warn() -> None:
+    """A guarded bounded loop is the correct idiom — no warning."""
+    data = {
+        "name": "loop-when",
+        "provider": "copilot",
+        "entry": "a",
+        "nodes": [
+            {"id": "a", "prompt": "p", "outputs": ["x"]},
+            {"id": "b", "prompt": "q", "outputs": ["y"]},
+        ],
+        "edges": [
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "a", "loop": {"max": 3},
+             "when": {"contains": {"value": "{{y}}", "text": "REVISE"}}},
+        ],
+    }
+    wf = parse_workflow(data)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FlowWarning)  # any FlowWarning would fail the test
+        validate_workflow(wf)  # no warning

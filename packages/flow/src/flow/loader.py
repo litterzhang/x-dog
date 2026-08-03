@@ -16,12 +16,13 @@ import ast
 import json
 import logging
 import re
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
 from flow.coerce import VALID_TYPES
-from flow.errors import WorkflowValidationError
+from flow.errors import FlowWarning, WorkflowValidationError
 from flow.models import (
     IN_NODE_ID,
     OUT_NODE_ID,
@@ -752,6 +753,18 @@ def validate_workflow(wf: WorkflowDef) -> None:
         if node_index[edge.dst] <= node_index[edge.src]:
             if not (edge.loop_max is not None and edge.loop_max >= 1):
                 raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
+
+        # G6: a bounded loop with no `when` guard runs the full loop_max every time,
+        # which is almost always an authoring mistake (a loop usually exits early on
+        # a condition).  Warn, don't reject — an unconditional N-times loop is legal.
+        if edge.loop_max is not None and edge.when is None:
+            warnings.warn(
+                f"Edge {edge.src!r} -> {edge.dst!r}: loop.max={edge.loop_max} with no 'when' guard "
+                f"runs all {edge.loop_max} iterations unconditionally (usually a mistake — add a "
+                f"'when' to exit early).",
+                FlowWarning,
+                stacklevel=2,
+            )
 
     # Two unconditional producers into one input port is the old shared-key clash.
     for (dst, port), count in unconditional_fed.items():
