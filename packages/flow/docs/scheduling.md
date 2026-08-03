@@ -74,13 +74,21 @@ reads at run time — the engine still just runs once per invocation.
 
 ## 3. `xdog-flow install`
 
+The one command manages the full lifecycle — install, list, and delete — so all
+scheduling operations live under `install`:
+
 ```
 xdog-flow install <workflow.json> [--prefix DIR] [--name NAME] [--dry-run]
-xdog-flow uninstall <NAME>
-xdog-flow install --list
+                                              Build + install a scheduled workflow
+xdog-flow install --list                      List installed scheduled workflows
+xdog-flow install --delete <NAME>             Uninstall one (units + bundle)
 ```
 
-Steps (Linux v1):
+`<workflow.json>` is required for an install, and **omitted** for `--list` /
+`--delete` (they act on already-installed names, not a source file). `--list` and
+`--delete` are mutually exclusive with each other and with an install.
+
+**Install** steps (Linux v1):
 1. **Build.** `build_bundle(wf, <prefix>/<name>)` — a `--portable` bundle is the
    deployable unit (self-contained; for a pure-CLI workflow it vendors nothing).
 2. **Emit units** from the `schedule` block (§4 / §5) into the user systemd dir
@@ -90,8 +98,18 @@ Steps (Linux v1):
 
 `--prefix` defaults to `~/.local/share/xdog-flow/<name>/` (the bundle lives here;
 units reference it by absolute path). `--name` defaults to the workflow name.
-`uninstall` disables + removes the units and the bundle dir. `--list` shows
-installed workflows and their next-fire time (`systemctl --user list-timers`).
+
+**`--list`** shows each installed workflow, its mode (timer/hook), and — for a
+timer — its next-fire time (from `systemctl --user list-timers`); for a hook, the
+listener's active/failed state and bound transport. It reads an install registry
+(a small JSON manifest under `~/.local/share/xdog-flow/`, written on install) so
+it knows *which* units are flow's, independent of systemd's global list.
+
+**`--delete <NAME>`** is the inverse of install: `systemctl --user disable --now`
+the timer/service(s), remove the generated unit files, remove the bundle dir under
+`--prefix`, and drop the name from the registry. Idempotent — deleting an unknown
+name is a clear error, not a crash; a partially-installed name still cleans up
+whatever exists.
 
 Nothing here touches the engine; `install` is a new CLI command + a
 `flow.scheduler` module that renders unit files.
@@ -154,49 +172,63 @@ identical (no divergent code path, mirroring `interpret == compile`).
 The event source varies (HTTP webhook, file-drop, queue), but the **core is one
 idea**: an external event → deliver a **signal** to a fresh run of the bundle.
 
-Installed as a **long-running systemd user service** — a tiny listener shipped with
-flow (`flow.scheduler.listener`) that, on each event, spawns the bundle with the
-signal set:
+**One shared listener, not one-per-workflow.** All hook workflows on a host are
+served by a **single** systemd user service — `xdog-flow-listener.service` — that
+reads the install registry (§3) and **routes** each event to the right bundle. So
+N hook workflows share one process and one port; installing another hook workflow
+adds a route and reloads the listener, not a new daemon. This avoids N idle
+processes and port collisions (two workflows can't both grab 8787). The listener
+is created when the first hook workflow is installed and removed when the last is
+deleted.
 
-`<name>.service` (the listener):
+`xdog-flow-listener.service` (one per host):
 ```ini
 [Service]
 Type=simple
-Environment=FLOW_BUNDLE=/home/user/.local/share/xdog-flow/cli-triage
-ExecStart=/usr/bin/python3 -m flow.scheduler.listener --config <name>.listen.json
+# The listener reads the registry to know every hook workflow's route + bundle.
+ExecStart=/usr/bin/python3 -m flow.scheduler.listener --registry %S/xdog-flow/registry.json
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 ```
 
-The listener, per the `listen` transport:
-- **`http`**: binds `port`, accepts a POST to `path`; the request body (JSON)
-  becomes `FLOW_INPUTS`, and it spawns `python <bundle>` with
-  `FLOW_SIGNALS=<signal>`. Returns the run's `$output` (or 202 + a run id for async).
-- **`file`** (an alternative transport): watches a directory; a dropped file's
-  content becomes `FLOW_INPUTS`, the filename/event is the trigger.
-- **`socket`**: a Unix socket for local IPC (systemd socket activation is a natural
-  fit — the service starts on first connection).
+Routing per transport:
+- **`http`**: one bound `port` for the whole host; the request **`path`** selects
+  the workflow (`POST /hooks/triage` → triage, `POST /hooks/deploy` → deploy). The
+  request body (JSON) becomes that workflow's `FLOW_INPUTS`; the listener spawns
+  its `python <bundle>` with `FLOW_SIGNALS=<that workflow's signal>`. Returns the
+  run's `$output` (or 202 + a run id for async).
+- **`file`**: the one listener watches **each** hook workflow's declared directory;
+  a dropped file routes to that workflow (its content → `FLOW_INPUTS`).
+- **`socket`**: a Unix socket per workflow is the exception — systemd socket
+  activation is per-socket, so a socket-mode workflow may get its own
+  `.socket`+`.service` pair rather than joining the shared http/file listener.
+  (Documented so the model is honest; http/file are the shared common case.)
 
-Each event → **one bundle subprocess** with `FLOW_SIGNALS` carrying the declared
-signal. The workflow's `human`-node-with-that-signal proceeds instead of pausing —
-so the *same* workflow runs manually (paused at the signal) or via hook (signal
-delivered). The passive path reuses the existing pause/resume primitive verbatim;
-scheduling only supplies the signal from an external event.
+Each event → **one bundle subprocess** with `FLOW_SIGNALS` carrying that
+workflow's declared signal. The workflow's `human`-node-with-that-signal proceeds
+instead of pausing — so the *same* workflow runs manually (paused at the signal)
+or via hook (signal delivered). The passive path reuses the existing pause/resume
+primitive verbatim; scheduling only supplies the signal from an external event.
 
 ### 5.1 Who starts (and supervises) the listener
 
 **systemd owns the listener's lifecycle — flow writes no daemon/supervision code.**
-All three transports share **one** listener program (`flow.scheduler.listener`);
-the `listen.type` selects its internal event loop (bind a port / watch a dir /
-accept a socket). What differs is how systemd brings it up:
+The single shared listener program (`flow.scheduler.listener`) routes http/file
+transports; `install` brings it up via systemd. What differs is how systemd starts
+each transport:
 
-- **Resident (http, file)** — a `Type=simple` user **service** that `install`
-  enables (`systemctl --user enable --now <name>.service`). systemd starts it now,
-  restarts it on crash (`Restart=on-failure`), and re-launches it on boot/login
-  (`WantedBy=default.target`). The process runs continuously, looping on its
-  event source.
+- **Resident (http, file)** — the one `xdog-flow-listener.service` (`Type=simple`)
+  that `install` enables on the first hook workflow
+  (`systemctl --user enable --now xdog-flow-listener.service`). systemd starts it,
+  restarts on crash (`Restart=on-failure`), and re-launches on boot/login
+  (`WantedBy=default.target`). Adding/removing a hook workflow updates the registry
+  and reloads (`systemctl --user reload-or-restart`) — no new service.
+- **On-demand (socket)** — a per-workflow systemd **`.socket` + `.service` pair**
+  using socket activation: systemd holds the socket and starts the service on the
+  first connection. Socket-mode workflows do not join the shared listener (§5,
+  socket bullet); this is the one per-workflow case.
 - **On-demand (socket)** — a systemd **`.socket` + `.service` pair** using **socket
   activation**: systemd itself holds the listening socket and starts the service
   only on the first connection (and can stop it when idle). The listener need not
@@ -273,10 +305,12 @@ execution.
 ## 9. v1 scope & non-goals
 
 **v1 delivers:** the `schedule` block (model + loader + serialize); `xdog-flow
-install`/`uninstall`/`--list`; timer mode via systemd user timer (interval + cron)
-with a crontab fallback; hook mode via a single listener supervised by systemd —
-**http and file as resident services, socket via socket-activation** — plus a
-no-systemd `nohup` fallback; `--dry-run` unit preview; docs + one scheduled example.
+install`/`install --list`/`install --delete`; timer mode via systemd user timer
+(interval + cron) with a crontab fallback; hook mode via a single listener
+supervised by systemd — **http and file as resident services, socket via
+socket-activation** — plus a no-systemd `nohup` fallback; a small install registry
+(JSON manifest) backing `--list`/`--delete`; `--dry-run` unit preview; docs + one
+scheduled example.
 
 **Non-goals (v1):**
 - No macOS/`launchd` or Windows (Linux/systemd first; interface leaves room).
@@ -300,8 +334,8 @@ no-systemd `nohup` fallback; `--dry-run` unit preview; docs + one scheduled exam
    cron expression can't be faithfully translated — never silently mis-schedule.
 2. **Absolute paths / relocation.** Units hard-code the bundle path; moving the
    bundle breaks the timer. *Mitigation:* `install` owns the bundle location
-   (`--prefix`), `uninstall` cleans it, and `--list` shows the path; re-install to
-   relocate.
+   (`--prefix`), `install --delete` cleans it, and `install --list` shows the path;
+   re-install to relocate.
 3. **Hook listener as an attack surface.** A public port running a workflow is
    dangerous. *Mitigation:* bind localhost by default, require an explicit
    `listen.host`/auth to expose it, isolate each run in a subprocess, and warn
@@ -324,15 +358,18 @@ no-systemd `nohup` fallback; `--dry-run` unit preview; docs + one scheduled exam
 2. **Unit rendering.** `flow.scheduler.systemd` renders `.service`/`.timer` (timer)
    and `.service` (hook) from a `schedule` block; a crontab renderer. Pure
    string-render tests (assert the emitted unit text), no OS side effects.
-3. **`xdog-flow install`/`uninstall`/`--list`.** Wire the command: build_bundle +
-   render + `systemctl --user` calls (guarded so `--dry-run` prints instead).
-   Tests stub `systemctl` (a fake on PATH) and assert files written + commands run.
-4. **Hook listener.** `flow.scheduler.listener` (http/file/socket) that spawns the
-   bundle with `FLOW_SIGNALS`/`FLOW_INPUTS`. Tests drive the listener in-process
-   against a fake bundle (a stub `python <bundle>`), asserting the right env is
-   passed and the signal reaches a human node.
+3. **`xdog-flow install` (+ `--list` / `--delete`).** Wire the command: build_bundle
+   + render + `systemctl --user` calls (guarded so `--dry-run` prints instead), and
+   the install registry that `--list`/`--delete` read/update. Tests stub
+   `systemctl` (a fake on PATH) and assert files written + registry updated +
+   commands run; a delete round-trips (install then delete leaves nothing).
+4. **Shared hook listener.** `flow.scheduler.listener` — ONE listener service
+   routing all installed hook workflows (http by `path`, file by watched dir); it
+   spawns the right bundle with `FLOW_SIGNALS`/`FLOW_INPUTS`. Tests drive the
+   listener in-process against a fake bundle, asserting routing + the right env +
+   the signal reaching a human node, with two hook workflows sharing the listener.
 5. **Docs + example.** A scheduled example (a `timer` triage and a `hook` triage)
-   and a README note on `journalctl`/uninstall.
+   and a README note on `journalctl` and `install --delete`.
 
 ---
 
@@ -343,7 +380,8 @@ no-systemd `nohup` fallback; `--dry-run` unit preview; docs + one scheduled exam
   in-process listener — no real timers or ports in CI).
 - End-to-end (manual, Linux): `xdog-flow install examples/cli_triage_timer.json`,
   confirm `systemctl --user list-timers` shows it, wait a tick, check
-  `journalctl --user -u cli-triage.service` for the run output; `xdog-flow
-  uninstall cli-triage` removes it. For hook: `install`, `curl` the webhook, see
-  the run fire.
+  `journalctl --user -u cli-triage.service` for the run output; `xdog-flow install
+  --list` shows it and `xdog-flow install --delete cli-triage` removes it. For hook:
+  `install` two hook workflows, confirm one shared `xdog-flow-listener.service`,
+  `curl` each webhook path, see each run fire.
 - `git checkout -- uv.lock` before commit.
