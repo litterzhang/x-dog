@@ -566,9 +566,10 @@ def _render_cli_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     lines.append(f"    _usr = {_wrap_string_expr(user_prompt)}")
     _structured = agent_is_structured(node)
     _schema_expr = f"{agent_output_schema(node)!r}" if _structured else "None"
+    _mcp_expr = f"{[[name, spec] for name, spec in node.mcp_servers]!r}"
     _call = (
         f"    result, _node_tokens = await _run_cli_agent({node.backend!r}, {model!r}, "
-        f"_sys, _usr, {_schema_expr}, {tuple(node.allowed_tools)!r})"
+        f"_sys, _usr, {_schema_expr}, {tuple(node.allowed_tools)!r}, {_mcp_expr})"
     )
     lines.append(_call if len(_call) <= 120 else _call + "  # noqa: E501")
     lines.append("    _out: dict[str, object] = {}")

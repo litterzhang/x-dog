@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -150,6 +151,69 @@ class SdkRunner:
 # CliRunner is adapter-agnostic (spawn, feed stdin, check exit, hand to parse).
 # ---------------------------------------------------------------------------
 
+_ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _resolve_env(value: object) -> object:
+    """Recursively resolve ``${VAR}`` references against the run-time environment.
+
+    A string ``"${VAR}"`` becomes ``os.environ["VAR"]``; an unset var raises (fail
+    fast, never a silent empty).  Dicts/lists are walked; other scalars pass through.
+    So a workflow JSON carries the reference, never the secret (cli-agent.md §5.2).
+    """
+    if isinstance(value, str):
+        def _sub(m: "re.Match[str]") -> str:
+            var = m.group(1)
+            got = os.environ.get(var)
+            if got is None:
+                raise WorkflowExecutionError(f"mcp_servers: environment variable ${{{var}}} is not set")
+            return got
+
+        return _ENV_RE.sub(_sub, value)
+    if isinstance(value, dict):
+        return {k: _resolve_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_env(v) for v in value]
+    return value
+
+
+def claude_mcp_config(mcp_servers: "tuple[tuple[str, dict[str, object]], ...]") -> str:
+    """Render an MCP-server spec into claude's ``--mcp-config`` JSON string.
+
+    ``{"mcpServers": {name: <spec>, ...}}`` with ``${ENV}`` resolved.  The spec dict
+    is passed through verbatim (opaque) apart from env interpolation.
+    """
+    servers = {name: _resolve_env(spec) for name, spec in mcp_servers}
+    return json.dumps({"mcpServers": servers}, sort_keys=True)
+
+
+def codex_mcp_config(mcp_servers: "tuple[tuple[str, dict[str, object]], ...]") -> str:
+    """Render an MCP-server spec into codex ``config.toml`` ``[mcp_servers.*]`` text.
+
+    Minimal TOML writer for the pass-through spec (string/number/bool/list of those),
+    with ``${ENV}`` resolved.  Kept dependency-free (no toml lib).
+    """
+    lines: list[str] = []
+    for name, spec in mcp_servers:
+        lines.append(f"[mcp_servers.{name}]")
+        for key, raw in spec.items():
+            lines.append(f"{key} = {_toml_value(_resolve_env(raw))}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        # inline table
+        return "{" + ", ".join(f"{k} = {_toml_value(v)}" for k, v in value.items()) + "}"
+    return json.dumps(str(value))  # quoted string
+
 
 class CliAdapter(Protocol):
     """Maps the agent-turn contract onto one CLI's argv + stdout grammar."""
@@ -167,6 +231,7 @@ class CliAdapter(Protocol):
         system_prompt: str,
         output_schema: dict[str, object] | None,
         allowed_tools: tuple[str, ...],
+        mcp_servers: tuple[tuple[str, dict[str, object]], ...],
         scratch: Path,
     ) -> list[str]:
         """Command-line args after the binary (prompt is fed on stdin).
@@ -200,6 +265,7 @@ class ClaudeAdapter:
         system_prompt: str,
         output_schema: dict[str, object] | None,
         allowed_tools: tuple[str, ...],
+        mcp_servers: tuple[tuple[str, dict[str, object]], ...],
         scratch: Path,
     ) -> list[str]:
         args = ["-p", "--output-format", "json"]
@@ -209,6 +275,10 @@ class ClaudeAdapter:
             args += ["--append-system-prompt", system_prompt]
         if output_schema is not None:
             args += ["--json-schema", json.dumps(output_schema, sort_keys=True)]
+        if mcp_servers:
+            cfg = scratch / "mcp.json"
+            cfg.write_text(claude_mcp_config(mcp_servers), encoding="utf-8")
+            args += ["--mcp-config", str(cfg)]
         if allowed_tools:
             args += ["--allowedTools", ",".join(allowed_tools)]
         return args
@@ -255,6 +325,7 @@ class CodexAdapter:
         system_prompt: str,
         output_schema: dict[str, object] | None,
         allowed_tools: tuple[str, ...],
+        mcp_servers: tuple[tuple[str, dict[str, object]], ...],
         scratch: Path,
     ) -> list[str]:
         args = ["exec", "--json", "--skip-git-repo-check"]
@@ -264,6 +335,11 @@ class CodexAdapter:
             schema_file = scratch / "output_schema.json"
             schema_file.write_text(json.dumps(output_schema, sort_keys=True), encoding="utf-8")
             args += ["--output-schema", str(schema_file)]
+        if mcp_servers:
+            # codex reads MCP servers from its config.toml; point CODEX_HOME at a
+            # scratch dir holding a generated config (set by CliRunner via env).
+            cfg = scratch / "config.toml"
+            cfg.write_text(codex_mcp_config(mcp_servers), encoding="utf-8")
         # codex has no per-tool allow-list; capability is bounded by the sandbox.
         # With no tools requested we keep the default read-only sandbox.
         return args
@@ -354,10 +430,16 @@ class CliRunner:
                 system_prompt=system_prompt,
                 output_schema=schema,
                 allowed_tools=node.allowed_tools,
+                mcp_servers=node.mcp_servers,
                 scratch=scratch,
             )
             stdin_text = self._adapter.stdin(system_prompt=system_prompt, user_prompt=user_prompt)
             binary = self._resolve_binary()
+            # codex reads MCP servers from CODEX_HOME/config.toml; point it at the
+            # scratch config the adapter wrote (claude takes --mcp-config directly).
+            env = None
+            if node.mcp_servers and self._adapter.name == "codex-cli":
+                env = {**os.environ, "CODEX_HOME": str(scratch)}
 
             proc = await asyncio.create_subprocess_exec(
                 binary,
@@ -365,6 +447,7 @@ class CliRunner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             try:
                 out_b, err_b = await asyncio.wait_for(proc.communicate(stdin_text.encode()), timeout=timeout)

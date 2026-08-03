@@ -4,6 +4,7 @@ import asyncio
 ${hashlib_import}import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -444,6 +445,51 @@ async def _run_agent(
 # Mirrors flow.runners.CliRunner + the claude/codex adapters; kept in lock-step
 # with the interpreter by the interpret==compile parity tests.
 # ---------------------------------------------------------------------------
+_CLI_ENV_RE = re.compile(r"\$$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _cli_resolve_env(value: object) -> object:
+    if isinstance(value, str):
+        def _sub(_m: "re.Match[str]") -> str:
+            _v = os.environ.get(_m.group(1))
+            if _v is None:
+                raise WorkflowExecutionError(f"mcp_servers: environment variable $${{{_m.group(1)}}} is not set")
+            return _v
+        return _CLI_ENV_RE.sub(_sub, value)
+    if isinstance(value, dict):
+        return {_k: _cli_resolve_env(_v) for _k, _v in value.items()}
+    if isinstance(value, list):
+        return [_cli_resolve_env(_v) for _v in value]
+    return value
+
+
+def _cli_toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_cli_toml_value(_v) for _v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_k} = {_cli_toml_value(_v)}" for _k, _v in value.items()) + "}"
+    return json.dumps(str(value))
+
+
+def _claude_mcp_config(mcp_servers: "list") -> str:
+    _servers = {_name: _cli_resolve_env(_spec) for _name, _spec in mcp_servers}
+    return json.dumps({"mcpServers": _servers}, sort_keys=True)
+
+
+def _codex_mcp_config(mcp_servers: "list") -> str:
+    _lines: "list[str]" = []
+    for _name, _spec in mcp_servers:
+        _lines.append(f"[mcp_servers.{_name}]")
+        for _key, _raw in _spec.items():
+            _lines.append(f"{_key} = {_cli_toml_value(_cli_resolve_env(_raw))}")
+        _lines.append("")
+    return "\n".join(_lines)
+
+
 def _cli_binary(backend: str) -> str:
     _env = "FLOW_CLI_BIN_" + backend.upper().replace("-", "_")
     _default = {"claude-cli": "claude", "codex-cli": "codex"}.get(backend, backend)
@@ -456,6 +502,7 @@ def _cli_argv(
     system_prompt: str,
     output_schema: dict[str, object] | None,
     allowed_tools: "tuple[str, ...]",
+    mcp_servers: "list",
     scratch: Path,
 ) -> "list[str]":
     if backend == "claude-cli":
@@ -466,6 +513,10 @@ def _cli_argv(
             _args += ["--append-system-prompt", system_prompt]
         if output_schema is not None:
             _args += ["--json-schema", json.dumps(output_schema, sort_keys=True)]
+        if mcp_servers:
+            _cfg = scratch / "mcp.json"
+            _cfg.write_text(_claude_mcp_config(mcp_servers), encoding="utf-8")
+            _args += ["--mcp-config", str(_cfg)]
         if allowed_tools:
             _args += ["--allowedTools", ",".join(allowed_tools)]
         return _args
@@ -477,6 +528,8 @@ def _cli_argv(
             _sf = scratch / "output_schema.json"
             _sf.write_text(json.dumps(output_schema, sort_keys=True), encoding="utf-8")
             _args += ["--output-schema", str(_sf)]
+        if mcp_servers:
+            (scratch / "config.toml").write_text(_codex_mcp_config(mcp_servers), encoding="utf-8")
         return _args
     raise WorkflowExecutionError(f"unknown CLI backend {backend!r}")
 
@@ -538,16 +591,21 @@ async def _run_cli_agent(
     user_prompt: str,
     output_schema: dict[str, object] | None,
     allowed_tools: "tuple[str, ...]",
+    mcp_servers: "list",
 ) -> tuple[object, int]:
     _structured = output_schema is not None
     _scratch = Path(tempfile.mkdtemp(prefix="flow-cli-"))
     try:
-        _argv = _cli_argv(backend, model, system_prompt, output_schema, allowed_tools, _scratch)
+        _argv = _cli_argv(backend, model, system_prompt, output_schema, allowed_tools, mcp_servers, _scratch)
         _stdin = _cli_stdin(backend, system_prompt, user_prompt)
         _bin = _cli_binary(backend)
+        _env = None
+        if mcp_servers and backend == "codex-cli":
+            _env = {**os.environ, "CODEX_HOME": str(_scratch)}
         _proc = await asyncio.create_subprocess_exec(
             _bin, *_argv,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=_env,
         )
         _out_b, _err_b = await _proc.communicate(_stdin.encode())
         if _proc.returncode != 0:

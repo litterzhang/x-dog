@@ -8,6 +8,7 @@ pass-through spec). Provider is required only when an SDK agent node is present.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import stat
 import subprocess
@@ -325,3 +326,75 @@ def test_cli_agent_generated_module_ruff_clean(tmp_path: pathlib.Path) -> None:
         capture_output=True, text=True,
     )
     assert r.returncode == 0, f"ruff failed:\n{r.stdout}\n{r.stderr}"
+
+
+# --- Phase 6: MCP server config + ${ENV} interpolation ---------------------
+
+_FAKE_CLAUDE_MCP = '''#!/usr/bin/env python3
+import sys, json
+argv = sys.argv[1:]
+sys.stdin.read()
+mcp = None
+i = 0
+while i < len(argv):
+    if argv[i] == "--mcp-config": mcp = argv[i+1]; i += 2; continue
+    i += 1
+cfg = open(mcp).read() if mcp else "NONE"
+print(json.dumps({"input_tokens": 1, "output_tokens": 1, "result": cfg}))
+'''
+
+
+async def test_mcp_config_generated_with_env_interpolation(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE_MCP, name="fc_mcp"))
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-tok")
+    wf = parse_workflow(_cli_wf(
+        mcp_servers={"github": {"command": "npx", "env": {"TOKEN": "${GITHUB_TOKEN}"}}},
+    ))
+    r = await execute(wf)
+    cfg = r.runtime["out"]["result"]
+    assert "secret-tok" in cfg  # resolved from env
+    assert "${" not in cfg  # the reference is gone (no plaintext secret in the spec)
+    assert '"mcpServers"' in cfg
+
+
+async def test_mcp_config_unset_env_fails_fast(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    from flow.errors import WorkflowExecutionError
+
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE_MCP, name="fc_mcp2"))
+    monkeypatch.delenv("NOPE_TOKEN", raising=False)
+    wf = parse_workflow(_cli_wf(mcp_servers={"gh": {"env": {"T": "${NOPE_TOKEN}"}}}))
+    with pytest.raises(WorkflowExecutionError, match="NOPE_TOKEN"):
+        await execute(wf)
+
+
+async def test_mcp_config_parity(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """Both engines generate byte-identical MCP config from the same spec."""
+    monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE_MCP, name="fc_mcp3"))
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    wf = parse_workflow(_cli_wf(mcp_servers={"github": {"command": "npx", "env": {"TOKEN": "${GITHUB_TOKEN}"}}}))
+    interp = await execute(wf)
+    src = generate(wf)
+    mod = types.ModuleType("_gen_mcp")
+    exec(compile(src, "<g>", "exec"), mod.__dict__)  # noqa: S102
+    await mod.main()  # type: ignore[attr-defined]
+    assert mod._RUNTIME["out"] == dict(interp.runtime["out"])  # type: ignore[attr-defined]
+
+
+def test_claude_mcp_config_helper() -> None:
+    import os as _os
+
+    from flow.runners import claude_mcp_config
+
+    _os.environ["_FLOW_TEST_TOK"] = "xyz"
+    cfg = claude_mcp_config((("gh", {"command": "npx", "env": {"K": "${_FLOW_TEST_TOK}"}}),))
+    parsed = json.loads(cfg)
+    assert parsed["mcpServers"]["gh"]["env"]["K"] == "xyz"
+
+
+def test_codex_mcp_config_helper() -> None:
+    from flow.runners import codex_mcp_config
+
+    toml = codex_mcp_config((("gh", {"command": "npx", "args": ["-y", "srv"]}),))
+    assert "[mcp_servers.gh]" in toml
+    assert 'command = "npx"' in toml
+    assert 'args = ["-y", "srv"]' in toml
