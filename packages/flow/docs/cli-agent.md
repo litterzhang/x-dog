@@ -70,10 +70,11 @@ retry, checkpoint, budget, fan-out, subflow — is unchanged.
 class AgentRunner(Protocol):
     async def run(
         self, *, system_prompt: str, user_prompt: str, model: str,
-        output_schema: dict | None,        # None -> plain text; else structured
-        allowed_tools: tuple[str, ...],    # NARROW the CLI's toolset (§5); SDK ignores
+        output_schema: dict | None,          # None -> plain text; else structured
+        allowed_tools: tuple[str, ...],      # NARROW the CLI's toolset (§5); SDK ignores
+        mcp_servers: tuple[tuple[str, dict], ...],  # provide MCP servers (§5.1); SDK ignores
         timeout: float,
-    ) -> tuple[object, int]:               # (structured obj OR text, tokens)
+    ) -> tuple[object, int]:                 # (structured obj OR text, tokens)
         ...
 ```
 
@@ -160,49 +161,94 @@ a CLI without native structured output, but is not the primary path.
 
 ---
 
-## 5. Tools — a node NARROWS the CLI's toolset, it does not provide tools
+## 5. Tools — declare MCP servers, narrow with an allow-list
 
-flow ships **no agent tools** and maintains **no catalog of which tools a CLI
-supports**. The CLI already has a toolset (claude: Read/Edit/Bash/Web/MCP…; codex:
-its exec toolset + configured MCP servers). A CLI agent node's tool config is a
-pure **allow-list that narrows** that existing set — the workflow author says
-"this node may use *only* these," and flow forwards it to the CLI's own allow-list
-mechanism.
+A CLI agent node's tool config has **two independent layers**, and flow never
+defines a tool's *semantics* either way — it only wires configuration:
+
+1. **`mcp_servers`** (the extendable hatch): the node declares which MCP servers it
+   wants. flow **generates the CLI's MCP config** from this and passes it to *that
+   node's* CLI invocation. This is how a node brings a tool the base CLI doesn't
+   have — without flow shipping the tool.
+2. **`allowed_tools`** (the narrowing): an allow-list bounding which of the now-
+   available tools (CLI built-ins **and** the declared MCP servers' tools) the node
+   may actually call. Forwarded to the CLI's own allow-list mechanism.
 
 ```jsonc
 // a CLI agent node
 {
   "id": "research",
   "type": "agent",
-  "backend": "claude-cli",          // no provider needed
+  "backend": "claude-cli",                 // no provider needed
   "prompt": "...",
-  "allowed_tools": ["Read", "WebSearch"],   // NARROW: only these of the CLI's tools
-  "outputs": [ ... ]                          // structured output via the CLI's schema flag
+  "mcp_servers": {                          // LAYER 1: provide MCP servers for this node
+    "github": {"command": "npx", "args": ["-y", "@mcp/github"],
+               "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}},   // ${ENV} interpolation, no plaintext
+    "db":     {"url": "https://my-mcp.example/sse"}
+  },
+  "allowed_tools": ["Read", "mcp__github__create_issue"],     // LAYER 2: narrow to these
+  "outputs": [ ... ]
 }
 ```
 
-- **Mapping.** `allowed_tools` → the CLI's allow-list flag:
-  - **claude**: `--allowedTools "Read,WebSearch"` (and, for an MCP tool the CLI is
-    already configured with, `mcp__<server>__<tool>`).
-  - **codex**: the equivalent narrowing via its config; codex `exec` is sandboxed
-    by default, so the node's allow-list plus `--sandbox <mode>` bounds it.
-- **flow defines nothing.** There is no `tool_refs`-as-MCP-server-spec authoring
-  path for CLI nodes (that would be flow *providing* tools). If a workflow needs a
-  bespoke MCP tool, that server is configured **in the CLI's own environment**
-  (the CLI owns tools); the node merely allow-lists its name. flow stays out of the
-  tool-supply business entirely — exactly the burden this design sheds.
-- **Default: empty allow-list = no tools.** A node with no `allowed_tools` runs a
-  pure text/structured turn with the tightest non-interactive posture (claude:
-  default permission mode; codex: `read-only` sandbox). No bypass flag.
-- **Security.** flow never emits a blanket bypass/`--dangerously-*` flag by
-  default. Broadening beyond the tightest posture is only done when the workflow
-  author explicitly sets a per-node/per-run permission mode — never implicitly.
+### 5.1 `mcp_servers` — an opaque, pass-through spec (extendable)
 
-Contrast with the SDK backend, whose tools ARE flow-provided Python factories
-(`module:attr` → `AgentTool`). The two tool models are different by design: SDK =
-flow provides tools; CLI = the CLI provides tools and the node only restricts
-access. A node's `allowed_tools` is portable across CLIs (a plain name list); it
-is not shared with SDK tool refs.
+The per-server value is stored as an **unparsed dict** (`mcp_servers: tuple[(name,
+dict), …]`). flow does **not** validate its inner fields — it only *format-converts*
+the dict into each CLI's config shape. So when a CLI adds a new MCP config field
+(headers, timeout, transport…), flow supports it with **zero changes**. This is the
+"extendable hatch": flow does format translation, not schema enforcement.
+
+- **claude**: the servers become an `--mcp-config` JSON — `{"mcpServers": {…}}` —
+  written to a scratch file (or inlined) and passed to *this node's* `claude -p`.
+- **codex**: the servers become `[mcp_servers.<name>]` blocks in a scratch
+  `config.toml`, passed via `-c`/`--config` to *this node's* `codex exec`.
+
+The scratch config is per-node and ephemeral (temp file, removed after the turn),
+so two nodes with different servers don't collide.
+
+### 5.2 Secrets — `${ENV_VAR}` interpolation, never plaintext
+
+An MCP server's `env` (and any string value) may reference an environment variable
+as `${VAR}`. flow resolves it against the **run-time environment** when it writes
+the scratch config — the workflow JSON carries the *reference*, not the secret.
+An unset `${VAR}` is an error (fail fast), not a silent empty. This honours the
+"no hardcoded secrets" rule: a shared `workflow.json` never contains a token.
+
+### 5.3 The allow-list
+
+- **Mapping.** `allowed_tools` → the CLI's allow-list flag. An element is either a
+  CLI built-in tool name (`Read`, `Bash`, `WebSearch`) or an MCP tool named
+  `mcp__<server>__<tool>` — flow passes the string through verbatim; it does not
+  know or check what the name means.
+  - **claude**: `--allowedTools "Read,mcp__github__create_issue"`.
+  - **codex**: narrowing via its config + `--sandbox <mode>` (codex has no
+    per-tool-name allow-list; the sandbox mode bounds capability — an honest
+    adapter difference).
+- **Default: empty = no tools.** No `allowed_tools` → a pure text/structured turn
+  at the tightest non-interactive posture (claude: default permission mode; codex:
+  `read-only` sandbox). No bypass flag.
+- **Security.** flow never emits a blanket bypass/`--dangerously-*` flag by
+  default. Broadening is only done when the author explicitly sets a per-node/
+  per-run permission mode — never implicitly.
+
+### 5.4 What flow still does NOT own
+
+flow does not define tools, does not ship tool implementations, and does not run
+MCP servers *itself* — the server process is spawned by the CLI from the config
+flow generated. flow's job is purely: (declare → generate config → pass to the
+CLI) and (allow-list → forward). Contrast the SDK backend, whose tools ARE
+flow-provided Python factories (`module:attr` → `AgentTool`); the two tool models
+are different by design and not shared.
+
+### 5.5 `interpret == compile` for tool config
+
+Both engines generate the **byte-identical** scratch MCP config from the same
+`mcp_servers` spec (same `${ENV}` resolution, same JSON/TOML serialization) and
+pass the same allow-list flags. The config-generation helper is shared (interpreter
+calls it; the generated module inlines the same function), so an agent turn's tool
+setup is identical across engines by construction — a parity test covers a node
+with an MCP server + allow-list.
 
 ---
 
@@ -301,9 +347,11 @@ pure-CLI.
 **v1 delivers:** the `AgentRunner`/`CliAdapter` seam; a `claude` adapter and a
 `codex` adapter; a per-node `backend` selector with **no provider** required for
 CLI nodes; native structured output via each CLI's schema flag; `allowed_tools`
-that narrows the CLI's toolset (flow provides none); codegen that emits the
-subprocess call; a fake-CLI parity test; a dependency-lean bundle for pure-CLI
-workflows; and a **skill** (§8) packaging flow for a CLI to author + run flows.
+that narrows the CLI's toolset (flow provides none) **plus a per-node `mcp_servers`
+pass-through spec** that flow format-converts into the CLI's MCP config (with
+`${ENV}` secret interpolation); codegen that emits the subprocess call; a fake-CLI
+parity test; a dependency-lean bundle for pure-CLI workflows; and a **skill** (§8)
+packaging flow for a CLI to author + run flows.
 
 **Non-goals (v1):**
 - No streaming of intermediate CLI events into flow's trace (only the final
@@ -334,6 +382,14 @@ workflows; and a **skill** (§8) packaging flow for a CLI to author + run flows.
 5. **Token accounting differences.** claude reports `total_cost_usd`, codex does
    not; both report input/output tokens. *Mitigation:* flow uses only
    input+output tokens for its budget breaker, which both provide.
+6. **MCP secrets in workflow JSON.** An `mcp_servers.env` could leak a token if
+   authored as plaintext. *Mitigation:* `${ENV_VAR}` interpolation resolved from
+   the run-time environment only; the JSON carries the reference, never the secret;
+   an unset var fails fast. A lint/validation warns on a plaintext-looking secret.
+7. **MCP config divergence across engines.** The scratch config both engines write
+   must be byte-identical. *Mitigation:* a single shared config-generation helper
+   (interpreter calls it; the generated module inlines it); an MCP-config parity
+   test.
 
 ---
 
@@ -343,7 +399,10 @@ workflows; and a **skill** (§8) packaging flow for a CLI to author + run flows.
    `SdkRunner` behind it (no behaviour change; full suite still green). Gate.
 2. **Model + loader.** Add `node.backend`; make `wf.provider` required only when a
    workflow has an SDK agent node (a pure-CLI workflow validates with no provider);
-   parse `allowed_tools`; serialize round-trip. Unit tests.
+2. **Model + loader.** Add `node.backend`; make `wf.provider` required only when a
+   workflow has an SDK agent node (a pure-CLI workflow validates with no provider);
+   parse `allowed_tools` and the opaque `mcp_servers` spec; serialize round-trip.
+   Unit tests.
 3. **CLI runner + claude adapter.** Interpreter side: spawn, stdin, parse; a
    fake-`claude` stub test (via `FLOW_CLI_BIN`) for text + structured + allow-list.
    Gate.
@@ -352,8 +411,10 @@ workflows; and a **skill** (§8) packaging flow for a CLI to author + run flows.
 5. **Codegen.** Emit the subprocess call + shared parser; a workflow with no CLI
    node still emits no subprocess code (regression); a pure-CLI module imports no
    `agent`/`ai`. Cross-engine parity via the fake CLI. Gate.
-6. **Tools + bundle.** `allowed_tools` → each adapter's allow-list flag; a pure-CLI
-   `--portable` bundle drops `ai`/`agent` vendoring.
+6. **Tools + MCP config + bundle.** `allowed_tools` → each adapter's allow-list
+   flag; `mcp_servers` → each adapter's scratch MCP config (with `${ENV}` secret
+   interpolation), shared by both engines; a pure-CLI `--portable` bundle drops
+   `ai`/`agent` vendoring. Allow-list + MCP-config parity tests.
 7. **Skill + example.** A `cli-agent` example (a workflow with a `claude-cli` agent
    node, still runnable with an SDK provider too) and the skill pack (§8): schema
    spec + examples + command wrappers, installable into `claude`/`codex`.
