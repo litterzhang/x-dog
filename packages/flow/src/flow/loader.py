@@ -106,7 +106,12 @@ def _parse_output_ports(data: dict[str, Any]) -> tuple[Port, ...]:
     return (Port(name=str(raw)),)
 
 
-def _parse_node(data: dict[str, Any]) -> NodeDef:
+def _parse_node(
+    data: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+    _seen: frozenset[Path] | None = None,
+) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
     node_id = str(data["id"])
@@ -141,16 +146,39 @@ def _parse_node(data: dict[str, Any]) -> NodeDef:
     sub_output_ports: tuple[Port, ...] = _parse_output_ports(data)
     if node_type == "subflow":
         raw_child = data.get("subflow")
-        if not isinstance(raw_child, dict):
-            raise WorkflowValidationError(
-                f"Subflow node {node_id!r}: must set 'subflow' to an inline child workflow object"
-            )
         if data.get("inputs") or data.get("outputs") or data.get("output"):
             raise WorkflowValidationError(
                 f"Subflow node {node_id!r}: must not declare 'inputs'/'outputs' — they are "
                 f"derived from the child workflow's signature"
             )
-        child = parse_workflow(raw_child)
+        if isinstance(raw_child, str):
+            # Path reference: resolve against base_dir, guard against cycles, and
+            # inline the loaded child (execution/codegen/serialize see an inline child).
+            if base_dir is None:
+                raise WorkflowValidationError(
+                    f"Subflow node {node_id!r}: a path reference {raw_child!r} needs a base directory; "
+                    f"load via load_workflow(path), not parse_workflow(dict)"
+                )
+            child_path = (base_dir / raw_child).resolve()
+            seen = _seen or frozenset()
+            if child_path in seen:
+                raise WorkflowValidationError(
+                    f"Subflow node {node_id!r}: cyclic subflow reference to {child_path}"
+                )
+            if not child_path.is_file():
+                raise WorkflowValidationError(
+                    f"Subflow node {node_id!r}: child workflow file not found: {child_path}"
+                )
+            with child_path.open(encoding="utf-8") as _fh:
+                child_data = json.load(_fh)
+            child = parse_workflow(child_data, base_dir=child_path.parent, _seen=seen | {child_path})
+        elif isinstance(raw_child, dict):
+            child = parse_workflow(raw_child, base_dir=base_dir, _seen=_seen)
+        else:
+            raise WorkflowValidationError(
+                f"Subflow node {node_id!r}: must set 'subflow' to an inline child workflow object "
+                f"or a path string to a child workflow JSON"
+            )
         in_sig = workflow_input_schema(child)["properties"]
         out_sig = workflow_output_schema(child)["properties"]
         assert isinstance(in_sig, dict) and isinstance(out_sig, dict)
@@ -234,8 +262,19 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     )
 
 
-def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
-    """Build a WorkflowDef from a raw dict (already parsed from JSON)."""
+def parse_workflow(
+    data: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+    _seen: frozenset[Path] | None = None,
+) -> WorkflowDef:
+    """Build a WorkflowDef from a raw dict (already parsed from JSON).
+
+    ``base_dir`` is the directory a ``"subflow": "./child.json"`` path reference is
+    resolved against (set by :func:`load_workflow`).  ``_seen`` carries the set of
+    already-loaded child paths so a cyclic subflow reference (A -> B -> A) is caught
+    at load time instead of recursing forever.
+    """
     name = str(data.get("name", ""))
     provider = str(data.get("provider", ""))
     entry = str(data.get("entry", ""))
@@ -281,7 +320,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         raise WorkflowValidationError("fan_max_concurrency must be an int >= 0")
     fan_max_concurrency = raw_fan_max
 
-    nodes = tuple(_parse_node(n) for n in data.get("nodes", []))
+    nodes = tuple(_parse_node(n, base_dir=base_dir, _seen=_seen) for n in data.get("nodes", []))
     edges = tuple(_parse_edge(e) for e in data.get("edges", []))
 
     return WorkflowDef(
@@ -970,11 +1009,16 @@ def validate_workflow(wf: WorkflowDef) -> None:
 
 
 def load_workflow(path: str | Path) -> WorkflowDef:
-    """Load a WorkflowDef from a JSON file at *path*."""
-    p = Path(path)
+    """Load a WorkflowDef from a JSON file at *path*.
+
+    A ``"subflow": "./child.json"`` path reference is resolved relative to *path*'s
+    directory; the loaded child is inlined into the node (so execution, codegen, and
+    serialization are unchanged).  A cyclic reference is rejected at load time.
+    """
+    p = Path(path).resolve()
     logger.debug("Loading workflow from %s", p)
     with p.open() as fh:
         data: dict[str, Any] = json.load(fh)
-    wf = parse_workflow(data)
+    wf = parse_workflow(data, base_dir=p.parent, _seen=frozenset({p}))
     validate_workflow(wf)
     return wf

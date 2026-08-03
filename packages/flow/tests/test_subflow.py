@@ -8,6 +8,7 @@ semantics are byte-identical by construction.  See ``docs/subflow.md``.
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import tempfile
 import types
 from typing import Any
 
+import pytest
 from flow.codegen import generate
 from flow.executor import execute
 from flow.loader import parse_workflow
@@ -152,3 +154,84 @@ def test_subflow_generated_module_is_ruff_clean() -> None:
         assert result.returncode == 0, f"ruff failed:\n{result.stdout}\n{result.stderr}"
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# --- path-reference children (independent child files) ---------------------
+
+
+def _write_child(dir_: pathlib.Path) -> pathlib.Path:
+    import json
+
+    p = dir_ / "child.json"
+    p.write_text(json.dumps(_child()), encoding="utf-8")
+    return p
+
+
+def test_subflow_path_ref_loads_and_runs(tmp_path: pathlib.Path) -> None:
+    """A "subflow": "./child.json" path ref resolves, derives ports, and runs."""
+    import json
+
+    from flow.loader import load_workflow
+
+    _write_child(tmp_path)
+    parent = _parent("hi")
+    # replace the inline child with a path reference to the sibling file
+    review = next(n for n in parent["nodes"] if n["id"] == "review")
+    review["subflow"] = "./child.json"
+    parent_path = tmp_path / "parent.json"
+    parent_path.write_text(json.dumps(parent), encoding="utf-8")
+
+    wf = load_workflow(parent_path)
+    review_node = next(n for n in wf.nodes if n.id == "review")
+    # ports derived from the referenced child, child inlined
+    assert [p.name for p in review_node.input_ports] == ["topic"]
+    assert [p.name for p in review_node.output_ports] == ["verdict"]
+    assert review_node.child is not None and review_node.child.name == "up"
+
+    r = asyncio.run(execute(wf, stream_fn_factory=lambda m: None))
+    assert r.runtime["out"]["result"] == "[HI!]"
+
+
+def test_subflow_path_ref_missing_file(tmp_path: pathlib.Path) -> None:
+    import json
+
+    from flow.errors import WorkflowValidationError
+    from flow.loader import load_workflow
+
+    parent = _parent()
+    next(n for n in parent["nodes"] if n["id"] == "review")["subflow"] = "./nope.json"
+    p = tmp_path / "parent.json"
+    p.write_text(json.dumps(parent), encoding="utf-8")
+    with pytest.raises(WorkflowValidationError, match="not found"):
+        load_workflow(p)
+
+
+def test_subflow_path_ref_cycle_rejected(tmp_path: pathlib.Path) -> None:
+    """A -> B -> A subflow reference is caught at load time."""
+    import json
+
+    from flow.errors import WorkflowValidationError
+    from flow.loader import load_workflow
+
+    a = {"name": "a", "provider": "copilot", "entry": "s", "state": {"seed": "x"},
+         "nodes": [{"id": "s", "type": "subflow", "subflow": "./b.json"}],
+         "edges": [{"from": "$in", "to": "s", "map": {"seed": "seed"}},
+                   {"from": "s", "to": "$output", "map": {"result": "result"}}]}
+    b = {"name": "b", "provider": "copilot", "entry": "s", "state": {"seed": "x"},
+         "nodes": [{"id": "s", "type": "subflow", "subflow": "./a.json"}],
+         "edges": [{"from": "$in", "to": "s", "map": {"seed": "seed"}},
+                   {"from": "s", "to": "$output", "map": {"result": "result"}}]}
+    (tmp_path / "a.json").write_text(json.dumps(a), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(b), encoding="utf-8")
+    with pytest.raises(WorkflowValidationError, match="cyclic subflow"):
+        load_workflow(tmp_path / "a.json")
+
+
+def test_subflow_path_ref_needs_base_dir() -> None:
+    """A path ref cannot be resolved by bare parse_workflow (no base dir)."""
+    from flow.errors import WorkflowValidationError
+
+    parent = _parent()
+    next(n for n in parent["nodes"] if n["id"] == "review")["subflow"] = "./x.json"
+    with pytest.raises(WorkflowValidationError, match="base directory"):
+        parse_workflow(parent)

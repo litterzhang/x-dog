@@ -1,0 +1,118 @@
+{
+  "name": "draft-critique-revise",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "state": {
+    "thesis": "",
+    "points": []
+  },
+  "nodes": [
+    {
+      "id": "draft",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "thesis",
+          "type": "string"
+        },
+        {
+          "name": "points",
+          "type": "array"
+        }
+      ],
+      "system_prompt": "You are an essayist. Write a single tight paragraph (120-160 words).",
+      "prompt": "Thesis: {{$.thesis}}\n\nSupporting points:\n- {{$.points[0]}}\n- {{$.points[1]}}\n- {{$.points[2]}}\n\nWrite one persuasive paragraph arguing the thesis, weaving in the points. Reply with ONLY the paragraph.",
+      "outputs": [
+        "essay_draft"
+      ]
+    },
+    {
+      "id": "critique",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "essay_draft",
+          "type": "string"
+        }
+      ],
+      "system_prompt": "You are a demanding writing critic. Score rigor and clarity from 0 to 10.",
+      "prompt": "Critique this paragraph:\n\n{{$.essay_draft}}\n\nFields:\n- score: a number from 0 to 10 for overall persuasiveness and clarity\n- feedback: one sentence naming the single most important improvement",
+      "outputs": [
+        {
+          "name": "score",
+          "type": "number"
+        },
+        {
+          "name": "feedback",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "revise",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "essay_draft",
+          "type": "string"
+        },
+        {
+          "name": "feedback",
+          "type": "string"
+        }
+      ],
+      "system_prompt": "You are an essayist revising to address one specific critique.",
+      "prompt": "Draft:\n{{$.essay_draft}}\n\nApply this feedback, changing nothing else: {{$.feedback}}\n\nReply with ONLY the improved paragraph.",
+      "outputs": [
+        "final_essay"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "draft",
+      "map": {
+        "thesis": "thesis",
+        "points": "points"
+      }
+    },
+    {
+      "from": "draft",
+      "to": "critique",
+      "map": {
+        "essay_draft": "essay_draft"
+      }
+    },
+    {
+      "from": "draft",
+      "to": "revise",
+      "map": {
+        "essay_draft": "essay_draft"
+      }
+    },
+    {
+      "from": "critique",
+      "to": "revise",
+      "map": {
+        "feedback": "feedback"
+      }
+    },
+    {
+      "from": "revise",
+      "to": "$output",
+      "map": {
+        "final_essay": "final_essay"
+      }
+    },
+    {
+      "from": "critique",
+      "to": "$output",
+      "map": {
+        "score": "score"
+      }
+    }
+  ]
+}

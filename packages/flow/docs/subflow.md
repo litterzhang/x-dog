@@ -102,21 +102,33 @@ This trade is **worth it**: it buys away the entire inline-expansion complexity
 
 ### 4.1 Model (`models.py`)
 
-`NodeDef.type` gains `"subflow"`; the child is carried **inline** as a nested
-workflow object (as shipped — see the note below):
+`NodeDef.type` gains `"subflow"`; the child is carried in `node.child`, authored
+either **inline** or as a **path reference** (both resolve to an inlined child):
 
 ```python
 type: Literal["agent", "script", "human", "subflow"] = "agent"
-# For a subflow node: `child` holds the INLINE child workflow (JSON key "subflow").
+# For a subflow node, the JSON key "subflow" is EITHER:
+#   an inline object  — "subflow": { ...child workflow... }
+#   a path string     — "subflow": "./child.json"  (resolved relative to the
+#                        parent file's directory; the loaded child is inlined
+#                        into node.child, so execution/codegen/serialize are the same)
 ```
 
-> **As shipped (v1).** The child is authored **inline** (`"subflow": { ...child
-> workflow... }`), not a `run`-path ref. Inline was chosen because: (a) `parse_workflow`
-> has no `base_dir`, so resolving a path at parse time — where the ports must be
-> derived — is awkward; (b) codegen embeds the child as a literal anyway, so inline
-> is the natural source; (c) recursion is then *structurally impossible* (a finite
-> JSON document can't contain itself), so no cycle-detection pass is needed — a
-> child that itself contains a `subflow` node is simply rejected (no nesting in v1).
+> **As shipped (v1).** Both forms produce an **inlined** `node.child`:
+> - **Inline** (`"subflow": {...}`) — the child is right there; recursion is
+>   structurally impossible (a finite JSON document can't contain itself).
+> - **Path ref** (`"subflow": "./child.json"`) — `load_workflow` threads a
+>   `base_dir` (the parent file's directory) through `parse_workflow`; the child is
+>   read, parsed, and inlined. A `_seen` set of resolved child paths is carried
+>   along so a cyclic reference (A→B→A) is caught at load time
+>   (`WorkflowValidationError`), and a path ref via bare `parse_workflow(dict)` —
+>   which has no `base_dir` — is rejected with a clear message. Codegen still embeds
+>   the (now-inlined) child as a literal, so a subflow bundle is self-contained
+>   regardless of which authoring form was used.
+>
+> Either way the child is a complete, independently-runnable workflow — a path-ref
+> child file validates and runs on its own. Nested subflows (a child that itself
+> contains a `subflow` node) remain rejected in v1.
 
 **Ports are DERIVED from the child's signature, not declared.** A subflow node
 does not author its own `input_ports` / `output_ports` — they are generated from
