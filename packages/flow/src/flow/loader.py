@@ -468,14 +468,53 @@ def _output_port_types(wf: WorkflowDef, node_id: str) -> dict[str, str]:
     return {}
 
 
+def infer_input_schema(wf: WorkflowDef) -> dict[str, dict[str, object]]:
+    """Infer a JSON Schema per ``$in`` seed key from its typed consumers.
+
+    For each key, collect the schema of every input port fed by a plain mapped
+    edge out of ``$in`` (the CONSUMER's declared type — not the seed's runtime
+    value type, which is unreliable: ``"347"`` legitimately feeds an ``integer``
+    port under flow's tolerant coercion).  A key is typed only when all its
+    consumers agree; a key with conflicting consumers or no typed consumer is
+    omitted (left untyped).
+
+    ``fan_out`` edges never reach here: fan-out from ``$in`` already REQUIRES an
+    explicit ``in_schema`` (see ``_validate_fan_out_edge``), so a workflow that
+    fans out of ``$in`` has an explicit signature and skips inference entirely.
+    """
+    node_by_id = {n.id: n for n in wf.nodes}
+    # key -> set of frozen (json) schemas seen from consumers; >1 distinct = conflict.
+    seen: dict[str, list[dict[str, object]]] = {}
+    for edge in wf.edges:
+        if edge.src != IN_NODE_ID or edge.fan_out is not None:
+            continue
+        dst = node_by_id.get(edge.dst)
+        if dst is None:
+            continue
+        dst_ports = {p.name: p.schema for p in dst.input_ports}
+        for sport, dport in edge.mapping:
+            head, subpath = _jsonpath_root(sport)
+            if subpath or dport not in dst_ports:
+                continue  # sub-field seeds / control-only ports are not typed here
+            seen.setdefault(head, []).append(dst_ports[dport])
+    inferred: dict[str, dict[str, object]] = {}
+    for key, schemas in seen.items():
+        first = schemas[0]
+        if all(s == first for s in schemas):  # all consumers agree
+            inferred[key] = dict(first)
+        # else: conflicting consumers -> leave untyped (author must declare)
+    return inferred
+
+
 def workflow_input_schema(wf: WorkflowDef) -> dict[str, object]:
     """The workflow's typed input signature as a JSON Schema object.
 
-    Built from ``in_schema`` (the opt-in per-``$in`` declarations): an object whose
-    properties are the declared seed keys.  Undeclared seed keys are omitted (they
-    are untyped).  Returns an empty-properties object when nothing is declared.
+    If the workflow declares ``in_schema`` explicitly, that IS the signature (no
+    inference, no merge — the author is authoritative).  Otherwise the signature
+    is inferred from each ``$in`` key's typed consumers (:func:`infer_input_schema`).
+    Undeclared/uninferable keys are simply absent from the properties.
     """
-    props = {k: v for k, v in wf.in_schema}
+    props = {k: v for k, v in wf.in_schema} if wf.in_schema else infer_input_schema(wf)
     return {"type": "object", "properties": props, "required": sorted(props)}
 
 

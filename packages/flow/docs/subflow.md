@@ -111,10 +111,36 @@ type: Literal["agent", "script", "human", "subflow"] = "agent"
 # workflow JSON (resolved like a script node's run-ref, relative to base_dir).
 ```
 
-- **Parent → child input:** the subflow node's `input_ports` map to the child's
-  `$in` seed keys (by name).
-- **Child → parent output:** the child's `$output` keys map to the subflow node's
-  `output_ports` (by name).
+**Ports are DERIVED from the child's signature, not declared.** A subflow node
+does not author its own `input_ports` / `output_ports` — they are generated from
+the child workflow:
+
+- **input_ports** = the child's typed input signature `workflow_input_schema(child)`
+  (one port per key, carrying that key's schema).
+- **output_ports** = the child's output signature `workflow_output_schema(child)`
+  (one port per `$output` key, carrying its schema).
+
+Because the ports are *derived*, there is no "boundary mismatch" to validate — the
+parent literally reads the child's signature. The parent still wires the subflow
+node with ordinary mapped edges (feeding those derived input ports, reading those
+derived output ports), exactly like any other node; those edges are type-checked
+against the derived ports by the normal edge-type validation.
+
+**Strict child signature (option A).** A workflow may only be USED as a subflow if
+it has a complete typed input signature. `workflow_input_schema(child)` resolves it
+by **explicit-else-infer** (no merge):
+
+- if the child declares `in_schema`, that IS the signature (author authoritative);
+- otherwise it is **inferred** from each `$in` key's typed consumers
+  (`infer_input_schema`) — the consumer port's type, *not* the seed's runtime value
+  (a `"347"` seed feeding an `integer` port infers `integer`).
+
+A subflow reference fails validation (option A, strict) if any child `$in` key that
+the parent feeds is **uninferable** — no typed consumer, or conflicting consumers —
+and the child did not declare it in `in_schema`. In practice the shipped examples
+infer a full signature with zero declaration (trip_planner → string/integer/number,
+agent_calculator → integer/integer), so a typed subflow is usually free; only a
+genuinely ambiguous key forces the author to declare `in_schema`.
 
 No new edge kind — the parent wires the subflow node with ordinary mapped edges,
 exactly like any other node.
@@ -188,22 +214,30 @@ Both engines run the child through the **same `flow.executor.execute()`**:
 So the child's execution semantics are byte-identical **because it is literally
 the same code path** — unlike the inline sketch, which would have to prove the
 generated inlined child matches the interpreter line-for-line. The only surface to
-align is the **port mapping across the boundary** (parent ins → child `$in`, child
-`$output` → parent outs), which a parity test covers.
+align is the **port projection across the boundary** (parent ins → child `$in`
+via `execute(inputs=...)`, child `runtime["out"]` → parent output ports), which is
+identical in both engines (both call the same `execute()` and read the same
+`ExecResult`) and a parity test covers.
 
 ### 4.6 Validation (`loader.py`)
 
 - `type:"subflow"` requires `run` (the child ref); it must not set `code`, and it
-  behaves like a node with declared `input_ports` / `output_ports`.
-- **Boundary signature check:** load the child, assert every subflow-node input
-  port maps to a child `$in` seed key (or a child entry input), and every
-  declared output port maps to a child `$output` key. A mismatch fails at load.
+  must NOT author `input_ports` / `output_ports` — those are derived from the
+  child's signature (§4.1).
+- **Strict child signature (option A):** load the child and resolve
+  `workflow_input_schema(child)` (explicit-else-infer). Every child `$in` key the
+  parent feeds must be typed — declared in the child's `in_schema` or inferable
+  from a consumer. An uninferable key (no typed consumer / conflicting consumers)
+  with no explicit declaration fails at load: the child cannot be used as a subflow
+  until its signature is complete. (No separate "boundary mismatch" check exists —
+  the parent's ports ARE the child's signature, so they cannot disagree.)
 - **Recursion detection:** a subflow whose child (transitively) references the
   parent workflow is rejected at load time (walk the child-ref graph; a cycle →
   `WorkflowValidationError`). Prevents infinite nesting.
 - **v1 scope guards (reject):** a subflow node inside a parent `loop_max` cycle or
   as a `fan_out` worker (the loop×subflow and fan×subflow interactions are out of
-  scope for v1).
+  scope for v1; the fan-out limiter in `fan-out.md` is the prerequisite for the
+  latter).
 
 ---
 

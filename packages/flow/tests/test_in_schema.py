@@ -122,7 +122,8 @@ def test_in_schema_roundtrips() -> None:
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
-def test_workflow_input_schema_signature() -> None:
+def test_workflow_input_schema_explicit_wins_no_merge() -> None:
+    """When in_schema is declared, it IS the signature — inference is not consulted."""
     wf = parse_workflow(_fanout_from_in(with_schema=True))
     sig = workflow_input_schema(wf)
     assert sig["type"] == "object"
@@ -130,9 +131,63 @@ def test_workflow_input_schema_signature() -> None:
     assert sig["required"] == ["items"]
 
 
-def test_workflow_input_schema_empty_when_undeclared() -> None:
-    wf = parse_workflow(_wf())
-    assert workflow_input_schema(wf) == {"type": "object", "properties": {}, "required": []}
+def test_workflow_input_schema_inferred_when_undeclared() -> None:
+    """No in_schema: the signature is inferred from the consumer port's type."""
+    # _wf feeds $in.topic -> a.topic (a string input port), so topic infers to string.
+    wf = parse_workflow(_wf(topic_port_type="string"))
+    sig = workflow_input_schema(wf)
+    assert sig["properties"] == {"topic": {"type": "string"}}
+    assert sig["required"] == ["topic"]
+
+
+def test_inference_uses_consumer_type_not_seed_value() -> None:
+    """A string seed value feeding an integer port infers integer (consumer wins)."""
+    from flow.loader import infer_input_schema
+
+    # state topic="hi" (a string value) but the consumer port is integer.
+    wf = parse_workflow(_wf(topic_port_type="integer"))
+    assert infer_input_schema(wf) == {"topic": {"type": "integer"}}
+
+
+def test_inference_conflicting_consumers_omitted() -> None:
+    """A key fed to two ports of different types can't be inferred — left untyped."""
+    from flow.loader import infer_input_schema
+
+    d = {
+        "name": "conflict",
+        "provider": "copilot",
+        "entry": "a",
+        "state": {"x": "v"},
+        "nodes": [
+            {"id": "a", "type": "agent", "prompt": "{{x}}", "inputs": [{"name": "x", "type": "string"}],
+             "outputs": ["oa"]},
+            {"id": "b", "type": "script", "inputs": [{"name": "x", "type": "integer"}],
+             "code": "def b(ctx, x):\n    return x", "outputs": ["ob"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "a", "map": {"x": "x"}},
+            {"from": "$in", "to": "b", "map": {"x": "x"}},
+        ],
+    }
+    assert infer_input_schema(parse_workflow(d)) == {}  # conflict -> untyped
+
+
+def test_inference_on_real_examples() -> None:
+    """The shipped examples get a full inferred signature with zero declaration."""
+    import pathlib
+
+    from flow.loader import load_workflow
+
+    root = pathlib.Path(__file__).parent.parent / "examples"
+    tp = workflow_input_schema(load_workflow(root / "trip_planner.json"))["properties"]
+    assert tp == {
+        "destination": {"type": "string"},
+        "days": {"type": "integer"},
+        "budget_usd": {"type": "number"},
+    }
+    # agent_calculator: string seeds "347"/"895" infer INTEGER from their consumer ports.
+    calc = workflow_input_schema(load_workflow(root / "agent_calculator.json"))["properties"]
+    assert calc == {"a": {"type": "integer"}, "b": {"type": "integer"}}
 
 
 # --- #2: output schema derivation ------------------------------------------
