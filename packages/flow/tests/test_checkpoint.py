@@ -115,6 +115,15 @@ def node2(ctx, val: str) -> str:
 
     snap = store.load(run_id)
     assert snap is not None
+    assert set(snap) == {
+        "outputs",
+        "completed",
+        "loop_counters",
+        "stack",
+        "out_live",
+        "memo",
+        "tokens_used",
+    }
     assert "node1" in snap["completed"]
 
     node2_ok_code = """

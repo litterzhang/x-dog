@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from flow.errors import FlowWarning, WorkflowValidationError
 from flow.loader import load_workflow, parse_workflow, validate_workflow
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -75,6 +75,51 @@ def test_workflow_invalid_version_major_raises() -> None:
     }
     with pytest.raises(WorkflowValidationError, match="integer major"):
         validate_workflow(parse_workflow(data))
+
+
+def test_loop_group_allows_different_max_and_mixed_strictness() -> None:
+    wf = WorkflowDef(
+        name="heterogeneous-loop-group",
+        provider="copilot",
+        entry="a",
+        nodes=(NodeDef(id="a"), NodeDef(id="b"), NodeDef(id="c")),
+        edges=(
+            EdgeDef(src="a", dst="b"),
+            EdgeDef(src="a", dst="c"),
+            EdgeDef(src="b", dst="a", loop_max=2),
+            EdgeDef(
+                src="c",
+                dst="a",
+                when=Condition(op="equals", value="continue", text="continue"),
+                loop_max=5,
+                loop_strict=True,
+            ),
+        ),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FlowWarning)
+        validate_workflow(wf)
+
+
+def test_crossing_loop_regions_are_rejected() -> None:
+    wf = WorkflowDef(
+        name="crossing-loops",
+        provider="copilot",
+        entry="a",
+        nodes=tuple(NodeDef(id=node) for node in ("a", "x", "p", "b", "y")),
+        edges=(
+            EdgeDef(src="a", dst="p"),
+            EdgeDef(src="x", dst="p"),
+            EdgeDef(src="p", dst="b"),
+            EdgeDef(src="p", dst="y"),
+            EdgeDef(src="b", dst="a", loop_max=2),
+            EdgeDef(src="y", dst="x", loop_max=2),
+        ),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FlowWarning)
+        with pytest.raises(WorkflowValidationError, match="cross without nesting"):
+            validate_workflow(wf)
 
 
 def test_strict_loop_model_requires_bound_and_condition() -> None:

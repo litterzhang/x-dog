@@ -113,8 +113,8 @@ it.
 
 | Structure | Strategy A change |
 |-----------|-------------------|
-| scheduler `pending` / `ready` / `_is_ready` | **none** |
-| `_successors` / `_transitive_successors` / `_activate_loops` | **none** |
+| frontier readiness / joins | **none** (the fan group is one activation) |
+| edge transitions / loop groups | **none** |
 | checkpoint `completed` | **none** (still `{"work"}`) |
 | static-graph property | **preserved** |
 | `outputs` store | gains instance sub-keys `work#i` (additive) |
@@ -216,23 +216,19 @@ without it, N child `execute()` calls each with their own semaphore would run
 
 ### 4.3 Codegen (`codegen.py`)
 
-The waves renderer (`_render_main_body_waves`, codegen.py:694) **already emits
-`asyncio.gather`** for parallel nodes — dynamic fan-out is the same shape with a
-runtime-sized comprehension:
+The generated module embeds the same frontier transition kernel as the
+interpreter. The fan worker still occupies one frontier activation; its generated
+`_drive_fan` performs the runtime-sized inner `asyncio.gather`, aggregates each
+output port in argument order, then completes that one activation.
 
-```python
-# instead of a single `await node_work(provider)`:
-_items = _OUT["plan"]["tasks"]
-_res = await asyncio.gather(*[node_work(provider, _x, _i) for _i, _x in enumerate(_items)])
-_OUT["work#list"] = [r[0]["res"] for r in _res]   # (dict, tokens) tuple → project port, index-ordered
-```
+This separation is important:
 
-- The worker node function gains `(element, index)` parameters and returns its
-  existing `(dict, tokens)` tuple — already gather-compatible.
-- The collecting port is built by an index-ordered list comprehension — the same
-  order the interpreter uses (§4.4).
-- Empty list `N == 0`: `asyncio.gather()` returns `()`, the comprehension yields
-  `[]`. Both engines must special-case this identically (see §4.4).
+- the outer frontier scheduler controls static node readiness and workflow-wide
+  concurrency;
+- `_drive_fan` controls dynamic instances and the dedicated fan semaphore;
+- the inner driver never reacquires the outer semaphore, avoiding `cap == 1`
+  self-deadlock;
+- `N == 0` produces `[]`, and `N == 1` produces a one-element list.
 
 ### 4.4 `interpret == compile` — the three alignment points
 

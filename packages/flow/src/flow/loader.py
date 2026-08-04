@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from flow.coerce import VALID_TYPES
 from flow.errors import FlowWarning, WorkflowValidationError
+from flow.frontier import build_frontier_spec
 from flow.models import (
     IN_NODE_ID,
     OUT_NODE_ID,
@@ -896,6 +897,38 @@ def _validate_concat_source(
         )
 
 
+def _validate_loop_regions(wf: WorkflowDef) -> None:
+    """Validate loop sources and reject crossing forward invalidation regions."""
+    loop_edges = [edge for edge in wf.edges if edge.loop_max is not None]
+    if not loop_edges:
+        return
+    spec = build_frontier_spec(wf)
+    raw_regions = spec["invalidation_regions"]
+    if not isinstance(raw_regions, dict):
+        raise WorkflowValidationError("Invalid frontier loop-region metadata")
+    regions = {
+        str(destination): {str(node) for node in region}
+        for destination, region in raw_regions.items()
+        if isinstance(region, tuple)
+    }
+    for edge in loop_edges:
+        if edge.src not in regions.get(edge.dst, set()):
+            raise WorkflowValidationError(
+                f"Loop edge {edge.src!r}->{edge.dst!r}: source must be forward-reachable "
+                "from its loop destination"
+            )
+    destinations = tuple(regions)
+    for index, left in enumerate(destinations):
+        for right in destinations[index + 1 :]:
+            overlap = regions[left] & regions[right]
+            if overlap and not (regions[left] <= regions[right] or regions[right] <= regions[left]):
+                shared = ", ".join(sorted(overlap))
+                raise WorkflowValidationError(
+                    f"Loop regions for {left!r} and {right!r} cross without nesting "
+                    f"(shared nodes: {shared})"
+                )
+
+
 def _validate_subflow_node(node: NodeDef) -> None:
     """Validate a ``type="subflow"`` node (G5): inline child, no nesting, strict
     signature, and the mutually-exclusive-field rules.  Recursively validates the
@@ -1210,6 +1243,8 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 FlowWarning,
                 stacklevel=2,
             )
+
+    _validate_loop_regions(wf)
 
     # Two unconditional producers into one input port is the old shared-key clash.
     for (dst, port), count in unconditional_fed.items():

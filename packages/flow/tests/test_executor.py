@@ -545,6 +545,125 @@ async def test_optional_input_absent_on_first_pass_then_fed_by_loop() -> None:
     assert stack[2]["in"].get("feedback") == "REVISE: more"
 
 
+async def test_false_forward_edge_does_not_leak_mapped_input() -> None:
+    """Only condition-enabled incoming edges contribute values to a node activation."""
+    wf = WorkflowDef(
+        name="conditional-inputs",
+        provider="",
+        entry="",
+        nodes=(
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx):\n    return 10",
+                output_ports=(Port("value", "integer"),),
+            ),
+            NodeDef(
+                id="c",
+                type="script",
+                code="def c(ctx):\n    return 99",
+                output_ports=(Port("value", "integer"),),
+            ),
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, selected):\n    return selected",
+                input_ports=(Port("selected", "integer"),),
+                output_ports=(Port("result", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(
+                src="b",
+                dst="a",
+                mapping=(("value", "selected"),),
+                when=Condition(op="equals", value="{{ $.value }}", text="10"),
+            ),
+            EdgeDef(
+                src="c",
+                dst="a",
+                mapping=(("value", "selected"),),
+                when=Condition(op="equals", value="{{ $.value }}", text="never"),
+            ),
+        ),
+    )
+
+    result = await execute(wf)
+    assert result.runtime["state"]["a"]["result"] == 10
+
+
+async def test_multiple_loop_sources_form_and_join() -> None:
+    """B/C loop arrivals into A reactivate A once only after both have completed."""
+    wf = WorkflowDef(
+        name="loop-join",
+        provider="",
+        entry="a",
+        initial_state=(("seed", 0),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, seed):\n    return seed + 1",
+                input_ports=(Port("seed", "integer"),),
+                output_ports=(Port("n", "integer"),),
+            ),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("back", "integer"),),
+            ),
+            NodeDef(
+                id="delay",
+                type="script",
+                code="def delay(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("n", "integer"),),
+            ),
+            NodeDef(
+                id="c",
+                type="script",
+                code="def c(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("back", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="a", mapping=(("seed", "seed"),)),
+            EdgeDef(src="a", dst="b", mapping=(("n", "n"),)),
+            EdgeDef(src="a", dst="delay", mapping=(("n", "n"),)),
+            EdgeDef(src="delay", dst="c", mapping=(("n", "n"),)),
+            EdgeDef(
+                src="b",
+                dst="a",
+                mapping=(("back", "seed"),),
+                when=Condition(op="lt", value="{{ $.back }}", text="2"),
+                loop_max=2,
+            ),
+            EdgeDef(
+                src="c",
+                dst="a",
+                mapping=(("back", "seed"),),
+                when=Condition(op="lt", value="{{ $.back }}", text="2"),
+                loop_max=2,
+            ),
+        ),
+    )
+
+    result = await execute(wf)
+    stack = result.runtime["stack"]
+    assert [frame["node"] for frame in stack] == [
+        "a", "b", "delay", "c", "a", "b", "delay", "c"
+    ]
+    assert [frame["step"] for frame in stack] == list(range(8))
+    a_frames = [frame for frame in stack if frame["node"] == "a"]
+    assert [frame["in"] for frame in a_frames] == [{"seed": 0}, {"seed": 1}]
+    assert result.runtime["state"]["a"]["n"] == 2
+    assert result.runtime["state"]["b"]["back"] == 2
+    assert result.runtime["state"]["c"]["back"] == 2
+
+
 async def test_output_sink_collects_declared_outputs() -> None:
     """Edges targeting $output populate runtime['out']; a looped writer's latest wins."""
     wf = WorkflowDef(

@@ -13,10 +13,11 @@ from __future__ import annotations
 import ast
 import importlib.resources
 import json
+import pprint
 import re
 import string
-from collections import defaultdict
 
+from flow.frontier import build_frontier_spec, render_frontier_runtime
 from flow.models import (
     IN_NODE_ID,
     OUT_NODE_ID,
@@ -27,7 +28,6 @@ from flow.models import (
     agent_is_structured,
     agent_output_schema,
     edge_identities,
-    entry_frontier,
 )
 
 # A ContainerExpr is a Python expression string evaluating to the state dict
@@ -345,16 +345,6 @@ def _script_is_async(node: NodeDef) -> bool:
     return any(isinstance(s, ast.AsyncFunctionDef) for s in tree.body)
 
 
-def _incoming(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
-    """Forward (non-loop) incoming edges of *node_id* in declaration order."""
-    return [e for e in wf.edges if e.dst == node_id and e.loop_max is None]
-
-
-def _incoming_loops(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
-    """Loop back-edges feeding *node_id* (they supply data only while looping)."""
-    return [e for e in wf.edges if e.dst == node_id and e.loop_max is not None]
-
-
 def _emit_ins_assign(
     lines: list[str], src: str, sport: str, dport: str, guard: str | None, *, concat: bool = False
 ) -> None:
@@ -381,33 +371,27 @@ def _emit_ins_assign(
 
 
 def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
-    """Emit the ``ins`` dict assembling this node's input ports from incoming edges.
-
-    Forward edges always feed; a loop back-edge feeds only when its ``when`` guard
-    holds (evaluated against the source node's current output ports) — mirroring
-    the executor's ``_build_inputs``.  A later edge writing the same input port
-    wins, so a self-loop's fed-back value overrides the initial forward value.
-    """
+    """Emit input assembly from $in plus scheduler-enabled edge ids."""
     if not node.input_ports:
         return []
     lines = ["    ins: dict[str, object] = {}"]
-    for edge in _incoming(node.id, wf):
-        src = IN_NODE_ID if edge.src == IN_NODE_ID else edge.src
-        for sport, dport in edge.mapping:
-            _emit_ins_assign(lines, src, sport, dport, None, concat=edge.fan_in == "concat")
-    for edge in _incoming_loops(node.id, wf):
-        if not edge.mapping:
+    for edge, edge_id in zip(wf.edges, edge_identities(wf), strict=True):
+        if edge.dst != node.id:
             continue
-        src = edge.src
-        guard = (
-            _condition_to_expr(edge.when, _src_container_expr({}, src)) if edge.when is not None else "True"
-        )
+        guard = None if edge.src == IN_NODE_ID else f"{edge_id!r} in enabled_edges"
         for sport, dport in edge.mapping:
-            _emit_ins_assign(lines, src, sport, dport, guard)
+            _emit_ins_assign(
+                lines,
+                edge.src,
+                sport,
+                dport,
+                guard,
+                concat=edge.fan_in == "concat",
+            )
     return lines
 
 
-def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
+def _render_node_tail(node: NodeDef, wf: WorkflowDef, *, step_expr: str = "len(_STACK)") -> list[str]:
     """Emit the per-node epilogue: push a trace frame + flush any ``$output`` edges.
 
     Mirrors the executor's ``_record_frame``: the step is ``len(_STACK)`` (one frame
@@ -417,7 +401,7 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
     """
     ins_expr = "dict(ins)" if node.input_ports else "{}"
     frame = (
-        f"{{'step': len(_STACK), 'node': {node.id!r}, "
+        f"{{'step': {step_expr}, 'node': {node.id!r}, "
         f"'in': {ins_expr}, 'out': dict(_OUT[{node.id!r}])}}"
     )
     frame_line = f"    _STACK.append({frame})"
@@ -475,41 +459,12 @@ def _fan_worker_port(edge: EdgeDef) -> str:
     return ""
 
 
-def _invoke_expr(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """The awaitable expression that runs one node from the scheduler.
-
-    Script/agent nodes go through the generic ``_drive`` (guards, inputs, retry,
-    store, memo, budget, checkpoint, isolation); a fan-out worker goes through
-    ``_drive_fan`` (run once per array element, aggregate ports into lists); a
-    human node stays a self-contained call (it pauses via SystemExit)."""
-    node = next(n for n in wf.nodes if n.id == node_id)
-    safe = safe_ids[node_id]
-    if node.type == "human":
-        return f"node_{safe}(provider)"
-    fan_edge = _incoming_fan_out_edge(node_id, wf)
-    if fan_edge is not None:
-        fan_port = _fan_worker_port(fan_edge)
-        out_ports = tuple(p.name for p in node.output_ports)
-        return (
-            f"_drive_fan({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
-            f"{fan_port!r}, {out_ports!r}, {wf.fan_max_concurrency})"
-        )
-    return (
-        f'_drive({node_id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, {_retry_spec(node, wf)})'
-    )
-
-
-def _await_line(indent: str, node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """An ``await <invoke>`` scheduler line, with a whole-line noqa when too long."""
-    line = f"{indent}await {_invoke_expr(node_id, wf, safe_ids)}"
-    return line if len(line) <= 120 else line + "  # noqa: E501"
-
-
 def _render_inputs_fn(node: NodeDef, wf: WorkflowDef, safe: str) -> list[str]:
-    """Emit ``_inputs_<safe>() -> dict`` — assembles this node's ins from _OUT."""
-    lines = [f"def _inputs_{safe}() -> dict[str, object]:"]
+    """Emit input assembly parameterized by scheduler-enabled edge ids."""
+    lines = [f"def _inputs_{safe}(enabled_edges: tuple[str, ...]) -> dict[str, object]:"]
     body = _render_ins(node, wf)
     if not body:
+        lines.append("    _ = enabled_edges")
         lines.append("    return {}")
         return lines
     lines += body
@@ -632,24 +587,27 @@ def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
 
 
 def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
-    """Render a human node's async wrapper: pass if signal delivered, else pause via SystemExit."""
-    lines = [f"async def {fn_name}(provider: object) -> None:"]
+    """Render a human node wrapper driven by the frontier scheduler."""
+    safe = fn_name.removeprefix("node_")
+    lines = [
+        f"async def {fn_name}(provider: object, step: int, enabled_edges: tuple[str, ...]) -> None:"
+    ]
     lines += _entry_guards(node.id)
-    lines += _render_ins(node, wf)
+    lines.append(f"    ins = _inputs_{safe}(enabled_edges)")
     lines.append(f"    if {node.signal!r} in _SIGNALS:")
-    lines.append(f"        _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, len(_STACK))")
+    lines.append(f"        _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, step)")
     lines.append("        _t0 = time.monotonic()")
     lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
         p = node.output_ports[0]
         lines.append(f"        _OUT[{node.id!r}][{p.name!r}] = 'approved'")
-    for tl in _render_node_tail(node, wf):
+    for tl in _render_node_tail(node, wf, step_expr="step"):
         lines.append("    " + tl)
     lines.append(f"        _COMPLETED.add({node.id!r})")
     lines.append("        _save_checkpoint()")
     _finished_log = (
         f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
-        f"{node.id!r}, len(_STACK) - 1, time.monotonic() - _t0)  # noqa: E501"
+        f"{node.id!r}, step, time.monotonic() - _t0)  # noqa: E501"
     )
     lines.append(_finished_log)
     lines.append("    else:")
@@ -833,288 +791,6 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     return "\n\n\n".join(blocks)
 
 
-def _build_fwd_graph(
-    wf: WorkflowDef,
-) -> tuple[dict[str, list[EdgeDef]], dict[str, list[str]], list[EdgeDef]]:
-    """Split edges into forward (non-loop) and loop back-edges.
-
-    ``$in`` is excluded from predecessor tracking (it is always available), so a
-    node fed only by ``$in`` behaves like an entry node.
-    """
-    fwd_from: dict[str, list[EdgeDef]] = defaultdict(list)
-    fwd_preds: dict[str, list[str]] = defaultdict(list)
-    loop_edges: list[EdgeDef] = []
-    for e in wf.edges:
-        if e.dst == OUT_NODE_ID:
-            continue  # the $output sink is flushed in each node's tail, not scheduled
-        if e.loop_max is None:
-            fwd_from[e.src].append(e)
-            if e.src != IN_NODE_ID:
-                fwd_preds[e.dst].append(e.src)
-        else:
-            loop_edges.append(e)
-    return fwd_from, fwd_preds, loop_edges
-
-
-def _cond_in_edges(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
-    """Forward incoming edges used to compute run guards.
-
-    Excludes ``$in`` edges: the source node is always available and only supplies
-    data, so it never makes a node "unconditionally reached" (that is decided by
-    real predecessor nodes / their conditions), mirroring the executor's
-    scheduling where ``$in`` is not a predecessor.
-    """
-    return [e for e in wf.edges if e.dst == node_id and e.loop_max is None and e.src != IN_NODE_ID]
-
-
-def _node_guard(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str]) -> str | None:
-    """Guard expression if *node_id* is reached ONLY via conditional edges, else None."""
-    edges = _cond_in_edges(node_id, wf)
-    if not edges:
-        return None
-    if any(e.when is None for e in edges):
-        return None
-    exprs = [
-        f"({_condition_to_expr(e.when, _src_container_expr(safe_ids, e.src))})"
-        for e in edges
-        if e.when is not None
-    ]
-    return " or ".join(exprs) if len(exprs) > 1 else exprs[0]
-
-
-def _node_run_gate(node_id: str, wf: WorkflowDef, fwd_preds: dict[str, list[str]], safe_ids: dict[str, str]) -> str:
-    """Boolean expression under which *node_id* runs (mirrors the executor)."""
-    preds = fwd_preds.get(node_id, [])
-    edges = _cond_in_edges(node_id, wf)
-    if not edges:
-        return "True"
-    clauses: list[str] = [f"'{_ESC(p)}' in _ran" for p in dict.fromkeys(preds)]
-    if not any(e.when is None for e in edges):
-        guards = [
-            f"({_condition_to_expr(e.when, _src_container_expr(safe_ids, e.src))})" for e in edges if e.when is not None
-        ]
-        clauses.append(f"({' or '.join(guards)})" if len(guards) > 1 else guards[0])
-    return " and ".join(clauses) if clauses else "True"
-
-
-def _has_forward_conditional(wf: WorkflowDef) -> bool:
-    """True if the workflow has a conditional edge that is NOT a loop back-edge."""
-    return any(e.when is not None and e.loop_max is None for e in wf.edges)
-
-
-def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Body of ``async def main()`` — conditional-aware when forward guards exist."""
-    if _has_forward_conditional(wf):
-        return _render_main_body_conditional(wf, safe_ids)
-    return _render_main_body_waves(wf, safe_ids, use_capped=wf.max_concurrency > 0)
-
-
-def _loop_maps(
-    wf: WorkflowDef, safe_ids: dict[str, str]
-) -> tuple[dict[str, tuple[str, int | None, str]], set[str], dict[str, str | None], set[str], dict[str, str]]:
-    """Shared loop bookkeeping: entry->exit/max, exit set, exit->break expression.
-
-    Also returns ``strict_exits`` (exit-node ids whose loop is a strict ``while``)
-    and ``strict_msg`` (exit-node id -> the non-convergence error message) so the
-    body renderers can emit a ``for/else: raise`` on a strict loop that exhausts
-    its bound without the exit condition firing.
-    """
-    entry_map: dict[str, tuple[str, int | None, str]] = {}
-    exit_set: set[str] = set()
-    exit_break: dict[str, str | None] = {}
-    strict_exits: set[str] = set()
-    strict_msg: dict[str, str] = {}
-    for le, edge_id in zip(wf.edges, edge_identities(wf), strict=True):
-        if le.loop_max is None:
-            continue
-        # A strict ``while`` runs its body up to ``loop_max + 1`` times to match the
-        # interpreter (which fires the back-edge ``loop_max`` times, one run each,
-        # after the node's initial run); a plain loop.max keeps ``loop_max``.
-        lmax = le.loop_max + 1 if le.loop_strict else le.loop_max
-        entry_map[le.dst] = (le.src, lmax, edge_id)
-        exit_set.add(le.src)
-        exit_break[le.src] = (
-            _condition_to_negated_expr(le.when, _src_container_expr(safe_ids, le.src)) if le.when is not None else None
-        )
-        if le.loop_strict:
-            strict_exits.add(le.src)
-            strict_msg[le.src] = (
-                f"while loop {le.src!r}->{le.dst!r} did not converge within "
-                f"{le.loop_max} iterations (condition still true)"
-            )
-    return entry_map, exit_set, exit_break, strict_exits, strict_msg
-
-
-def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit ``_ran``-gated sequential code for workflows with forward conditionals."""
-    fwd_from, fwd_preds, _loop_edges = _build_fwd_graph(wf)
-    loop_entry_map, loop_exit_set, loop_exit_break, loop_strict_exits, loop_strict_msg = _loop_maps(
-        wf, safe_ids
-    )
-
-    # Topological order over forward edges (Kahn), stable in declaration order.
-    indeg: dict[str, int] = {n.id: 0 for n in wf.nodes}
-    for e in wf.edges:
-        if e.loop_max is None and e.src != IN_NODE_ID and e.dst != OUT_NODE_ID:
-            indeg[e.dst] = indeg.get(e.dst, 0) + 1
-    order: list[str] = []
-    queue = [n.id for n in wf.nodes if indeg[n.id] == 0]
-    seen: set[str] = set(queue)
-    while queue:
-        cur = queue.pop(0)
-        order.append(cur)
-        for e in fwd_from.get(cur, []):
-            if e.src == IN_NODE_ID:
-                continue
-            indeg[e.dst] -= 1
-            if indeg[e.dst] == 0 and e.dst not in seen:
-                seen.add(e.dst)
-                queue.append(e.dst)
-    for n in wf.nodes:
-        if n.id not in order:
-            order.append(n.id)
-
-    lines: list[str] = []
-    loop_depth = 0
-
-    def ind() -> str:
-        return "    " * (1 + loop_depth)
-
-    lines.append(f"{ind()}_ran: set[str] = set()")
-
-    # Active-loop stack: (loop-edge key, loop variable) so the exit node can tick
-    # the persisted counter with the SAME variable the entry opened (fixes the old
-    # shared `_loop_i` shadowing under nesting, and enables mid-loop resume).
-    loop_stack: list[tuple[str, str]] = []
-
-    for node_id in order:
-        if node_id in loop_entry_map:
-            _src, lmax, key = loop_entry_map[node_id]
-            var = f"_loop_i_{loop_depth}"
-            lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
-            loop_stack.append((key, var))
-            loop_depth += 1
-
-        gate = _node_run_gate(node_id, wf, fwd_preds, safe_ids)
-        if gate == "True":
-            if loop_depth > 0:
-                lines.append(f"{ind()}_COMPLETED.discard({node_id!r})")
-            lines.append(_await_line(ind(), node_id, wf, safe_ids))
-            lines.append(f"{ind()}_ran.add('{_ESC(node_id)}')")
-        else:
-            lines.append(f"{ind()}if {gate}:")
-            if loop_depth > 0:
-                lines.append(f"{ind()}    _COMPLETED.discard({node_id!r})")
-            lines.append(_await_line(ind() + "    ", node_id, wf, safe_ids))
-            lines.append(f"{ind()}    _ran.add('{_ESC(node_id)}')")
-
-        if node_id in loop_exit_set:
-            key, var = loop_stack.pop()
-            # Persist this iteration's completion before deciding to break, so a
-            # resume continues at the next iteration (aligned with the interpreter).
-            lines.append(f"{ind()}_loop_tick({key!r}, {var})")
-            break_cond = loop_exit_break.get(node_id)
-            if break_cond is not None:
-                lines.append(f"{ind()}if {break_cond}:")
-                lines.append(f"{ind()}    break")
-            loop_depth -= 1
-            if node_id in loop_strict_exits:
-                # A strict ``while``: for/else means the range exhausted without a
-                # break.  Re-check the condition for checkpoint resumes whose range
-                # may already be empty: only a still-true condition is non-convergence.
-                lines.append(f"{ind()}else:")
-                if break_cond is not None:
-                    lines.append(f"{ind()}    if not ({break_cond}):")
-                    lines.append(f"{ind()}        raise WorkflowExecutionError(")
-                    lines.append(f"{ind()}            {loop_strict_msg[node_id]!r}")
-                    lines.append(f"{ind()}        )")
-                else:
-                    lines.append(f"{ind()}    pass  # defensive: validate_workflow rejects strict loops without when")
-
-    return "\n".join(lines)
-
-
-def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_capped: bool = False) -> str:
-    """BFS-wave body: gather for parallel fan-out, for-range for bounded loops."""
-    fwd_from, fwd_preds, _loop_edges = _build_fwd_graph(wf)
-    loop_entry_map, loop_exit_set, loop_exit_break, loop_strict_exits, loop_strict_msg = _loop_maps(
-        wf, safe_ids
-    )
-
-    completed: set[str] = set()
-    pending: list[str] = list(entry_frontier(wf))
-    lines: list[str] = []
-    loop_depth = 0
-    loop_stack: list[tuple[str, str]] = []  # (loop-edge key, loop variable) per active loop
-
-    def ind() -> str:
-        return "    " * (1 + loop_depth)
-
-    while pending:
-        ready = [n for n in pending if all(p in completed for p in fwd_preds.get(n, []))]
-        if not ready:
-            break
-        for n in ready:
-            pending.remove(n)
-
-        for n in ready:
-            if n in loop_entry_map:
-                _src, lmax, key = loop_entry_map[n]
-                var = f"_loop_i_{loop_depth}"
-                lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
-                loop_stack.append((key, var))
-                loop_depth += 1
-                break
-
-        if len(ready) == 1:
-            if loop_depth > 0:
-                lines.append(f"{ind()}_COMPLETED.discard({ready[0]!r})")
-            lines.append(_await_line(ind(), ready[0], wf, safe_ids))
-        else:
-            for n in ready:
-                if loop_depth > 0:
-                    lines.append(f"{ind()}_COMPLETED.discard({n!r})")
-            if use_capped:
-                calls = [f"_capped({_invoke_expr(n, wf, safe_ids)})" for n in ready]
-            else:
-                calls = [_invoke_expr(n, wf, safe_ids) for n in ready]
-            gather = f"{ind()}await asyncio.gather({', '.join(calls)})"
-            lines.append(gather if len(gather) <= 120 else gather + "  # noqa: E501")
-
-        for n in ready:
-            completed.add(n)
-
-        for n in ready:
-            if n in loop_exit_set:
-                key, var = loop_stack.pop()
-                lines.append(f"{ind()}_loop_tick({key!r}, {var})")
-                break_cond = loop_exit_break.get(n)
-                if break_cond is not None:
-                    lines.append(f"{ind()}if {break_cond}:")
-                    lines.append(f"{ind()}    break")
-                loop_depth -= 1
-                if n in loop_strict_exits:
-                    # Re-check after for/else so an empty range on checkpoint resume
-                    # raises only when the while condition is still true.
-                    lines.append(f"{ind()}else:")
-                    if break_cond is not None:
-                        lines.append(f"{ind()}    if not ({break_cond}):")
-                        lines.append(f"{ind()}        raise WorkflowExecutionError(")
-                        lines.append(f"{ind()}            {loop_strict_msg[n]!r}")
-                        lines.append(f"{ind()}        )")
-                    else:
-                        lines.append(f"{ind()}    pass  # defensive: validator rejects strict loops without when")
-                break
-
-        for n in ready:
-            for e in fwd_from.get(n, []):
-                succ = e.dst
-                if succ not in completed and succ not in pending:
-                    pending.append(succ)
-
-    return "\n".join(lines)
-
-
 def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit imports for custom-tool manifest refs and run-ref scripts.
 
@@ -1197,6 +873,149 @@ def _has_human_nodes(wf: WorkflowDef) -> bool:
     return any(n.type == "human" for n in wf.nodes)
 
 
+def _render_edge_resolver(wf: WorkflowDef) -> str:
+    """Emit source-local outgoing condition evaluation keyed by internal edge id."""
+    lines = ["def _resolve_outgoing(node_id: str) -> dict[str, bool]:", "    resolved: dict[str, bool] = {}"]
+    for edge, edge_id in zip(wf.edges, edge_identities(wf), strict=True):
+        if edge.dst == OUT_NODE_ID or edge.src == IN_NODE_ID:
+            continue
+        condition = (
+            _condition_to_expr(edge.when, f"_OUT.get({edge.src!r}, {{}})")
+            if edge.when is not None
+            else "True"
+        )
+        lines.append(f"    if node_id == {edge.src!r}:")
+        lines.append(f"        resolved[{edge_id!r}] = {condition}")
+    lines.append("    return resolved")
+    return "\n".join(lines)
+
+
+def _render_dispatch(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
+    """Emit the scheduler's node-id dispatch into existing generated drivers."""
+    lines = [
+        "async def _dispatch(node_id: str, step: int, enabled_edges: tuple[str, ...]) -> None:"
+    ]
+    for index, node in enumerate(wf.nodes):
+        safe = safe_ids[node.id]
+        keyword = "if" if index == 0 else "elif"
+        lines.append(f"    {keyword} node_id == {node.id!r}:")
+        if node.type == "human":
+            lines.append(f"        await node_{safe}(_PROVIDER, step, enabled_edges)")
+        else:
+            fan_edge = _incoming_fan_out_edge(node.id, wf)
+            if fan_edge is not None:
+                fan_port = _fan_worker_port(fan_edge)
+                out_ports = tuple(port.name for port in node.output_ports)
+                call = (
+                    f"_drive_fan({node.id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
+                    f"step, enabled_edges, {fan_port!r}, {out_ports!r}, {wf.fan_max_concurrency})"
+                )
+            else:
+                call = (
+                    f"_drive({node.id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
+                    f"step, enabled_edges, {_retry_spec(node, wf)})"
+                )
+            lines.append(f"        await {call}" if len(call) <= 105 else f"        await {call}  # noqa: E501")
+    if not wf.nodes:
+        lines.append("    _ = node_id, step, enabled_edges")
+    else:
+        lines.append("    else:")
+        lines.append("        raise WorkflowExecutionError(f'unknown node id {node_id!r}')")
+    return "\n".join(lines)
+
+
+def _render_frontier_scheduler(wf: WorkflowDef) -> str:
+    """Emit the generated host loop around the exact inlined transition kernel."""
+    isolate_scopes = {
+        node.id: tuple(_transitive_successors_ids(node.id, wf))
+        for node in wf.nodes
+        if node.on_error == "isolate"
+    }
+    edge_errors = {
+        edge_id: (
+            f"while loop {edge.src!r}->{edge.dst!r} did not converge within "
+            f"{edge.loop_max} iterations (condition still true)"
+        )
+        for edge, edge_id in zip(wf.edges, edge_identities(wf), strict=True)
+        if edge.loop_strict
+    }
+    capped = wf.max_concurrency > 0
+    frontier_literal = pprint.pformat(build_frontier_spec(wf), width=88, sort_dicts=False)
+    isolate_literal = pprint.pformat(isolate_scopes, width=88, sort_dicts=False)
+    errors_literal = pprint.pformat(edge_errors, width=88, sort_dicts=False)
+    lines = [
+        "_FRONTIER_SPEC: dict[str, object] = (",
+        *[f"    {line}" for line in frontier_literal.splitlines()],
+        ")",
+        "_ISOLATE_SCOPES: dict[str, tuple[str, ...]] = (",
+        *[f"    {line}" for line in isolate_literal.splitlines()],
+        ")",
+        "_LOOP_ERRORS: dict[str, str] = (",
+        *[f"    {line}" for line in errors_literal.splitlines()],
+        ")",
+        "",
+        _render_edge_resolver(wf),
+        "",
+        "async def _run_generated_frontier() -> None:",
+        "    state = new_frontier_state(_FRONTIER_SPEC, set(_COMPLETED))",
+        "    for node_id in _FRONTIER_SPEC['nodes']:",
+        "        if node_id in _COMPLETED:",
+        "            replay_completed(_FRONTIER_SPEC, state, node_id, _resolve_outgoing(node_id))",
+        "    restore_loop_activations(_FRONTIER_SPEC, state, _LOOP_COUNTERS)",
+        "    next_step = max((int(frame.get('step', -1)) for frame in _STACK), default=-1) + 1",
+        "    while True:",
+        "        ready = take_ready(_FRONTIER_SPEC, state)",
+        "        if not ready:",
+        "            break",
+        "        scheduled = []",
+        "        for node_id, epoch, enabled_edges in ready:",
+        "            scheduled.append((node_id, epoch, enabled_edges, next_step))",
+        "            next_step += 1",
+    ]
+    if capped:
+        lines += [
+            "        results = await asyncio.gather(",
+            "            *[_capped(_dispatch(node, step, enabled)) for node, _epoch, enabled, step in scheduled],",
+            "            return_exceptions=True,",
+            "        )",
+        ]
+    else:
+        lines += [
+            "        results = await asyncio.gather(",
+            "            *[_dispatch(node, step, enabled) for node, _epoch, enabled, step in scheduled],",
+            "            return_exceptions=True,",
+            "        )",
+        ]
+    lines += [
+        "        successful = []",
+        "        first_failure: BaseException | None = None",
+        "        for (node_id, epoch, _enabled, _step), result in zip(scheduled, results, strict=True):",
+        "            if not isinstance(result, BaseException):",
+        "                successful.append((node_id, epoch, _resolve_outgoing(node_id)))",
+        "                continue",
+        "            if node_id in _ISOLATE_SCOPES and not isinstance(",
+        "                result, (WorkflowBudgetExceeded, KeyboardInterrupt, SystemExit, asyncio.CancelledError)",
+        "            ):",
+        "                _FAILED[node_id] = f'{type(result).__name__}: {result}'",
+        "                scope = {node_id, *_ISOLATE_SCOPES[node_id]}",
+        "                _ISOLATED.update(scope)",
+        "                isolate_nodes(state, scope)",
+        "            elif first_failure is None:",
+        "                first_failure = result",
+        "        if first_failure is not None:",
+        "            raise first_failure",
+        "        strict_edge = complete_batch(_FRONTIER_SPEC, state, successful, _LOOP_COUNTERS)",
+        "        if strict_edge is not None:",
+        "            raise WorkflowExecutionError(_LOOP_ERRORS[strict_edge])",
+        "        frontier_completed = state['completed']",
+        "        assert isinstance(frontier_completed, dict)",
+        "        _COMPLETED.clear()",
+        "        _COMPLETED.update(str(node_id) for node_id in frontier_completed)",
+        "        _save_checkpoint()",
+    ]
+    return "\n".join(lines)
+
+
 def generate(wf: WorkflowDef) -> str:
     """Generate a complete Python module string for the given WorkflowDef."""
     tmpl_path = importlib.resources.files("flow") / "templates" / "runtime.py.tmpl"
@@ -1208,7 +1027,10 @@ def generate(wf: WorkflowDef) -> str:
     node_functions = "\n\n\n".join(_render_node_function(n.id, wf, safe_ids) for n in wf.nodes)
     if inline_scripts:
         node_functions = inline_scripts + "\n\n\n" + node_functions
-    main_body = _render_main_body(wf, safe_ids)
+    node_functions = "\n\n\n".join(
+        part for part in (node_functions, _render_dispatch(wf, safe_ids), _render_frontier_scheduler(wf)) if part
+    )
+    main_body = "    await _run_generated_frontier()"
     concurrency_boilerplate = _render_concurrency_boilerplate(wf)
 
     if _has_human_nodes(wf):
@@ -1258,6 +1080,7 @@ def generate(wf: WorkflowDef) -> str:
         in_seed=_render_in_seed(wf),
         in_node_id=repr(IN_NODE_ID),
         node_functions=node_functions,
+        frontier_runtime=render_frontier_runtime(),
         provider=wf.provider,
         provider_init=provider_init,
         sdk_imports=sdk_imports,

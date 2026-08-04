@@ -199,11 +199,12 @@ def _make_loop_wf() -> WorkflowDef:
 
 def test_generate_loop() -> None:
     src = generate(_make_loop_wf())
-    # A bounded loop compiles to a for-range that resumes from its persisted counter
-    # (depth-indexed loop var; ticks the counter each iteration).
-    assert "range(_loop_start(" in src and ", 3):" in src
-    assert "_loop_i_0" in src
-    assert "_loop_tick(" in src
+    # Loops remain static graph metadata and execute through the shared frontier
+    # kernel rather than a separately generated lexical Python for-loop.
+    assert "_FRONTIER_SPEC" in src
+    assert "_run_generated_frontier" in src
+    assert "complete_batch(_FRONTIER_SPEC" in src
+    assert "for _loop_i_" not in src
     ok, msg = _ruff_clean(src)
     assert ok, f"ruff failed:\n{msg}"
 
@@ -283,6 +284,125 @@ async def _run_generated(wf: WorkflowDef) -> dict[str, dict[str, str]]:
         return {k: dict(v) for k, v in mod._OUT.items()}
     finally:
         tmp.unlink(missing_ok=True)
+
+
+async def test_generate_false_forward_edge_input_parity() -> None:
+    """Generated input assembly ignores false forward edge mappings."""
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="conditional-inputs",
+        provider="",
+        entry="",
+        nodes=(
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx):\n    return 10",
+                output_ports=(Port("value", "integer"),),
+            ),
+            NodeDef(
+                id="c",
+                type="script",
+                code="def c(ctx):\n    return 99",
+                output_ports=(Port("value", "integer"),),
+            ),
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, selected):\n    return selected",
+                input_ports=(Port("selected", "integer"),),
+                output_ports=(Port("result", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(
+                src="b",
+                dst="a",
+                mapping=(("value", "selected"),),
+                when=Condition(op="equals", value="{{ $.value }}", text="10"),
+            ),
+            EdgeDef(
+                src="c",
+                dst="a",
+                mapping=(("value", "selected"),),
+                when=Condition(op="equals", value="{{ $.value }}", text="never"),
+            ),
+        ),
+    )
+
+    generated = await _run_generated(wf)
+    interpreted = await execute(wf)
+    assert generated == _interp_out(interpreted)
+    assert generated["a"]["result"] == 10
+
+
+async def test_generate_multiple_loop_sources_and_join_parity() -> None:
+    """Generated scheduler waits for all loop members before one reactivation."""
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="loop-join",
+        provider="",
+        entry="a",
+        initial_state=(("seed", 0),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, seed):\n    return seed + 1",
+                input_ports=(Port("seed", "integer"),),
+                output_ports=(Port("n", "integer"),),
+            ),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("back", "integer"),),
+            ),
+            NodeDef(
+                id="delay",
+                type="script",
+                code="def delay(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("n", "integer"),),
+            ),
+            NodeDef(
+                id="c",
+                type="script",
+                code="def c(ctx, n):\n    return n",
+                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("back", "integer"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="a", mapping=(("seed", "seed"),)),
+            EdgeDef(src="a", dst="b", mapping=(("n", "n"),)),
+            EdgeDef(src="a", dst="delay", mapping=(("n", "n"),)),
+            EdgeDef(src="delay", dst="c", mapping=(("n", "n"),)),
+            EdgeDef(
+                src="b",
+                dst="a",
+                mapping=(("back", "seed"),),
+                when=Condition(op="lt", value="{{ $.back }}", text="2"),
+                loop_max=2,
+            ),
+            EdgeDef(
+                src="c",
+                dst="a",
+                mapping=(("back", "seed"),),
+                when=Condition(op="lt", value="{{ $.back }}", text="2"),
+                loop_max=3,
+                loop_strict=True,
+            ),
+        ),
+    )
+
+    generated = await _run_generated(wf)
+    interpreted = await execute(wf)
+    assert generated == _interp_out(interpreted)
+    assert generated["a"]["n"] == 2
 
 
 async def test_generate_conditional_branch_matches_runtime() -> None:

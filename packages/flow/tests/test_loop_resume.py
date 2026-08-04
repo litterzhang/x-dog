@@ -57,12 +57,14 @@ def test_loop_fresh_run_parity() -> None:
     assert gen["out"] == dict(interp.runtime["out"]) == {"r": 5}
 
 
-def test_generated_loop_uses_depth_indexed_var_and_tick() -> None:
+def test_generated_loop_uses_frontier_edge_identity() -> None:
     wf = parse_workflow(_count_loop_wf())
     key = edge_identities(wf)[2]
     src = generate(wf)
-    assert f"for _loop_i_0 in range(_loop_start({key!r})" in src
-    assert f"_loop_tick({key!r}, _loop_i_0)" in src
+    assert "_FRONTIER_SPEC" in src
+    assert key in src
+    assert "complete_batch(_FRONTIER_SPEC" in src
+    assert "for _loop_i_" not in src
 
 
 def test_edge_identity_is_content_hashed_and_duplicate_safe() -> None:
@@ -159,7 +161,9 @@ def test_generated_loop_persists_counter(tmp_path: pathlib.Path, monkeypatch: An
     key = edge_identities(wf)[2]
     _run_gen(generate(wf))
     snap = json.loads((ck / "done.json").read_text())
-    assert snap["loop_counters"] == {key: 5}
+    # Counter now has one meaning in both engines: successful back-edge fires.
+    # r reaches 5 after the initial pass plus four loop reactivations.
+    assert snap["loop_counters"] == {key: 4}
 
 
 def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatch: Any) -> None:

@@ -60,12 +60,35 @@ a port that doesn't exist on the source/destination; and — critically — **tw
 unconditional edges feeding the same input port** (the ambiguous-producer clash
 that a shared global state used to allow silently).
 
+### Execution model
+
+Both `xdog-flow run` and generated modules execute the same frontier state
+machine:
+
+1. Seed the frontier from `entry` (or all derived entry nodes).
+2. Run the ready frontier concurrently in node declaration order.
+3. When a node completes, evaluate its outgoing edges against that node's output.
+4. A destination with ordinary predecessors waits for every predecessor to
+   complete; only condition-enabled edges contribute mapped input values.
+5. When no activation is ready or running, graph execution is complete.
+
+Bounded back-edges with the same destination form a conditional **AND loop
+join**. All member source nodes must complete in the current generation and all
+member conditions must hold before the destination runs again, exactly once.
+Each edge keeps its own `max` and strict-`while` behavior, so different bounds and
+mixed plain/strict members are supported.
+
+The generated module embeds this frontier scheduler and static graph metadata;
+it does not translate loops into a separate Python `for` control-flow model.
+
 ### Condition operators
 
 | Operator | Shape | Meaning |
 |----------|-------|---------|
 | `contains` | `{"contains": {"text": "...", "value": "..."}}` | `value` is a substring of `text` |
 | `equals` | `{"equals": {"text": "...", "value": "..."}}` | `text == value` |
+| `gt` / `gte` | `{"gte": {"value": "{{ $.score }}", "text": "0.8"}}` | numeric comparison |
+| `lt` / `lte` | `{"lt": {"value": "{{ $.score }}", "text": "0.8"}}` | numeric comparison |
 | `not` | `{"not": <condition>}` | logical negation |
 | `and` | `{"and": [<c1>, <c2>]}` | all conditions must hold |
 | `or` | `{"or": [<c1>, <c2>]}` | any condition must hold |
@@ -115,28 +138,29 @@ Generated output structure:
 """research_write_review — generated workflow module."""
 
 import asyncio
-import ai
-from agent import Agent
-from agent.core import AgentConfig, StreamFn
-# ...
+# Standalone runtime helpers + node functions are inlined here.
 
-STATE: dict[str, str] = {"topic": "..."}
+_OUT = {"$in": {"topic": "..."}}
+_FRONTIER_SPEC = {
+    "nodes": ("research", "write", "review"),
+    "entries": ("research",),
+    "edges": {...},
+    "loop_groups": {"write": (...)},
+}
 
-async def _run_agent(provider, model, system_prompt, prompt) -> str: ...
-
-async def node_research(provider) -> None: ...
-async def node_write(provider) -> None: ...
-async def node_review(provider) -> None: ...
+async def node_research(...): ...
+async def node_write(...): ...
+async def node_review(...): ...
 
 async def main() -> None:
-    provider = ai.provider("copilot")
-    await node_research(provider)
-    # loop: review -> write (max 2 iterations)
-    ...
+    await _run_generated_frontier()
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+The static metadata and node functions are workflow-specific; the inlined
+frontier transition kernel is the same implementation used by the interpreter.
 
 ### graph
 

@@ -35,25 +35,22 @@ is: **which of these are worth relaxing, and what does each cost the
 **This is the only capability-level gap. Everything else is convenience or
 correctness.** **→ SHIPPED (v1, Strategy A). See [`fan-out.md`](./fan-out.md).**
 
-Today a loop is a back-edge with a compile-time bound:
+A loop is a bounded back-edge known in the static graph:
 
 ```python
 # models.py
 class EdgeDef:
     ...
-    loop_max: int | None = None      # a CONSTANT, known at load time
+    loop_max: int | None = None
 ```
 
-codegen compiles it to a native `for` over a constant range:
+Interpreter and codegen now execute that edge through the same frontier state
+machine. Codegen emits static edge metadata and node functions; it does **not**
+translate the graph into a separate lexical Python `for` loop. This also makes
+multiple back-edges entering one destination a graph-native conditional AND join.
 
-```python
-# codegen.py — _render_main_body_conditional / _waves
-for _loop_i in range(lmax):          # lmax is a literal
-    _COMPLETED.discard(node_id)
-    await node_X(provider)
-```
-
-So you can express *"run this cycle at most N times"*. You **cannot** express:
+Bounded loops still cannot express dynamic task mapping by themselves. You
+**cannot** express:
 
 > "The `plan` node produced a list of 7 subtasks. Run the `work` node once per
 > subtask, in parallel, then gather the 7 results into the `merge` node."
@@ -64,9 +61,9 @@ the single most common pattern flow can't model. You can hack it by pre-declarin
 a fixed number of parallel branches and leaving some idle, but the count must be
 a compile-time constant, and the branches are wired by hand.
 
-**Root cause:** the executor's readiness scheduler (`_is_ready` /
-`_successors`, executor.py ~585–609) fans out over a *static* edge set. There is
-no notion of "one edge, N runtime instances."
+**Root cause:** the frontier scheduler intentionally activates a *static* node
+for each edge transition. There is no notion of "one edge, N runtime instances";
+dynamic fan-out therefore remains an explicit node-local capability.
 
 **Why it's hard (and why my earlier "impossible" claim was wrong):** codegen
 *can* emit `await asyncio.gather(*[_body(x) for x in items])` — dynamic fan-out
@@ -275,12 +272,18 @@ loader desugars either form to the same static bounded back-edge (`when` +
 explicit `loop.max` is exhaustion: if the condition is still true at the bound,
 both engines raise a non-convergence error instead of silently stopping.
 
-Nested generated loops use depth-indexed variables and checkpoint their loop
-position; strict-while boundary convergence and non-convergence are covered by
-cross-engine tests.
+All bounded back-edges entering the same destination form one conditional AND
+loop group. Every source must complete in the current generation and every guard
+must hold before the destination is activated once. Members retain independent
+bounds and may mix plain loops with strict `while`; an exhausted strict member
+fails, while an exhausted plain member stops the group normally.
 
-**`interpret == compile` impact:** LOW. Both engines evaluate the same condition
-and fail on the same strict bound; the generated loop uses `for/else`.
+Both engines run this through the same frontier transition kernel. Checkpoints
+retain the existing fields and per-edge counters; a partially arrived multi-source
+group is reconstructed best-effort rather than persisted as new join state.
+
+**`interpret == compile` impact:** LOW by construction: codegen embeds the same
+frontier kernel used by the interpreter.
 
 ---
 

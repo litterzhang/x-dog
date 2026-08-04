@@ -312,19 +312,6 @@ def _save_checkpoint() -> None:
         raise
 
 
-# Loop-position tracking for checkpoint/resume, aligned with the interpreter's
-# loop_counters (content-hashed edge id -> iterations completed). A resumed run
-# continues mid-loop from the persisted count instead of replaying the whole loop.
-def _loop_start(key: str) -> int:
-    _n = _LOOP_COUNTERS.get(key, 0)
-    return _n if isinstance(_n, int) else 0
-
-
-def _loop_tick(key: str, i: int) -> None:
-    _LOOP_COUNTERS[key] = i + 1
-    _save_checkpoint()
-
-
 $sdk_run_agent
 
 # ---------------------------------------------------------------------------
@@ -507,8 +494,10 @@ async def _run_cli_agent(
 async def _drive(
     node_id: str,
     node_fn: "Callable[..., Awaitable[tuple[dict[str, object], int]]]",
-    inputs_fn: "Callable[[], dict[str, object]]",
+    inputs_fn: "Callable[[tuple[str, ...]], dict[str, object]]",
     store_fn: "Callable[[dict[str, object], dict[str, object]], None]",
+    step: int,
+    enabled_edges: tuple[str, ...],
     *,
     retry_max: int,
     backoff: float,
@@ -526,28 +515,28 @@ async def _drive(
     global _TOKENS_USED
     if node_id in _COMPLETED or node_id in _ISOLATED:
         return
-    ins = inputs_fn()
+    ins = inputs_fn(enabled_edges)
 
     if deterministic:
         _mk = f"{node_id}:{hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()}"
         if _mk in _MEMO:
-            _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+            _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
             _t0m = time.monotonic()
             _OUT[node_id] = dict(_MEMO[_mk])
-            _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT[node_id])})
+            _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT[node_id])})
             _COMPLETED.add(node_id)
             _save_checkpoint()
             _EVENT_LOG.info(
-                "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0m
+                "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0m
             )
             return
 
-    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
     _t0 = time.monotonic()
     _last_exc: BaseException | None = None
     _outputs: dict[str, object] = {}
     _tokens = 0
-    _ctx = RuntimeContext(step=len(_STACK), node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    _ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME)
     for _attempt in range(retry_max):
         try:
             _outputs, _tokens = await node_fn(provider=_PROVIDER, ctx=_ctx, **ins)
@@ -562,37 +551,32 @@ async def _drive(
             raise _last_exc
         store_fn(ins, _outputs)
         _TOKENS_USED += _tokens
-        _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
+        _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
         if deterministic:
             _MEMO[_mk] = dict(_OUT.get(node_id, {}))
         _COMPLETED.add(node_id)
         _save_checkpoint()
         _EVENT_LOG.info(
-            "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0
+            "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0
         )
         if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
             raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
     except BaseException as _ev_exc:
         _EVENT_LOG.info(
             "NodeFailed node=%s step=%d duration_s=%f error=%s",
-            node_id, len(_STACK), time.monotonic() - _t0, f"{type(_ev_exc).__name__}: {_ev_exc}",
+            node_id, step, time.monotonic() - _t0, f"{type(_ev_exc).__name__}: {_ev_exc}",
         )
-        if isolate and not isinstance(
-            _ev_exc, (WorkflowBudgetExceeded, KeyboardInterrupt, SystemExit, asyncio.CancelledError)
-        ):
-            _FAILED[node_id] = f"{type(_ev_exc).__name__}: {_ev_exc}"
-            _ISOLATED.add(node_id)
-            for _succ in isolated_succs:
-                _ISOLATED.add(_succ)
-            return
+        _ = isolate, isolated_succs  # scheduler applies isolation after the whole ready batch settles
         raise
 
 
 async def _drive_fan(
     node_id: str,
     node_fn: "Callable[..., Awaitable[tuple[dict[str, object], int]]]",
-    inputs_fn: "Callable[[], dict[str, object]]",
+    inputs_fn: "Callable[[tuple[str, ...]], dict[str, object]]",
     store_fn: "Callable[[dict[str, object], dict[str, object]], None]",
+    step: int,
+    enabled_edges: tuple[str, ...],
     fan_port: str,
     out_ports: tuple[str, ...],
     fan_cap: int = 0,
@@ -608,12 +592,12 @@ async def _drive_fan(
     global _TOKENS_USED
     if node_id in _COMPLETED or node_id in _ISOLATED:
         return
-    ins = inputs_fn()
+    ins = inputs_fn(enabled_edges)
     _raw = ins.get(fan_port)
     _items: list[object] = list(_raw) if isinstance(_raw, (list, tuple)) else []
-    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, len(_STACK))
+    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
     _t0 = time.monotonic()
-    _ctx = RuntimeContext(step=len(_STACK), node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    _ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME)
     _fan_sem: asyncio.Semaphore | None = asyncio.Semaphore(fan_cap) if fan_cap > 0 else None
 
     async def _one(_x: object) -> tuple[dict[str, object], int]:
@@ -627,7 +611,7 @@ async def _drive_fan(
     _tokens = sum(r[1] for r in _results)
     store_fn(ins, _agg)
     _TOKENS_USED += _tokens
-    _STACK.append({"step": len(_STACK), "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
+    _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
     _COMPLETED.add(node_id)
     _save_checkpoint()
     _EVENT_LOG.info(
@@ -635,6 +619,9 @@ async def _drive_fan(
     )
     if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
         raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
+
+
+$frontier_runtime
 
 
 $node_functions

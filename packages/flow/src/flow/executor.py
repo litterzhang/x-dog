@@ -25,6 +25,15 @@ from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowBudgetExceeded, WorkflowExecutionError, WorkflowPaused
 from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
+from flow.frontier import (
+    build_frontier_spec,
+    complete_batch,
+    isolate_nodes,
+    new_frontier_state,
+    replay_completed,
+    restore_loop_activations,
+    take_ready,
+)
 from flow.interpolate import interpolate, jsonpath_get
 from flow.models import (
     IN_NODE_ID,
@@ -34,7 +43,6 @@ from flow.models import (
     WorkflowDef,
     agent_is_structured,
     edge_identities,
-    entry_frontier,
 )
 from flow.runners import AgentRunner, CliRunner, SdkRunner, cli_adapter_for
 from flow.runtime import RuntimeContext
@@ -272,12 +280,16 @@ async def execute(
     # edges_from: src -> list[EdgeDef], with parallel internal hash ids.
     edges_from: dict[str, list[EdgeDef]] = defaultdict(list)
     edge_ids_from: dict[str, list[str]] = defaultdict(list)
-    # in_edges: dst -> list[EdgeDef]
+    # in_edges: dst -> list[EdgeDef], with matching authored ids.
     in_edges: dict[str, list[EdgeDef]] = defaultdict(list)
+    edge_ids_into: dict[str, list[str]] = defaultdict(list)
+    edge_by_id: dict[str, EdgeDef] = {}
     for edge, edge_id in zip(wf.edges, edge_ids, strict=True):
+        edge_by_id[edge_id] = edge
         edges_from[edge.src].append(edge)
         edge_ids_from[edge.src].append(edge_id)
         in_edges[edge.dst].append(edge)
+        edge_ids_into[edge.dst].append(edge_id)
 
     def _source_ports(node_id: str) -> dict[str, object]:
         """Output ports available for reading from *node_id* (empty if not yet run)."""
@@ -289,16 +301,18 @@ async def execute(
             f" {edge.loop_max} iterations (condition still true)"
         )
 
-    def _build_inputs(node_id: str) -> dict[str, object]:
-        """Assemble a node's input namespace from its incoming edge mappings.
+    def _build_inputs(node_id: str, enabled_edge_ids: tuple[str, ...]) -> dict[str, object]:
+        """Assemble inputs from $in plus edges enabled for this activation.
 
-        Walks in edge-declaration order; a later edge writing the same input port
-        wins (only conditional/loop edges may legitimately share a port).  Loop
-        back-edges only supply data while their condition holds.
+        Walks in authored edge order so later enabled mappings retain the existing
+        deterministic override rule. False/unreached forward edges never leak data.
         """
+        enabled = set(enabled_edge_ids)
         ins: dict[str, object] = {}
-        for edge in in_edges.get(node_id, []):
-            if edge.loop_max is not None and edge.when is not None and not evaluate(edge.when, _source_ports(edge.src)):
+        incoming = in_edges.get(node_id, [])
+        incoming_ids = edge_ids_into.get(node_id, [])
+        for edge, edge_id in zip(incoming, incoming_ids, strict=True):
+            if edge.src != IN_NODE_ID and edge_id not in enabled:
                 continue
             src_ports = _source_ports(edge.src)
             for sport, dport in edge.mapping:
@@ -469,7 +483,13 @@ async def execute(
                 projected[node.output_ports[0].name] = value
         return projected, tokens
 
-    async def _run_fan_node(node: NodeDef, node_id: str, fan_edge: EdgeDef) -> None:
+    async def _run_fan_node(
+        node: NodeDef,
+        node_id: str,
+        fan_edge: EdgeDef,
+        step: int,
+        enabled_edge_ids: tuple[str, ...],
+    ) -> None:
         """Run *node* once per element of the fan_out source array (G1).
 
         Aggregates each output port across instances into an index-ordered list and
@@ -480,7 +500,7 @@ async def execute(
         """
         nonlocal tokens_used
         async with _state_lock:
-            shared = _build_inputs(node_id)
+            shared = _build_inputs(node_id, enabled_edge_ids)
         # The fan_out array lives on the source node's output port named by the
         # mapping whose root is fan_edge.fan_out; that mapping's dst is the worker's
         # per-element input port.
@@ -494,7 +514,6 @@ async def execute(
                 worker_port = dport
                 break
 
-        step = await _reserve_step()
         _emit(NodeStarted(node_id=node_id, step=step))
         _t0 = time.monotonic()
 
@@ -529,7 +548,7 @@ async def execute(
         if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
             raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
-    async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object]) -> None:
+    async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> None:
         """Run a ``type="subflow"`` node (G5) as ONE opaque nested workflow.
 
         Calls the same ``execute()`` on the inline child, mapping the parent's
@@ -541,7 +560,6 @@ async def execute(
         """
         nonlocal tokens_used
         assert node.child is not None
-        step = await _reserve_step()
         _emit(NodeStarted(node_id=node_id, step=step))
         _t0 = time.monotonic()
 
@@ -588,8 +606,8 @@ async def execute(
         if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
             raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
-    async def _run_node(node_id: str) -> None:
-        """Execute a single node and store its output ports."""
+    async def _run_node(node_id: str, step: int, enabled_edge_ids: tuple[str, ...]) -> None:
+        """Execute one scheduler activation and store its output ports."""
         # Skip nodes already completed (resume from checkpoint).
         if node_id in completed:
             return
@@ -600,16 +618,15 @@ async def execute(
         # index-ordered list.  From the scheduler's view this is still ONE node.
         _fan_edge = _incoming_fan_out_edge(node_id, in_edges)
         if _fan_edge is not None:
-            await _run_fan_node(node, node_id, _fan_edge)
+            await _run_fan_node(node, node_id, _fan_edge, step, enabled_edge_ids)
             return
         async with _state_lock:
-            ins = _build_inputs(node_id)
+            ins = _build_inputs(node_id, enabled_edge_ids)
 
         # Determinism memo hit: reuse stored output keyed by (node_id, hash(inputs)).
         if node.deterministic:
             _mk = _memo_key(node_id, ins)
             if _mk in memo:
-                step = await _reserve_step()
                 _emit(NodeStarted(node_id=node_id, step=step))
                 _t0_memo = time.monotonic()
                 async with _state_lock:
@@ -624,7 +641,6 @@ async def execute(
         if node.type == "human":
             if node.signal in _signals:
                 # Signal present — instant approval pass
-                step = await _reserve_step()
                 _emit(NodeStarted(node_id=node_id, step=step))
                 _t0_human = time.monotonic()
                 approval_val = "approved"
@@ -643,12 +659,11 @@ async def execute(
             return
 
         if node.type == "subflow":
-            await _run_subflow_node(node, node_id, ins)
+            await _run_subflow_node(node, node_id, ins, step)
             return
 
         if node.type == "script":
             logger.debug("Running script node %r", node_id)
-            step = await _reserve_step()
             _t0 = time.monotonic()
             _emit(NodeStarted(node_id=node_id, step=step))
 
@@ -685,7 +700,7 @@ async def execute(
         # agent node — driver: retry the pure _node_agent, then store + budget.
         agent_max_attempts, agent_backoff = _retry_bounds(node)
         agent_last_exc: BaseException | None = None
-        agent_step = await _reserve_step()
+        agent_step = step
         _t0_agent = time.monotonic()
         _emit(NodeStarted(node_id=node_id, step=agent_step))
         output_value: object = ""
@@ -834,37 +849,6 @@ async def execute(
         else:
             outputs.setdefault(node_id, {})[node.output_ports[0].name] = output_value
 
-    def _is_ready(node_id: str) -> bool:
-        """Return True if all non-loop predecessors of node_id have completed.
-
-        The reserved ``$in`` source is always considered complete (it is pre-seeded
-        with the workflow's initial values and never executes).
-        """
-        for edge in in_edges.get(node_id, []):
-            if edge.loop_max is not None:
-                continue  # skip loop back-edges
-            if edge.src == IN_NODE_ID:
-                continue  # source node is always available
-            if edge.src not in completed:
-                return False
-        return True
-
-    def _successors(node_id: str) -> list[str]:
-        """Return successor node IDs reachable from node_id given current outputs.
-
-        An edge ``when`` is evaluated PORT-LOCALLY against the source node's own
-        output ports.  Loop back-edges are handled separately by _activate_loops.
-        """
-        result: list[str] = []
-        for edge in edges_from.get(node_id, []):
-            if edge.loop_max is not None:
-                continue  # loop edges handled separately
-            if edge.dst == OUT_NODE_ID:
-                continue  # the $output sink is collected after the run, never scheduled
-            if edge.when is None or evaluate(edge.when, _source_ports(edge.src)):
-                result.append(edge.dst)
-        return result
-
     def _transitive_successors(node_id: str) -> set[str]:
         """Return all nodes reachable from node_id (forward edges only, not loop edges)."""
         visited: set[str] = set()
@@ -881,121 +865,119 @@ async def execute(
                     queue.append(edge.dst)
         return visited
 
-    def _activate_loops(just_finished: list[str], pending: set[str]) -> None:
-        """Check loop back-edges from just_finished nodes; re-activate dst if condition holds."""
-        for node_id in just_finished:
-            outgoing = edges_from.get(node_id, [])
-            outgoing_ids = edge_ids_from.get(node_id, [])
-            for edge, edge_id in zip(outgoing, outgoing_ids, strict=True):
-                if edge.loop_max is None:
-                    continue
-                count = loop_counters.get(edge_id, 0)
-                cond_holds = edge.when is None or evaluate(edge.when, _source_ports(edge.src))
-                if count >= edge.loop_max:
-                    # Bound reached.  A strict (``while``) loop whose condition still
-                    # holds never converged — that's an error, not a silent stop.
-                    if edge.loop_strict and cond_holds:
-                        raise _strict_loop_error(edge)
-                    continue
-                if not cond_holds:
-                    continue
-                # Fire the loop: increment counter, un-complete dst + its successors
-                loop_counters[edge_id] = count + 1
-                dst = edge.dst
-                to_reset = {dst} | _transitive_successors(dst)
-                for n in to_reset:
-                    completed.discard(n)
-                pending.add(dst)
-                logger.debug(
-                    "Loop edge %s (%r->%r) fired (count %d/%d)",
-                    edge_id,
-                    node_id,
-                    dst,
-                    loop_counters[edge_id],
-                    edge.loop_max,
-                )
-
-    # --- Scheduler loop ---
-    # pending: nodes whose predecessors are all done but haven't started yet.
-    # When restoring from a checkpoint, seed pending with the not-yet-completed
-    # frontier instead of always starting at the entry node.
-    if _ckpt_active and completed:
-        pending: set[str] = set()
-        for node in wf.nodes:
-            if node.id not in completed and _is_ready(node.id):
-                pending.add(node.id)
-        if not pending:
-            pending = {n for n in entry_frontier(wf) if n not in completed}
-    else:
-        pending = set(entry_frontier(wf))
-    in_flight: set[str] = set()
+    # --- Unified frontier scheduler ---------------------------------------
+    frontier_spec = build_frontier_spec(wf)
+    frontier_state = new_frontier_state(frontier_spec, completed)
 
     # Isolation tracking: nodes whose failure was captured rather than propagated,
     # plus a dict mapping node_id -> error string for all isolated failures.
     isolated: set[str] = set()
     failed: dict[str, str] = {}
 
-    while pending or in_flight:
-        # Collect all nodes that are ready right now (skip isolated nodes)
-        ready = [n for n in pending if _is_ready(n) and n not in isolated]
+    def _resolve_outgoing(node_id: str) -> dict[str, bool]:
+        resolved: dict[str, bool] = {}
+        for edge, edge_id in zip(
+            edges_from.get(node_id, []),
+            edge_ids_from.get(node_id, []),
+            strict=True,
+        ):
+            if edge.dst == OUT_NODE_ID:
+                continue
+            resolved[edge_id] = edge.when is None or evaluate(edge.when, _source_ports(edge.src))
+        return resolved
+
+    # Reconstruct transient forward reachability from the existing checkpoint fields.
+    # Loop transitions are not replayed: loop_counters already encode committed fires.
+    if _ckpt_active and completed:
+        for node in wf.nodes:
+            if node.id in completed:
+                replay_completed(
+                    frontier_spec,
+                    frontier_state,
+                    node.id,
+                    _resolve_outgoing(node.id),
+                )
+        restore_loop_activations(frontier_spec, frontier_state, loop_counters)
+
+    while True:
+        ready = take_ready(frontier_spec, frontier_state)
         if not ready:
-            # Nothing is ready yet but something is in-flight — shouldn't
-            # happen in a DAG without cycles, but guard against it.
-            break
+            break  # quiescence is normal graph completion
 
-        for n in ready:
-            pending.discard(n)
-            in_flight.add(n)
+        scheduled: list[tuple[str, int, tuple[str, ...], int]] = []
+        for node_id, epoch, enabled_edge_ids in ready:
+            step = await _reserve_step()
+            scheduled.append((node_id, epoch, enabled_edge_ids, step))
 
-        # Run all ready nodes concurrently; return_exceptions so one failure
-        # doesn't cancel siblings.
         if _sem is not None:
             _cap_sem = _sem
 
-            async def _run_capped(node_id: str) -> None:
+            async def _run_capped(
+                node_id: str,
+                step: int,
+                enabled_edge_ids: tuple[str, ...],
+            ) -> None:
                 async with _cap_sem:
-                    await _run_node(node_id)
+                    await _run_node(node_id, step, enabled_edge_ids)
 
-            results = await asyncio.gather(*[_run_capped(n) for n in ready], return_exceptions=True)
+            results = await asyncio.gather(
+                *[
+                    _run_capped(node_id, step, enabled_edge_ids)
+                    for node_id, _epoch, enabled_edge_ids, step in scheduled
+                ],
+                return_exceptions=True,
+            )
         else:
-            results = await asyncio.gather(*[_run_node(n) for n in ready], return_exceptions=True)
+            results = await asyncio.gather(
+                *[
+                    _run_node(node_id, step, enabled_edge_ids)
+                    for node_id, _epoch, enabled_edge_ids, step in scheduled
+                ],
+                return_exceptions=True,
+            )
 
-        for n in ready:
-            in_flight.discard(n)
-
-        # Process results: handle isolated vs fail-fast nodes.
         first_fail_exc: BaseException | None = None
-        for n, res in zip(ready, results):
-            if not isinstance(res, BaseException):
+        successful: list[tuple[str, int, dict[str, bool]]] = []
+        for (node_id, epoch, _enabled_edge_ids, _step), result in zip(
+            scheduled,
+            results,
+            strict=True,
+        ):
+            if not isinstance(result, BaseException):
+                successful.append((node_id, epoch, _resolve_outgoing(node_id)))
                 continue
-            # WorkflowPaused / WorkflowBudgetExceeded are not node failures — propagate immediately.
-            if isinstance(res, (WorkflowPaused, WorkflowBudgetExceeded)):
-                raise res
-            node_def = node_map[n]
+            if isinstance(result, (WorkflowPaused, WorkflowBudgetExceeded)):
+                raise result
+            node_def = node_map[node_id]
             if node_def.on_error == "isolate":
-                failed[n] = f"{type(res).__name__}: {res}"
-                # Mark node + all transitive successors as isolated so they never run.
-                isolated.add(n)
-                isolated.update(_transitive_successors(n))
-            else:
-                # Default fail-fast: remember first exception; re-raise after cleanup.
-                if first_fail_exc is None:
-                    first_fail_exc = res
+                failed[node_id] = f"{type(result).__name__}: {result}"
+                scope = {node_id} | _transitive_successors(node_id)
+                isolated.update(scope)
+                isolate_nodes(frontier_state, scope)
+            elif first_fail_exc is None:
+                first_fail_exc = result
 
         if first_fail_exc is not None:
             raise first_fail_exc
 
-        # Remove any newly-isolated nodes that may have been queued already.
-        pending -= isolated
+        strict_edge_id = complete_batch(
+            frontier_spec,
+            frontier_state,
+            successful,
+            loop_counters,
+        )
+        if strict_edge_id is not None:
+            raise _strict_loop_error(edge_by_id[strict_edge_id])
 
-        # Check loop back-edges before discovering normal successors
-        _activate_loops(ready, pending)
-
-        # Discover newly unblocked nodes (skip isolated sub-tree)
-        for n in ready:
-            for succ in _successors(n):
-                if succ not in completed and succ not in in_flight and succ not in isolated:
-                    pending.add(succ)
+        # Keep the existing checkpoint-facing completed view aligned with the
+        # current-generation frontier state after loop invalidation.
+        frontier_completed = frontier_state["completed"]
+        assert isinstance(frontier_completed, dict)
+        completed.clear()
+        completed.update(str(node_id) for node_id in frontier_completed)
+        # Persist the graph transition (loop counters + invalidated completion view)
+        # using the existing checkpoint schema, closing the post-node crash window.
+        _save_checkpoint()
 
     last = stack[-1] if stack else {}
     runtime: dict[str, Any] = {
