@@ -17,25 +17,25 @@
       "type": "agent",
       "backend": "claude-cli",
       "model": "sonnet",
-      "inputs": [{"name": "source", "type": "string"}],
+      "inputs": [{"name": "source", "schema": {"type": "string"}}],
       "system_prompt": "You are a concise engineering-ops summarizer.",
       "prompt": "Write a short weekday-morning digest for: {{$.source}}\n\nFields:\n- headline: one line, the single most important thing\n- items: an array of up to 3 short bullet strings\n- needs_attention: true if anything looks urgent",
       "outputs": [
-        {"name": "headline", "type": "string"},
-        {"name": "items", "type": "array"},
-        {"name": "needs_attention", "type": "boolean"}
+        {"name": "headline", "schema": {"type": "string"}},
+        {"name": "items", "schema": {"type": "array"}},
+        {"name": "needs_attention", "schema": {"type": "boolean"}}
       ]
     },
     {
       "id": "format",
       "type": "script",
       "inputs": [
-        {"name": "headline", "type": "string"},
-        {"name": "items", "type": "array"},
-        {"name": "needs_attention", "type": "boolean"}
+        {"name": "headline", "schema": {"type": "string"}},
+        {"name": "items", "schema": {"type": "array"}},
+        {"name": "needs_attention", "schema": {"type": "boolean"}}
       ],
       "code": "def format(ctx, headline, items, needs_attention):\n    flag = ' [!]' if needs_attention else ''\n    body = '\\n'.join(f'- {i}' for i in items)\n    return {'digest': f'{headline}{flag}\\n{body}'}",
-      "outputs": [{"name": "digest", "type": "object"}]
+      "outputs": [{"name": "digest", "schema": {"type": "object"}}]
     }
   ],
   "edges": [

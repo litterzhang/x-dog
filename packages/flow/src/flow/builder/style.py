@@ -113,8 +113,3 @@ def pad(cell: str, width: int) -> str:
     if shown < width:
         result += " " * (width - shown)
     return result
-
-
-def fit(cell: str, width: int) -> str:
-    """Alias of :func:`pad` — pad/truncate to *width* display columns."""
-    return pad(cell, width)

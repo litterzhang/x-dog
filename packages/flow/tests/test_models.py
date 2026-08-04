@@ -165,7 +165,7 @@ def test_agent_output_schema_derived_from_multi_ports() -> None:
     node = NodeDef(
         id="n1",
         type="agent",
-        output_ports=(Port("summary", "string"), Port("count", "integer")),
+        output_ports=(Port("summary", schema={"type": "string"}), Port("count", schema={"type": "integer"})),
     )
     assert agent_is_structured(node) is True
     assert agent_output_schema(node) == {

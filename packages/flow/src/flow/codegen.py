@@ -300,36 +300,6 @@ def _condition_to_expr(cond: Condition, container: ContainerExpr) -> str:
     return "True"
 
 
-def _condition_to_negated_expr(cond: Condition, container: ContainerExpr) -> str:
-    """Negation of :func:`_condition_to_expr`, emitted directly (ruff-clean break)."""
-    if cond.op == "equals":
-        return f"{_str_expr(cond.value or '', container)} != {_str_expr(cond.text or '', container)}"
-    if cond.op == "contains":
-        return f"{_str_expr(cond.text or '', container)} not in {_str_expr(cond.value or '', container)}"
-    if cond.op in _NUM_OP_PY:
-        left = _str_expr(cond.value or "", container)
-        right = _str_expr(cond.text or "", container)
-        return f"not _ncmp({left}, {right}, {cond.op!r})"
-    if cond.op == "not":
-        return _condition_to_expr(cond.children[0], container)
-    if cond.op == "and":
-        return " or ".join(f"({_condition_to_negated_expr(c, container)})" for c in cond.children)
-    if cond.op == "or":
-        return " and ".join(f"({_condition_to_negated_expr(c, container)})" for c in cond.children)
-    return "False"
-
-
-def _src_container_expr(safe_ids: dict[str, str], src: str) -> ContainerExpr:
-    """State container for an edge condition: the SOURCE node's output ports.
-
-    Uses ``_OUT.get(node, {})`` so a guard that references a node which has not
-    run yet (e.g. a self-loop's first-iteration check) resolves to '' instead of
-    a ``KeyError``.
-    """
-    key = IN_NODE_ID if src == IN_NODE_ID else src
-    return f"_OUT.get({key!r}, {{}})"
-
-
 def _wrap_string_expr(expr: str, indent: int = 4) -> str:
     """Return expr; append ``# noqa: E501`` if the assignment line would exceed 120 chars."""
     prefix = " " * indent
@@ -430,16 +400,11 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef, *, step_expr: str = "len(_
     return lines
 
 
-def _retry_spec(node: NodeDef, wf: WorkflowDef) -> str:
-    """Emit the keyword args passed to ``_drive`` carrying this node's policy."""
+def _retry_spec(node: NodeDef) -> str:
+    """Emit retry and memo arguments passed to the generated node driver."""
     max_attempts = 1 + (node.retry.max if node.retry is not None else 0)
     backoff = node.retry.backoff if node.retry is not None else 0.0
-    isolate = node.on_error == "isolate"
-    succs = tuple(_transitive_successors_ids(node.id, wf)) if isolate else ()
-    return (
-        f"retry_max={max_attempts}, backoff={backoff!r}, deterministic={node.deterministic!r}, "
-        f"isolate={isolate!r}, isolated_succs={succs!r}"
-    )
+    return f"retry_max={max_attempts}, backoff={backoff!r}, deterministic={node.deterministic!r}"
 
 
 def _incoming_fan_out_edge(node_id: str, wf: WorkflowDef) -> EdgeDef | None:
@@ -911,7 +876,7 @@ def _render_dispatch(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
             else:
                 call = (
                     f"_drive({node.id!r}, node_{safe}, _inputs_{safe}, _store_{safe}, "
-                    f"step, enabled_edges, {_retry_spec(node, wf)})"
+                    f"step, enabled_edges, {_retry_spec(node)})"
                 )
             lines.append(f"        await {call}" if len(call) <= 105 else f"        await {call}  # noqa: E501")
     if not wf.nodes:
@@ -1086,7 +1051,6 @@ def generate(wf: WorkflowDef) -> str:
         node_functions=node_functions,
         frontier_runtime=render_frontier_runtime(),
         checkpoint_runtime=render_checkpoint_interceptor(),
-        provider=wf.provider,
         provider_init=provider_init,
         sdk_imports=sdk_imports,
         sdk_registry=sdk_registry,
@@ -1094,7 +1058,6 @@ def generate(wf: WorkflowDef) -> str:
         registry_line=registry_line,
         main_body=main_body,
         script_imports=_render_script_imports(wf, safe_ids),
-        tool_registration=_render_tool_registration(wf),
         concurrency_boilerplate=concurrency_boilerplate,
         signals_boilerplate=signals_boilerplate,
         signals_main_init=signals_main_init,

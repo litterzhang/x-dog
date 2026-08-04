@@ -77,15 +77,8 @@ def test_roundtrip_rich() -> None:
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
-def test_workflow_version_preserves_previous_positional_arguments() -> None:
-    """Adding version must not rebind the old positional initial_state argument."""
-    wf = WorkflowDef("positional", "copilot", "a", (NodeDef(id="a"),), (), "m", (("seed", "x"),))
-    assert wf.initial_state == (("seed", "x"),)
-    assert wf.version == ""
-
-
-def test_roundtrip_optional_input_port() -> None:
-    """An optional input port survives serialize -> parse (object form, optional:true)."""
+def test_roundtrip_non_required_input_port() -> None:
+    """A non-required input survives canonical schema serialization."""
     wf = WorkflowDef(
         name="opt",
         provider="copilot",
@@ -97,7 +90,7 @@ def test_roundtrip_optional_input_port() -> None:
                 id="a",
                 type="agent",
                 # a plain string optional port must still emit the object form
-                input_ports=(Port("topic"), Port("feedback", optional=True)),
+                input_ports=(Port("topic"), Port("feedback", required=False)),
                 prompt="{{topic}} {{feedback}}",
                 output_ports=(Port("answer"),),
             ),
@@ -122,9 +115,8 @@ def test_roundtrip_optional_input_port() -> None:
         ),
     )
     dumped = workflow_to_dict(wf)
-    # the optional flag is emitted in the object form
     a_inputs = next(n for n in dumped["nodes"] if n["id"] == "a")["inputs"]
-    assert {"name": "feedback", "type": "string", "optional": True} in a_inputs
+    assert {"name": "feedback", "schema": {"type": "string"}, "required": False} in a_inputs
     assert parse_workflow(dumped) == wf
 
 
@@ -145,7 +137,7 @@ def test_roundtrip_nested_schema_port() -> None:
             NodeDef(
                 id="a",
                 type="script",
-                input_ports=(Port("topic", "string"),),
+                input_ports=(Port("topic", schema={"type": "string"}),),
                 code="def a(ctx, topic):\n    return {'owner': topic, 'tasks': []}",
                 output_ports=(Port("plan", schema=plan_schema),),
             ),
@@ -154,7 +146,7 @@ def test_roundtrip_nested_schema_port() -> None:
     )
     dumped = workflow_to_dict(wf)
     a_outputs = next(n for n in dumped["nodes"] if n["id"] == "a")["outputs"]
-    assert a_outputs == [{"name": "plan", "schema": plan_schema}]
+    assert a_outputs == [{"name": "plan", "schema": plan_schema, "required": True}]
     assert parse_workflow(dumped) == wf
 
 

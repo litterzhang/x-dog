@@ -261,34 +261,32 @@ def _load_checkpoint() -> None:
         return
     with p.open(encoding="utf-8") as _fh:
         _snap: dict[str, object] = json.load(_fh)
+    expected = {"outputs", "completed", "loop_counters", "stack", "out_live", "memo", "tokens_used"}
+    if set(_snap) != expected:
+        raise WorkflowExecutionError("checkpoint does not match the current seven-field schema")
+    _out, _done = _snap["outputs"], _snap["completed"]
+    _lc, _stk = _snap["loop_counters"], _snap["stack"]
+    _outp, _mem, _tok = _snap["out_live"], _snap["memo"], _snap["tokens_used"]
+    if not isinstance(_out, dict) or not isinstance(_done, list):
+        raise WorkflowExecutionError("checkpoint outputs/completed have invalid types")
+    if not isinstance(_lc, dict) or not isinstance(_stk, list):
+        raise WorkflowExecutionError("checkpoint loop_counters/stack have invalid types")
+    if not isinstance(_outp, dict) or not isinstance(_mem, dict) or not isinstance(_tok, int):
+        raise WorkflowExecutionError("checkpoint out_live/memo/tokens_used have invalid types")
     _CHECKPOINT_LOADED = True
-    _out = _snap.get("outputs")
-    if isinstance(_out, dict):
-        _OUT.clear()
-        _OUT.update(_out)  # type: ignore[arg-type]
-    _done = _snap.get("completed")
-    if isinstance(_done, list):
-        _COMPLETED.update(_done)  # type: ignore[arg-type]
-    _stk = _snap.get("stack")
-    if isinstance(_stk, list):
-        _STACK.extend(_stk)  # type: ignore[arg-type]
-    _outp = _snap.get("out_live")
-    if isinstance(_outp, dict):
-        _OUTPUT.update(_outp)  # type: ignore[arg-type]
-    _mem = _snap.get("memo")
-    if isinstance(_mem, dict):
-        for _mk, _mv in _mem.items():
-            if isinstance(_mv, dict):
-                _MEMO[str(_mk)] = dict(_mv)  # type: ignore[arg-type]
+    _OUT.clear()
+    _OUT.update(_out)  # type: ignore[arg-type]
+    _COMPLETED.update(str(node_id) for node_id in _done)
+    _STACK.extend(frame for frame in _stk if isinstance(frame, dict))  # type: ignore[arg-type]
+    _OUTPUT.update(_outp)  # type: ignore[arg-type]
+    for _mk, _mv in _mem.items():
+        if isinstance(_mv, dict):
+            _MEMO[str(_mk)] = dict(_mv)  # type: ignore[arg-type]
     global _TOKENS_USED
-    _tok = _snap.get("tokens_used")
-    if isinstance(_tok, int):
-        _TOKENS_USED = _tok
-    _lc = _snap.get("loop_counters")
-    if isinstance(_lc, dict):
-        for _lk, _lv in _lc.items():
-            if isinstance(_lv, int):
-                _LOOP_COUNTERS[str(_lk)] = _lv
+    _TOKENS_USED = _tok
+    for _lk, _lv in _lc.items():
+        if isinstance(_lv, int):
+            _LOOP_COUNTERS[str(_lk)] = _lv
 
 
 def _checkpoint_snapshot() -> dict[str, object]:
@@ -514,10 +512,8 @@ async def _drive(
     retry_max: int,
     backoff: float,
     deterministic: bool,
-    isolate: bool,
-    isolated_succs: tuple[str, ...],
 ) -> None:
-    """Generic node driver: guards, inputs, memo, retry, store, budget, checkpoint.
+    """Generic node driver: guards, inputs, memo, retry, store, and budget.
 
     ``node_fn`` is the pure node function (``provider, ctx, **inputs`` ->
     ``(outputs, tokens)``); ``inputs_fn`` assembles ``ins`` from ``_OUT``;
@@ -572,7 +568,6 @@ async def _drive(
             "NodeFailed node=%s step=%d duration_s=%f error=%s",
             node_id, step, time.monotonic() - _t0, f"{type(_ev_exc).__name__}: {_ev_exc}",
         )
-        _ = isolate, isolated_succs  # scheduler applies isolation after the whole ready batch settles
         raise
 
 

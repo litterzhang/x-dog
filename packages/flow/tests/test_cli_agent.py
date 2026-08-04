@@ -72,8 +72,9 @@ def test_mcp_servers_without_backend_rejected() -> None:
         "name": "x",
         "provider": "copilot",
         "entry": "a",
-        "nodes": [{"id": "a", "type": "agent", "prompt": "hi",
-                   "mcp_servers": {"gh": {"url": "https://x"}}, "outputs": ["o"]}],
+        "nodes": [
+            {"id": "a", "type": "agent", "prompt": "hi", "mcp_servers": {"gh": {"url": "https://x"}}, "outputs": ["o"]}
+        ],
         "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
     }
     with pytest.raises(WorkflowValidationError, match="require a CLI"):
@@ -86,11 +87,14 @@ def test_mcp_server_spec_must_be_object() -> None:
 
 
 def test_cli_fields_parsed() -> None:
-    wf = parse_workflow(_cli_wf(
-        allowed_tools=["Read", "mcp__github__create_issue"],
-        mcp_servers={"github": {"command": "npx", "args": ["-y", "@mcp/github"],
-                                "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}}},
-    ))
+    wf = parse_workflow(
+        _cli_wf(
+            allowed_tools=["Read", "mcp__github__create_issue"],
+            mcp_servers={
+                "github": {"command": "npx", "args": ["-y", "@mcp/github"], "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}}
+            },
+        )
+    )
     n = wf.nodes[0]
     assert n.backend == "claude-cli"
     assert n.allowed_tools == ("Read", "mcp__github__create_issue")
@@ -101,10 +105,12 @@ def test_cli_fields_parsed() -> None:
 
 
 def test_cli_node_roundtrips() -> None:
-    wf = parse_workflow(_cli_wf(
-        allowed_tools=["Read"],
-        mcp_servers={"github": {"command": "npx", "args": ["-y", "@mcp/github"]}},
-    ))
+    wf = parse_workflow(
+        _cli_wf(
+            allowed_tools=["Read"],
+            mcp_servers={"github": {"command": "npx", "args": ["-y", "@mcp/github"]}},
+        )
+    )
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
@@ -116,8 +122,14 @@ def test_mixed_sdk_and_cli_agents_ok_with_provider() -> None:
         "entry": "sdk",
         "nodes": [
             {"id": "sdk", "type": "agent", "prompt": "hi", "outputs": ["mid"]},
-            {"id": "cli", "type": "agent", "backend": "claude-cli",
-             "inputs": ["mid"], "prompt": "{{mid}}", "outputs": ["out"]},
+            {
+                "id": "cli",
+                "type": "agent",
+                "backend": "claude-cli",
+                "inputs": ["mid"],
+                "prompt": "{{mid}}",
+                "outputs": ["out"],
+            },
         ],
         "edges": [
             {"from": "sdk", "to": "cli", "map": {"mid": "mid"}},
@@ -129,7 +141,7 @@ def test_mixed_sdk_and_cli_agents_ok_with_provider() -> None:
 
 # --- Phase 3: CLI runner + claude adapter (interpreter) --------------------
 
-_FAKE_CLAUDE = '''#!/usr/bin/env python3
+_FAKE_CLAUDE = """#!/usr/bin/env python3
 import sys, json
 argv = sys.argv[1:]
 prompt = sys.stdin.read()
@@ -153,7 +165,7 @@ if schema is not None:
 else:
     env["result"] = "TEXT|model=%s|tools=%s|sys=%s|prompt=%s" % (model, allowed, sysp, prompt.strip())
 print(json.dumps(env))
-'''
+"""
 
 
 def _install_fake_cli(tmp_path: pathlib.Path, script: str, name: str = "fake_claude") -> str:
@@ -178,9 +190,20 @@ async def test_cli_runner_text_agent(tmp_path: pathlib.Path, monkeypatch: Any) -
 async def test_cli_runner_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
     d = {
-        "name": "s", "entry": "a",
-        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "prompt": "plan",
-                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "name": "s",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "type": "agent",
+                "backend": "claude-cli",
+                "prompt": "plan",
+                "outputs": [
+                    {"name": "title", "schema": {"type": "string"}},
+                    {"name": "n", "schema": {"type": "integer"}},
+                ],
+            }
+        ],
         "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
     }
     r = await execute(parse_workflow(d))
@@ -200,11 +223,11 @@ async def test_cli_runner_no_provider_needed(tmp_path: pathlib.Path, monkeypatch
 async def test_cli_runner_nonzero_exit_raises(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
     from flow.errors import WorkflowExecutionError
 
-    bad = '''#!/usr/bin/env python3
+    bad = """#!/usr/bin/env python3
 import sys
 sys.stderr.write("boom")
 sys.exit(3)
-'''
+"""
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, bad, name="bad_claude"))
     with pytest.raises(WorkflowExecutionError, match="exited 3: boom"):
         await execute(parse_workflow(_cli_wf()))
@@ -212,7 +235,7 @@ sys.exit(3)
 
 # --- Phase 4: codex adapter ------------------------------------------------
 
-_FAKE_CODEX = '''#!/usr/bin/env python3
+_FAKE_CODEX = """#!/usr/bin/env python3
 import sys, json
 argv = sys.argv[1:]
 prompt = sys.stdin.read()
@@ -236,14 +259,18 @@ else:
 print(json.dumps({"type": "thread.started"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 9}}))
-'''
+"""
 
 
 def _codex_wf(**node_extra: Any) -> dict[str, Any]:
     node = {"id": "a", "type": "agent", "backend": "codex-cli", "prompt": "hi", "outputs": ["out"]}
     node.update(node_extra)
-    return {"name": "cx", "entry": "a", "nodes": [node],
-            "edges": [{"from": "a", "to": "$output", "map": {"out": "result"}}]}
+    return {
+        "name": "cx",
+        "entry": "a",
+        "nodes": [node],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "result"}}],
+    }
 
 
 async def test_codex_text_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
@@ -267,9 +294,20 @@ async def test_codex_folds_system_prompt_into_prompt(tmp_path: pathlib.Path, mon
 async def test_codex_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("FLOW_CLI_BIN_CODEX_CLI", _install_fake_cli(tmp_path, _FAKE_CODEX, name="fake_codex"))
     d = {
-        "name": "s", "entry": "a",
-        "nodes": [{"id": "a", "type": "agent", "backend": "codex-cli", "prompt": "plan",
-                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "name": "s",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "type": "agent",
+                "backend": "codex-cli",
+                "prompt": "plan",
+                "outputs": [
+                    {"name": "title", "schema": {"type": "string"}},
+                    {"name": "n", "schema": {"type": "integer"}},
+                ],
+            }
+        ],
         "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
     }
     r = await execute(parse_workflow(d))
@@ -278,14 +316,27 @@ async def test_codex_structured_agent(tmp_path: pathlib.Path, monkeypatch: Any) 
 
 # --- Phase 5: codegen CLI agent + parity (interpret == compile) ------------
 
+
 async def test_cli_agent_interpret_equals_compile(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
     """A CLI agent node produces identical output through execute() and codegen."""
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE))
     d = {
-        "name": "p", "entry": "a",
-        "nodes": [{"id": "a", "type": "agent", "backend": "claude-cli", "model": "sonnet",
-                   "prompt": "hi", "allowed_tools": ["Read"],
-                   "outputs": [{"name": "title", "type": "string"}, {"name": "n", "type": "integer"}]}],
+        "name": "p",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "type": "agent",
+                "backend": "claude-cli",
+                "model": "sonnet",
+                "prompt": "hi",
+                "allowed_tools": ["Read"],
+                "outputs": [
+                    {"name": "title", "schema": {"type": "string"}},
+                    {"name": "n", "schema": {"type": "integer"}},
+                ],
+            }
+        ],
         "edges": [{"from": "a", "to": "$output", "map": {"title": "title", "n": "n"}}],
     }
     wf = parse_workflow(d)
@@ -309,7 +360,9 @@ def test_cli_agent_codegen_calls_subprocess() -> None:
 def test_non_cli_workflow_emits_no_subprocess() -> None:
     """A script/SDK workflow's module must not contain the CLI subprocess helper call."""
     d = {
-        "name": "plain", "provider": "copilot", "entry": "a",
+        "name": "plain",
+        "provider": "copilot",
+        "entry": "a",
         "nodes": [{"id": "a", "type": "agent", "prompt": "hi", "outputs": ["out"]}],
         "edges": [{"from": "a", "to": "$output", "map": {"out": "result"}}],
     }
@@ -323,14 +376,15 @@ def test_cli_agent_generated_module_ruff_clean(tmp_path: pathlib.Path) -> None:
     p.write_text(src, encoding="utf-8")
     r = subprocess.run(
         [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(p)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"ruff failed:\n{r.stdout}\n{r.stderr}"
 
 
 # --- Phase 6: MCP server config + ${ENV} interpolation ---------------------
 
-_FAKE_CLAUDE_MCP = '''#!/usr/bin/env python3
+_FAKE_CLAUDE_MCP = """#!/usr/bin/env python3
 import sys, json
 argv = sys.argv[1:]
 sys.stdin.read()
@@ -341,15 +395,17 @@ while i < len(argv):
     i += 1
 cfg = open(mcp).read() if mcp else "NONE"
 print(json.dumps({"input_tokens": 1, "output_tokens": 1, "result": cfg}))
-'''
+"""
 
 
 async def test_mcp_config_generated_with_env_interpolation(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE_MCP, name="fc_mcp"))
     monkeypatch.setenv("GITHUB_TOKEN", "secret-tok")
-    wf = parse_workflow(_cli_wf(
-        mcp_servers={"github": {"command": "npx", "env": {"TOKEN": "${GITHUB_TOKEN}"}}},
-    ))
+    wf = parse_workflow(
+        _cli_wf(
+            mcp_servers={"github": {"command": "npx", "env": {"TOKEN": "${GITHUB_TOKEN}"}}},
+        )
+    )
     r = await execute(wf)
     cfg = r.runtime["out"]["result"]
     assert "secret-tok" in cfg  # resolved from env
@@ -413,9 +469,17 @@ def test_pure_cli_module_imports_no_agent_ai() -> None:
 
 def test_script_only_module_imports_no_agent_ai() -> None:
     d = {
-        "name": "s", "entry": "a",
-        "nodes": [{"id": "a", "type": "script", "inputs": [{"name": "x", "type": "string"}],
-                   "code": "def a(ctx, x):\n    return x.upper()", "outputs": ["y"]}],
+        "name": "s",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "x", "schema": {"type": "string"}}],
+                "code": "def a(ctx, x):\n    return x.upper()",
+                "outputs": ["y"],
+            }
+        ],
         "edges": [{"from": "$in", "to": "a", "map": {"x": "x"}}, {"from": "a", "to": "$output", "map": {"y": "r"}}],
         "state": {"x": "hi"},
     }
@@ -425,7 +489,9 @@ def test_script_only_module_imports_no_agent_ai() -> None:
 
 def test_sdk_module_still_imports_agent_ai() -> None:
     d = {
-        "name": "sdk", "provider": "copilot", "entry": "a",
+        "name": "sdk",
+        "provider": "copilot",
+        "entry": "a",
         "nodes": [{"id": "a", "type": "agent", "prompt": "hi", "outputs": ["out"]}],
         "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
     }
@@ -448,7 +514,7 @@ def test_pure_cli_bundle_drops_ai_agent(tmp_path: pathlib.Path) -> None:
 
 # --- regression: real claude nests tokens under "usage" (found by dogfooding) ---
 
-_FAKE_CLAUDE_REAL_ENVELOPE = '''#!/usr/bin/env python3
+_FAKE_CLAUDE_REAL_ENVELOPE = """#!/usr/bin/env python3
 import sys, json
 sys.stdin.read()
 # mirror the REAL claude -p --output-format json envelope: tokens under "usage"
@@ -458,7 +524,7 @@ print(json.dumps({
     "usage": {"input_tokens": 123, "output_tokens": 45},
     "total_cost_usd": 0.01,
 }))
-'''
+"""
 
 
 async def test_cli_runner_reads_tokens_from_usage(tmp_path: pathlib.Path, monkeypatch: Any) -> None:

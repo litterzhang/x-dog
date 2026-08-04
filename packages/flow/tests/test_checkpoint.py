@@ -97,6 +97,20 @@ def test_save_creates_dir(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_executor_rejects_incomplete_checkpoint_schema(tmp_path: Path) -> None:
+    store = JSONFileCheckpointStore(tmp_path)
+    store.save("old", {"outputs": {"$in": {}}, "completed": []})
+    wf = WorkflowDef(
+        name="strict-checkpoint",
+        provider="",
+        entry="a",
+        nodes=(NodeDef(id="a", type="script", code="def a(ctx):\n    return None"),),
+        edges=(),
+    )
+    with pytest.raises(Exception, match="current seven-field schema"):
+        await execute(wf, checkpoint=store, run_id="old")
+
+
 class RecordingCheckpointStore:
     def __init__(self) -> None:
         self.snapshots: list[dict[str, Any]] = []

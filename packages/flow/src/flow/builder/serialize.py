@@ -29,23 +29,19 @@ def _condition_to_dict(cond: Condition) -> dict[str, Any]:
 
 
 def _ports_to_json(ports: tuple[Port, ...]) -> list[Any]:
-    """Emit a port list: bare name for a plain required ``string`` port; else an
-    object with ``type`` (scalar) or ``schema`` (nested), plus ``optional`` when
-    the port is not required.  The loader lifts these back into schema/required."""
+    """Emit bare required strings or canonical ``schema``/``required`` objects."""
     out: list[Any] = []
-    for p in ports:
-        is_scalar = set(p.schema.keys()) <= {"type"}
-        if is_scalar and p.type == "string" and p.required:
-            out.append(p.name)
-            continue
-        obj: dict[str, Any] = {"name": p.name}
-        if is_scalar:
-            obj["type"] = p.type
+    for port in ports:
+        if port.schema == {"type": "string"} and port.required:
+            out.append(port.name)
         else:
-            obj["schema"] = p.schema
-        if not p.required:
-            obj["optional"] = True
-        out.append(obj)
+            out.append(
+                {
+                    "name": port.name,
+                    "schema": port.schema,
+                    "required": port.required,
+                }
+            )
     return out
 
 
@@ -122,8 +118,6 @@ def workflow_to_dict(wf: WorkflowDef) -> dict[str, Any]:
         "name": wf.name,
         "provider": wf.provider,
     }
-    if wf.version:
-        data["version"] = wf.version
     if wf.default_model:
         data["defaults"] = {"model": wf.default_model}
     if wf.entry:

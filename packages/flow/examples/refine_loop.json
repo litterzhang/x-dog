@@ -12,7 +12,7 @@
     {
       "id": "draft",
       "type": "agent",
-      "inputs": ["topic", {"name": "feedback", "optional": true}],
+      "inputs": ["topic", {"name": "feedback", "schema": {"type": "string"}, "required": false}],
       "system_prompt": "You are a careful writer. Produce a concise, accurate 2-3 sentence answer to the topic. If reviewer feedback is provided, revise the answer to address every point.",
       "prompt": "Topic: {{$.topic}}\n\nReviewer feedback (may be empty on the first pass):\n{{$.feedback}}\n\nWrite or improve the answer now. Reply with ONLY the answer text.",
       "outputs": ["answer"]

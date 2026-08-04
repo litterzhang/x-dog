@@ -343,8 +343,6 @@ ramifications.
   including paths such as `{{ $.plan.tasks[0] }}`.
 - A source sub-field may map directly into `$output`, for example
   `"$.verdict.within_budget": "within_budget"`; missing leaves are omitted.
-- Optional top-level `version` is a wire-format compatibility marker. The loader
-  preserves it through serialization and emits `FlowWarning` for a newer major.
 
 **Non-goals (unchanged):** distributed execution, multi-tenancy, external
 telemetry export, compensation/rollback. Dynamic fan-out (G1) is *single-machine*

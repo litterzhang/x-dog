@@ -43,10 +43,6 @@ logger = logging.getLogger(__name__)
 # out to that CLI instead of the in-process SDK.
 _KNOWN_CLI_BACKENDS = frozenset({"claude-cli", "codex-cli"})
 
-# The highest workflow wire-format MAJOR version this loader understands.  A
-# workflow declaring a newer major warns (it may use fields this loader drops).
-_CURRENT_MAJOR = 1
-
 # Default loop bound for ``while`` sugar when no explicit ``max`` is given: a safe
 # ceiling so a non-converging condition fails loudly (non-convergence error)
 # instead of spinning forever.  An author who needs more iterations sets an
@@ -79,10 +75,9 @@ def _parse_condition(data: Any) -> Condition:
 def _parse_ports(raw: Any) -> tuple[Port, ...]:
     """Parse an ``inputs``/``outputs`` list.
 
-    Each entry is a bare name (a required ``string`` port) or an object.  The
-    object form accepts the legacy ``{name, type, optional}`` and the new
-    ``{name, schema, required}`` (a nested JSON Schema).  ``optional: true`` maps
-    to ``required: false``.
+    Each entry is a bare name (a required string port) or a canonical object:
+    ``{name, schema, required}``. The schema is a JSON Schema fragment and
+    ``required`` defaults to true.
     """
     if not raw:
         return ()
@@ -96,30 +91,17 @@ def _parse_ports(raw: Any) -> tuple[Port, ...]:
 
 
 def _port_from_obj(item: dict[str, Any]) -> Port:
-    """Build a Port from an object entry (legacy type/optional or new schema/required)."""
+    """Build a typed port from the canonical object form."""
     name = str(item["name"])
     schema = item.get("schema")
-    if isinstance(schema, dict):
-        required = bool(item.get("required", not item.get("optional", False)))
-        return Port(name=name, schema=schema, required=required)
-    # Legacy scalar form: {name, type?, optional?}
-    return Port(
-        name=name,
-        type=str(item.get("type", "string")),
-        optional=bool(item.get("optional", False)),
-    )
+    if not isinstance(schema, dict):
+        raise WorkflowValidationError(f"Port {name!r}: object form requires a 'schema' object")
+    return Port(name=name, schema=schema, required=bool(item.get("required", True)))
 
 
 def _parse_output_ports(data: dict[str, Any]) -> tuple[Port, ...]:
-    """Output ports from ``outputs`` (list) or the ``output`` singular sugar."""
-    if "outputs" in data:
-        return _parse_ports(data["outputs"])
-    raw = data.get("output")
-    if raw is None:
-        return ()
-    if isinstance(raw, dict):
-        return (_port_from_obj(raw),)
-    return (Port(name=str(raw)),)
+    """Parse the canonical plural ``outputs`` port list."""
+    return _parse_ports(data.get("outputs", []))
 
 
 def _parse_node(
@@ -162,7 +144,7 @@ def _parse_node(
     sub_output_ports: tuple[Port, ...] = _parse_output_ports(data)
     if node_type == "subflow":
         raw_child = data.get("subflow")
-        if data.get("inputs") or data.get("outputs") or data.get("output"):
+        if data.get("inputs") or data.get("outputs"):
             raise WorkflowValidationError(
                 f"Subflow node {node_id!r}: must not declare 'inputs'/'outputs' — they are "
                 f"derived from the child workflow's signature"
@@ -417,8 +399,6 @@ def parse_workflow(
     provider = str(data.get("provider", ""))
     entry = str(data.get("entry", ""))
     default_model = str(data.get("defaults", {}).get("model", ""))
-    version = str(data.get("version", ""))
-
     raw_state = data.get("state", {})
     initial_state: tuple[tuple[str, object], ...]
     if isinstance(raw_state, dict):
@@ -471,7 +451,6 @@ def parse_workflow(
         nodes=nodes,
         edges=edges,
         default_model=default_model,
-        version=version,
         initial_state=initial_state,
         in_schema=in_schema,
         tool_refs=tool_refs,
@@ -959,20 +938,6 @@ def _validate_subflow_node(node: NodeDef) -> None:
 
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
-    # Wire-format version: a newer MAJOR than this loader understands warns (it may
-    # rely on fields this loader silently ignored).  An unparseable version errors.
-    if wf.version:
-        try:
-            major = int(wf.version.split(".", 1)[0])
-        except ValueError:
-            raise WorkflowValidationError(f"version must start with an integer major, got {wf.version!r}") from None
-        if major > _CURRENT_MAJOR:
-            warnings.warn(
-                f"workflow version {wf.version!r} has a newer major than this loader understands "
-                f"(v{_CURRENT_MAJOR}); some fields may be ignored.",
-                FlowWarning,
-                stacklevel=2,
-            )
     node_ids = [n.id for n in wf.nodes]
 
     for nid in node_ids:

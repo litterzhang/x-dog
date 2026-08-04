@@ -15,11 +15,11 @@
       "inputs": [
         {
           "name": "thesis",
-          "type": "string"
+          "schema": {"type": "string"}
         },
         {
           "name": "points",
-          "type": "array"
+          "schema": {"type": "array"}
         }
       ],
       "system_prompt": "You are an essayist. Write a single tight paragraph (120-160 words).",
@@ -34,7 +34,7 @@
       "inputs": [
         {
           "name": "essay_draft",
-          "type": "string"
+          "schema": {"type": "string"}
         }
       ],
       "system_prompt": "You are a demanding writing critic. Score rigor and clarity from 0 to 10.",
@@ -42,11 +42,11 @@
       "outputs": [
         {
           "name": "score",
-          "type": "number"
+          "schema": {"type": "number"}
         },
         {
           "name": "feedback",
-          "type": "string"
+          "schema": {"type": "string"}
         }
       ]
     },
@@ -56,11 +56,11 @@
       "inputs": [
         {
           "name": "essay_draft",
-          "type": "string"
+          "schema": {"type": "string"}
         },
         {
           "name": "feedback",
-          "type": "string"
+          "schema": {"type": "string"}
         }
       ],
       "system_prompt": "You are an essayist revising to address one specific critique.",

@@ -612,7 +612,7 @@ def test_functions_page_reads_run_source_from_subdir(tmp_path: pathlib.Path) -> 
         """{
           "name": "sub", "provider": "copilot", "defaults": {"model": "m"}, "entry": "scope",
           "nodes": [{"id": "scope", "type": "script", "run": "nodes:scope",
-                     "inputs": ["repo"], "output": "scope"}],
+                     "inputs": ["repo"], "outputs": ["scope"]}],
           "edges": [{"from": "$in", "to": "scope", "map": {"repo": "repo"}}],
           "state": {"repo": "/x"}
         }""",
@@ -732,7 +732,7 @@ def _subflow_wf_path(tmp_path: pathlib.Path) -> pathlib.Path:
     """A parent workflow with a subflow node, structured output, undeclared $in."""
     child = {
         "name": "up", "provider": "copilot", "entry": "u", "state": {"topic": "x"},
-        "nodes": [{"id": "u", "type": "script", "inputs": [{"name": "topic", "type": "string"}],
+        "nodes": [{"id": "u", "type": "script", "inputs": [{"name": "topic", "schema": {"type": "string"}}],
                    "code": "def u(ctx, topic):\n    return topic.upper()",
                    "outputs": [{"name": "verdict",
                                 "schema": {"type": "object", "properties": {"k": {"type": "string"}}}}]}],
@@ -742,7 +742,7 @@ def _subflow_wf_path(tmp_path: pathlib.Path) -> pathlib.Path:
     parent = {
         "name": "main", "provider": "copilot", "entry": "plan", "state": {"seed": "hi"},
         "nodes": [
-            {"id": "plan", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
+            {"id": "plan", "type": "script", "inputs": [{"name": "seed", "schema": {"type": "string"}}],
              "code": "def p(ctx, seed):\n    return seed", "outputs": ["topic"]},
             {"id": "review", "type": "subflow", "subflow": child},
         ],

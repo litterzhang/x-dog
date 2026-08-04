@@ -7,8 +7,8 @@ Python value named by its JSON type (``string`` → str, ``integer`` → int,
 Three conversions keep the interpreter and the generated module in agreement:
 
 * :func:`to_python` — the stored wire value INTO the Python value a script sees.
-  It is tolerant: an already-typed value passes through, and a ``str`` is parsed
-  (so a string-seeded ``$in`` or an old string-format checkpoint still loads).
+  An already-typed value passes through; string inputs from workflow state or CLI
+  overrides are parsed according to the destination port schema.
 * :func:`to_state` — a script's return value INTO the stored wire value, keeping
   structure (an ``object`` port stores a live dict, not a JSON string).
 * :func:`port_str` — the canonical string projection used whenever a structured
@@ -54,8 +54,8 @@ def _to_bool(value: object) -> bool:
 def to_python(value: object, json_type: str) -> Any:
     """Coerce a stored wire *value* into the Python type named by *json_type*.
 
-    Tolerant of both the type-native value (passed through) and a ``str`` form
-    (parsed) so string-seeded ``$in`` values and old checkpoints still load.
+    Accepts type-native values and parses string inputs supplied through workflow
+    state or CLI overrides according to the destination schema.
     """
     if json_type == "string":
         return value if isinstance(value, str) else port_str(value)

@@ -155,8 +155,9 @@ def test_codegen_isolation_guard_present() -> None:
     src = generate(wf)
     assert "_ISOLATED" in src
     assert "_FAILED" in src
-    # Isolation now lives in the generic _drive; the node opts in via its spec.
-    assert "isolate=True" in src
+    # Isolation is scheduler metadata, not a generic driver argument.
+    assert "_ISOLATE_SCOPES" in src
+    assert "isolate=True" not in src
 
 
 def test_codegen_no_isolation_for_default_node() -> None:

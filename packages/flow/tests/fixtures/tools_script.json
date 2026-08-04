@@ -12,9 +12,9 @@
     {
       "id": "prep",
       "type": "script",
-      "inputs": [{"name": "topic", "type": "string"}],
+      "inputs": [{"name": "topic", "schema": {"type": "string"}}],
       "code": "def prep(ctx, topic):\n    return topic",
-      "outputs": [{"name": "prepped", "type": "string"}]
+      "outputs": [{"name": "prepped", "schema": {"type": "string"}}]
     },
     {
       "id": "analyze",

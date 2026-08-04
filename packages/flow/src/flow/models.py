@@ -28,7 +28,7 @@ IN_NODE_ID = "$in"
 OUT_NODE_ID = "$output"
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class Port:
     """A named, JSON-Schema-typed data port on a node.
 
@@ -40,36 +40,17 @@ class Port:
     validated (not re-coerced) by fastjsonschema.
 
     ``required`` marks an **input** port that must be fed by an edge (the default).
-    ``required=False`` is the old ``optional``: a loop-carried value absent on the
-    first pass interpolates to ``""`` / a script sees the type's zero-value.
-    Ignored on output ports (they are always produced by their node).
+    A non-required loop-carried value may be absent on the first pass; interpolation
+    then yields ``""`` and scripts see the type's zero-value. Ignored on outputs.
 
-    The constructor stays backward-compatible: ``Port("n", "integer")`` and
-    ``Port("n", optional=True)`` still work, building the equivalent ``schema`` /
-    ``required``.  A structured port passes ``schema=`` directly.  ``type`` is a
-    convenience view of ``schema["type"]``.
+    Bare string ports use the default string schema. Typed/structured ports pass a
+    JSON Schema explicitly through ``schema``. ``type`` is a convenience view of
+    ``schema["type"]``.
     """
 
     name: str
-    schema: dict[str, object]
-    required: bool
-
-    def __init__(
-        self,
-        name: str,
-        type: str | None = None,  # noqa: A002 - legacy positional; builds schema
-        optional: bool | None = None,
-        *,
-        schema: dict[str, object] | None = None,
-        required: bool | None = None,
-    ) -> None:
-        if schema is None:
-            schema = {"type": type or "string"}
-        if required is None:
-            required = True if optional is None else not optional
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "schema", schema)
-        object.__setattr__(self, "required", required)
+    schema: dict[str, object] = field(default_factory=lambda: {"type": "string"})
+    required: bool = True
 
     @property
     def type(self) -> str:
@@ -236,11 +217,6 @@ class WorkflowDef:
     # None = run-once (current behaviour).  Read only by ``xdog-flow install`` — the
     # engine ignores it (a scheduler wraps the built bundle, unchanged execution).
     schedule: ScheduleDef | None = None
-    # Optional wire-format version (e.g. "1").  A forward-compat marker only —
-    # absent means unversioned (current behaviour); the loader warns on a newer
-    # MAJOR version it doesn't recognize so an old flow fails loudly, not subtly.
-    # Kept after all pre-existing fields to preserve positional constructor calls.
-    version: str = ""
 
 
 def _edge_fingerprint(edge: EdgeDef) -> str:

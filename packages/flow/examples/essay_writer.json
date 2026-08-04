@@ -14,7 +14,7 @@
       "inputs": [
         {
           "name": "question",
-          "type": "string"
+          "schema": {"type": "string"}
         }
       ],
       "system_prompt": "You are an essay strategist. Turn a question into a tight argumentative brief.",
@@ -22,11 +22,11 @@
       "outputs": [
         {
           "name": "thesis",
-          "type": "string"
+          "schema": {"type": "string"}
         },
         {
           "name": "key_points",
-          "type": "array"
+          "schema": {"type": "array"}
         }
       ]
     },
@@ -41,18 +41,18 @@
       "inputs": [
         {
           "name": "final_essay",
-          "type": "string"
+          "schema": {"type": "string"}
         },
         {
           "name": "score",
-          "type": "number"
+          "schema": {"type": "number"}
         }
       ],
       "code": "def wrap(ctx, final_essay, score):\n    return {\n        'word_count': len(final_essay.split()),\n        'critic_score': score,\n        'passed_review': score >= 7,\n    }",
       "outputs": [
         {
           "name": "report",
-          "type": "object"
+          "schema": {"type": "object"}
         }
       ]
     }

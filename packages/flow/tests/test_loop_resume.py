@@ -1,5 +1,5 @@
-"""Codegen loop resume — the generated module checkpoints its loop position and
-resumes mid-loop, aligned with the interpreter (docs: executor._save_checkpoint).
+"""Codegen loop resume — generated modules checkpoint coherent frontier batches
+and resume loop activations from persisted edge counters.
 
 Script-only loops (no LLM) so these run offline and deterministically.
 """
@@ -25,18 +25,36 @@ def _count_loop_wf(loop_max: int = 10, exit_at: int = 5, crash_code: str = "") -
     """a: n -> n+1 (with optional crash hook); b passes through; loop until d >= exit_at."""
     code_a = "def a(ctx, n):\n" + (crash_code or "") + "    return n + 1"
     return {
-        "name": "loop", "provider": "copilot", "entry": "a", "state": {"n": 0},
+        "name": "loop",
+        "provider": "copilot",
+        "entry": "a",
+        "state": {"n": 0},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "n", "type": "integer"}],
-             "code": code_a, "outputs": [{"name": "c", "type": "integer"}]},
-            {"id": "b", "type": "script", "inputs": [{"name": "c", "type": "integer"}],
-             "code": "def b(ctx, c):\n    return c", "outputs": [{"name": "d", "type": "integer"}]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "n", "schema": {"type": "integer"}}],
+                "code": code_a,
+                "outputs": [{"name": "c", "schema": {"type": "integer"}}],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "c", "schema": {"type": "integer"}}],
+                "code": "def b(ctx, c):\n    return c",
+                "outputs": [{"name": "d", "schema": {"type": "integer"}}],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"n": "n"}},
             {"from": "a", "to": "b", "map": {"c": "c"}},
-            {"from": "b", "to": "a", "map": {"d": "n"}, "loop": {"max": loop_max},
-             "when": {"lt": {"value": "{{d}}", "text": str(exit_at)}}},
+            {
+                "from": "b",
+                "to": "a",
+                "map": {"d": "n"},
+                "loop": {"max": loop_max},
+                "when": {"lt": {"value": "{{d}}", "text": str(exit_at)}},
+            },
             {"from": "b", "to": "$output", "map": {"d": "r"}},
         ],
     }
@@ -229,12 +247,25 @@ def test_generated_resume_rejects_input_override(tmp_path: pathlib.Path, monkeyp
 def _nested_loop_wf() -> dict[str, Any]:
     """An outer loop containing an inner loop, to exercise distinct loop vars."""
     return {
-        "name": "nested", "provider": "copilot", "entry": "outer", "state": {"seed": 0},
+        "name": "nested",
+        "provider": "copilot",
+        "entry": "outer",
+        "state": {"seed": 0},
         "nodes": [
-            {"id": "outer", "type": "script", "inputs": [{"name": "seed", "type": "integer"}],
-             "code": "def outer(ctx, seed):\n    return seed + 1", "outputs": [{"name": "o", "type": "integer"}]},
-            {"id": "inner", "type": "script", "inputs": [{"name": "o", "type": "integer"}],
-             "code": "def inner(ctx, o):\n    return o + 10", "outputs": [{"name": "i", "type": "integer"}]},
+            {
+                "id": "outer",
+                "type": "script",
+                "inputs": [{"name": "seed", "schema": {"type": "integer"}}],
+                "code": "def outer(ctx, seed):\n    return seed + 1",
+                "outputs": [{"name": "o", "schema": {"type": "integer"}}],
+            },
+            {
+                "id": "inner",
+                "type": "script",
+                "inputs": [{"name": "o", "schema": {"type": "integer"}}],
+                "code": "def inner(ctx, o):\n    return o + 10",
+                "outputs": [{"name": "i", "schema": {"type": "integer"}}],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "outer", "map": {"seed": "seed"}},

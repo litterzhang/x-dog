@@ -36,7 +36,7 @@ def _wf(in_schema: dict[str, Any] | None = None, topic_port_type: str = "string"
                 "id": "a",
                 "type": "agent",
                 "prompt": "{{topic}}",
-                "inputs": [{"name": "topic", "type": topic_port_type}],
+                "inputs": [{"name": "topic", "schema": {"type": topic_port_type}}],
                 "outputs": ["y"],
             }
         ],
@@ -159,9 +159,9 @@ def test_inference_conflicting_consumers_omitted() -> None:
         "entry": "a",
         "state": {"x": "v"},
         "nodes": [
-            {"id": "a", "type": "agent", "prompt": "{{x}}", "inputs": [{"name": "x", "type": "string"}],
+            {"id": "a", "type": "agent", "prompt": "{{x}}", "inputs": [{"name": "x", "schema": {"type": "string"}}],
              "outputs": ["oa"]},
-            {"id": "b", "type": "script", "inputs": [{"name": "x", "type": "integer"}],
+            {"id": "b", "type": "script", "inputs": [{"name": "x", "schema": {"type": "integer"}}],
              "code": "def b(ctx, x):\n    return x", "outputs": ["ob"]},
         ],
         "edges": [
@@ -273,7 +273,7 @@ def test_output_schema_multiple_keys() -> None:
         "entry": "a",
         "nodes": [
             {"id": "a", "type": "script", "code": "def a(ctx):\n    return {'x': 1, 'y': 2}",
-             "outputs": [{"name": "x", "type": "integer"}, {"name": "y", "type": "integer"}]},
+             "outputs": [{"name": "x", "schema": {"type": "integer"}}, {"name": "y", "schema": {"type": "integer"}}]},
         ],
         "edges": [
             {"from": "a", "to": "$output", "map": {"x": "first"}},

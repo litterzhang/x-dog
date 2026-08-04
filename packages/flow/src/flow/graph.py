@@ -309,9 +309,7 @@ def to_svg(wf: WorkflowDef) -> str:
     """Return an SVG document rendering *wf*.
 
     Uses Graphviz (via pydot + the system ``dot`` binary) for auto-layout when
-    available, and falls back to a deterministic hand-assembled renderer
-    otherwise.  (During migration this simply delegates to the fallback; the
-    pydot path is generated into this function by the codegen workflow.)
+    available, and falls back to a deterministic hand-assembled renderer otherwise.
     """
     if shutil.which("dot") is None:
         return _to_svg_fallback(wf)

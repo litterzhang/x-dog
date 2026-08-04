@@ -21,7 +21,7 @@ cross-engine parity for `N ∈ {0, 1, 3}`.
   element (parallel `gather`), aggregates each output port into an index-ordered
   list stored under the single worker node id. One `completed` entry, one trace
   frame, one checkpoint node — the scheduler is untouched.
-- **Codegen** (`_drive_fan` in the runtime template + `_invoke_expr` routing):
+- **Codegen** (`_drive_fan` in the runtime template + `_render_dispatch` routing):
   emits the same runtime-sized `gather` + aggregation; the worker node function
   is unchanged (it consumes one element as a normal input).
 - **`fan_in`** selects the collector reducer. `list` reads the worker's already
@@ -44,10 +44,10 @@ results:
 > The `plan` node produced a list of 7 subtasks. Run the `work` node once per
 > subtask, in parallel, then gather the 7 results into the `merge` node.
 
-`7` is a runtime value, so today this is inexpressible: `EdgeDef.loop_max` is a
-compile-time constant and codegen compiles loops to `for _loop_i in range(<literal>)`.
-This is *dynamic task mapping* — Airflow `.expand()`, Prefect `.map()`, Temporal
-child-workflow fan-out — the single most common pattern flow cannot model.
+`7` is a runtime value, so a bounded graph loop cannot express this mapping:
+`EdgeDef.loop_max` is static and controls graph reactivation, not runtime instance
+width. This is *dynamic task mapping* — Airflow `.expand()`, Prefect `.map()`, or
+Temporal child-workflow fan-out — and requires explicit fan-out semantics.
 
 **Concrete target workflow** (the map-reduce parity fixture):
 
@@ -71,16 +71,10 @@ Everything in the kernel is keyed by **node id**, and the graph is **static** �
 that staticness is *why* `interpret == compile` is cheap to hold (codegen emits
 one fixed function per node and a fixed control-flow skeleton).
 
-Concrete coupling points (file:line as of this writing):
-
-| Structure | Where | Keyed by |
-|-----------|-------|----------|
-| `outputs: dict[str, dict]` | executor.py:219 | node id |
-| `completed: set[str]` | executor.py:272 | node id |
-| checkpoint `completed: list[str]` | executor.py:288, 317 | node id |
-| `stack` trace frames | executor.py:230 | node id (in frame) |
-| `_is_ready` / `_successors` / `_transitive_successors` / `_activate_loops` | executor.py:626–691 | node id |
-| codegen: one function per node + fixed skeleton | codegen.py:514, 630, 694 | node id |
+The live stores remain node-keyed: outputs, trace frames, checkpoint `completed`,
+and generated node functions all use one static node id. The shared frontier
+kernel adds activation generations and edge identities for control flow, but it
+intentionally does not create runtime node instances.
 
 N runtime instances of `work` need N distinct identities or their outputs, trace
 frames, and checkpoints collide. That is the crux.
@@ -93,10 +87,9 @@ The blast radius **is** the strategy choice.
 
 ### Strategy B — instances as first-class scheduler nodes (the gap-doc sketch)
 
-Materialise instance ids `work#0 … work#6` and let them flow through the
-scheduler: they enter `pending`, `completed`, and the checkpoint's `completed`
-list; `_transitive_successors`, `_activate_loops`, and the readiness checks all
-learn about "fan groups."
+Materialise instance ids `work#0 … work#6` as first-class frontier activations:
+they would need per-instance outputs, completion, checkpoint, trace, reduction,
+and failure semantics throughout the shared execution kernel.
 
 - **Pro:** instance-level resume (a half-finished fan-out resumes only the
   unfinished instances); naturally extends to fanning out an entire **sub-graph**.

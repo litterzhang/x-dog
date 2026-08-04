@@ -18,7 +18,7 @@ block seeds the output ports of a reserved source node `$in`.
   "name": "my_workflow",          // workflow identifier
   "provider": "copilot",          // ai provider id (passed to ai.provider())
   "defaults": {
-    "model": "claude-sonnet-4.5"  // fallback model for nodes without model
+    "model": "gpt-5.6-sol"  // fallback model for nodes without model
   },
   "entry": "research",            // id of the first node to execute
   "state": {                      // seed values, exposed as output ports of "$in"
@@ -51,9 +51,10 @@ block seeds the output ports of a reserved source node `$in`.
 }
 ```
 
-**Ports.** A port is a bare name (`"topic"`) or `{"name": "sum", "type": "integer"}`.
-The JSON type (`string`/`integer`/`number`/`boolean`/`array`/`object`) coerces the
-string wire value to/from the Python value a script sees.
+**Ports.** A required string port may use the bare shorthand (`"topic"`). Typed,
+structured, or non-required ports use the canonical object form
+`{"name": "sum", "schema": {"type": "integer"}, "required": true}`. Values are
+stored as native JSON/Python types and scripts receive values described by the schema.
 
 **Validation** rejects: an input port fed by no edge mapping; a `map` referencing
 a port that doesn't exist on the source/destination; and — critically — **two
@@ -104,8 +105,8 @@ On an edge, `{{key}}` in a condition reads the **source node's output port** `ke
 Check a workflow definition for errors without executing it.
 
 ```bash
-xdog-flow validate examples/research_write_review.json
-# OK: research_write_review
+xdog-flow validate examples/refine_loop.json
+# OK: refine_loop
 ```
 
 ### run
@@ -114,13 +115,13 @@ Execute a workflow and print the nested outputs (`{node_id: {port: value}}`) as 
 
 ```bash
 # Live execution using the provider declared in the JSON
-xdog-flow run examples/research_write_review.json
+xdog-flow run examples/refine_loop.json
 
 # Override the provider from the command line
-xdog-flow run examples/research_write_review.json --provider anthropic
+xdog-flow run examples/refine_loop.json --provider anthropic
 
 # Offline dry-run (no LLM calls; nodes echo "DRYRUN:<model>")
-xdog-flow run examples/research_write_review.json --dry-run
+xdog-flow run examples/refine_loop.json --dry-run
 ```
 
 ### generate
@@ -128,14 +129,14 @@ xdog-flow run examples/research_write_review.json --dry-run
 Compile the workflow to a self-contained Python module.
 
 ```bash
-xdog-flow generate examples/research_write_review.json -o workflow.py
+xdog-flow generate examples/refine_loop.json -o workflow.py
 python workflow.py
 ```
 
 Generated output structure:
 
 ```python
-"""research_write_review — generated workflow module."""
+"""refine_loop — generated workflow module."""
 
 import asyncio
 # Standalone runtime helpers + node functions are inlined here.
@@ -167,11 +168,11 @@ frontier transition kernel is the same implementation used by the interpreter.
 Print an ASCII topology map, a Mermaid diagram, or an SVG.
 
 ```bash
-xdog-flow graph examples/research_write_review.json
+xdog-flow graph examples/refine_loop.json
 # research -> write -> review --(REVISE, max 2)--> write
 
-xdog-flow graph examples/research_write_review.json --mermaid
-xdog-flow graph examples/research_write_review.json --svg > diagram.svg
+xdog-flow graph examples/refine_loop.json --mermaid
+xdog-flow graph examples/refine_loop.json --svg > diagram.svg
 ```
 
 The `--svg` output uses **Graphviz** (via `pydot` + the system `dot` binary) for
@@ -304,8 +305,8 @@ Two code sources — a workflow is self-contained either way:
   "id": "add",
   "type": "script",
   "code": "def add(ctx, a, b):\n    return a + b",
-  "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
-  "outputs": [{"name": "sum", "type": "integer"}]
+  "inputs": [{"name": "a", "schema": {"type": "integer"}}, {"name": "b", "schema": {"type": "integer"}}],
+  "outputs": [{"name": "sum", "schema": {"type": "integer"}}]
 }
 // wired by:  {"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}}
 ```
@@ -318,7 +319,7 @@ the import, not the global path):
 
 ```jsonc
 { "id": "prep", "type": "script", "run": "myscript:prep",
-  "inputs": [{"name": "topic", "type": "string"}], "outputs": [{"name": "brief", "type": "string"}] }
+  "inputs": [{"name": "topic", "schema": {"type": "string"}}], "outputs": [{"name": "brief", "schema": {"type": "string"}}] }
 ```
 
 `ctx` exposes `ctx.inputs` (this node's input ports as a mapping),
@@ -345,7 +346,7 @@ Agent nodes can declare a `"tools"` list.  Each name is resolved from the
   "tools": ["echo"],                 // resolved via ToolRegistry
   "system_prompt": "You are an analyst.",
   "prompt": "Analyse: {{prepped}}",
-  "output": "analysis"
+  "outputs": ["analysis"]
 }
 ```
 
@@ -377,109 +378,22 @@ so the same registry API applies to compiled workflows too.
 
 ---
 
-## Example: auto-enrich with structured output
+## Current examples
 
-`examples/auto_enrich.json` demonstrates declared inputs and structured output:
+The checked-in examples are executable and mirrored into `skill/examples/`:
 
-- A **script node** (`pull`) with inline `code` that copies `state["topic"]`
-  into `state["record"]`.
-- An **agent node** (`enrich`) that declares `"inputs": ["record"]` and `"output_schema"`
-  with three fields.  The agent must call `submit_result`; the executor stores the
-  validated JSON under `state["enriched"]`.
-- A **script node** (`persist`) with inline `code` that echoes `state["record"]`
-  into `state["saved"]`.
-- Provider `copilot`, default model `claude-sonnet-4.5`.
-
-```bash
-xdog-flow validate examples/auto_enrich.json
-xdog-flow run     examples/auto_enrich.json --dry-run
-xdog-flow graph   examples/auto_enrich.json
-```
-
----
-
-## Example: script node + per-node tools
-
-`examples/tools_script.json` demonstrates:
-
-- A **script node** (`prep`) with an **inline `code`** function
-  (`def prep(ctx): return ctx.state.get("topic", "")`) that copies
-  `state["topic"]` into `state["prepped"]` — the workflow is self-contained, with
-  no dependency on flow's own modules.
-- An **agent node** (`analyze`) that uses the built-in `echo` tool and
-  receives the prepared text via `{{prepped}}` interpolation.
-- Provider `copilot`, default model `claude-sonnet-4.5`.
-- Initial state: `{"topic": "workflow engines"}`.
+- `agent_calculator.json` — typed agent output and arithmetic scripting.
+- `refine_loop.json` — conditional review/revision loop with a non-required
+  feedback input.
+- `trip_planner.json` — structured planning and nested field mappings.
+- `essay_writer.json` / `essay_compose.json` — opaque subflow composition.
+- `cli_triage.json` — coding-agent CLI backend.
+- `digest_timer.json` / `triage_hook.json` — timer and hook scheduling.
 
 ```bash
-xdog-flow validate examples/tools_script.json
-xdog-flow run     examples/tools_script.json --dry-run
-xdog-flow graph   examples/tools_script.json
-xdog-flow generate examples/tools_script.json -o out.py
+xdog-flow validate examples/refine_loop.json
+xdog-flow run examples/refine_loop.json --dry-run
+xdog-flow graph examples/refine_loop.json --mermaid
+xdog-flow generate examples/refine_loop.json -o workflow.py
+python workflow.py
 ```
-
----
-
-## Example: research → write → review
-
-`examples/research_write_review.json` demonstrates:
-
-- Three sequential agent nodes: **research**, **write**, **review**.
-- A conditional back-edge: if the reviewer's output contains `REVISE`, the
-  workflow loops back to **write** (at most 2 times).
-- Provider `copilot`, default model `claude-sonnet-4.5`.
-- Initial state: `{"topic": "the impact of large language models on software engineering"}`.
-
-```bash
-xdog-flow validate examples/research_write_review.json
-xdog-flow run     examples/research_write_review.json --dry-run
-xdog-flow graph   examples/research_write_review.json
-xdog-flow generate examples/research_write_review.json -o out.py
-```
-
-## Example: codegen pipeline (capability demo)
-
-`examples/codegen_builder.json` demonstrates that `flow` can orchestrate a
-**code-generation pipeline** end to end with a real LLM:
-
-```
-intake (script: pop task queue)
-  -> setup    (agent + bash tool: prepare an isolated working dir)
-  -> design   (agent + output_schema: structured plan via submit_result)
-  -> implement(agent + filesystem tool: WRITE the .py files)
-  -> verify   (script: run ruff + pytest on the written files)
-  -> review   (agent + output_schema: status APPROVED / FAIL)
-        └─ when verdict contains "FAIL" -> loop back to implement (max 2)
-```
-
-It exercises every flow feature at once: script nodes, per-node tools
-(`bash`, `filesystem`), declared `inputs`, structured `output_schema`
-(the `submit_result` builtin tool), and a bounded conditional loop.
-
-Backing code lives in `flow/codegen_tools.py`:
-
-- `summarize_spec` / `next_task` — script-node helpers (task queue).
-- `run_checks` — a script node that shells out to `ruff` + `pytest` on
-  `state["target_path"]` and returns `PASS` / `FAIL: <tail>`; the `review`
-  node branches on that marker to drive the loop.
-- `registry_with_filesystem` — a registry with the `filesystem` + `bash` tools.
-  (As of this version, `default_registry()` already includes every agent
-  builtin — `bash`, `filesystem`, `submit_result`, … — so `xdog-flow run`
-  resolves node `tools` out of the box.)
-
-Run it (writes real files under the state's `target_path`):
-
-```bash
-xdog-flow validate examples/codegen_builder.json
-xdog-flow graph    examples/codegen_builder.json --mermaid
-xdog-flow run      examples/codegen_builder.json --provider copilot
-```
-
-**Limitations (this is an orchestration demo, not a production codegen gate):**
-the flow executor runs once and returns — it has **no git isolation and no
-revert-on-failure**. A `verify` FAIL only drives the bounded review→implement
-loop; it cannot roll back files the `implement` node already wrote. Script
-nodes are `state -> str`, so `run_checks` reports advisory text rather than
-hard-gating. For gated, revertible, git-isolated code generation, use the
-autobuild loop (which wraps a real ruff+mypy+pytest gate in a worktree), not a
-flow workflow.

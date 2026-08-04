@@ -26,14 +26,14 @@
       "backend": "claude-cli",
       "model": "sonnet",
       "inputs": [
-        {"name": "report", "type": "string"},
-        {"name": "ack", "type": "string"}
+        {"name": "report", "schema": {"type": "string"}},
+        {"name": "ack", "schema": {"type": "string"}}
       ],
       "system_prompt": "You are a terse bug triager.",
       "prompt": "A new ticket arrived (ack={{$.ack}}). Triage it:\n\n{{$.report}}\n\nFields:\n- severity: low|medium|high|critical\n- area: 1-2 words",
       "outputs": [
-        {"name": "severity", "type": "string"},
-        {"name": "area", "type": "string"}
+        {"name": "severity", "schema": {"type": "string"}},
+        {"name": "area", "schema": {"type": "string"}}
       ]
     }
   ],

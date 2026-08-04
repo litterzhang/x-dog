@@ -247,7 +247,7 @@ async def test_inputs_override_seed() -> None:
                 id="mk",
                 type="script",
                 run="dummy:fn",
-                input_ports=(Port("a", "integer"), Port("b", "integer")),
+                input_ports=(Port("a", schema={"type": "integer"}), Port("b", schema={"type": "integer"})),
                 output_ports=(Port("s"),),
             ),
         ),
@@ -283,7 +283,7 @@ async def test_no_inputs_uses_defaults() -> None:
                 id="mk",
                 type="script",
                 run="dummy:fn",
-                input_ports=(Port("a", "integer"),),
+                input_ports=(Port("a", schema={"type": "integer"}),),
                 output_ports=(Port("s"),),
             ),
         ),
@@ -509,7 +509,7 @@ async def test_optional_input_absent_on_first_pass_then_fed_by_loop() -> None:
                 id="draft",
                 model="draft-model",
                 prompt="topic={{topic}} fb={{feedback}}",
-                input_ports=(Port("topic"), Port("feedback", optional=True)),
+                input_ports=(Port("topic"), Port("feedback", required=False)),
                 output_ports=(Port("answer"),),
             ),
             NodeDef(
@@ -556,20 +556,20 @@ async def test_false_forward_edge_does_not_leak_mapped_input() -> None:
                 id="b",
                 type="script",
                 code="def b(ctx):\n    return 10",
-                output_ports=(Port("value", "integer"),),
+                output_ports=(Port("value", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="c",
                 type="script",
                 code="def c(ctx):\n    return 99",
-                output_ports=(Port("value", "integer"),),
+                output_ports=(Port("value", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="a",
                 type="script",
                 code="def a(ctx, selected):\n    return selected",
-                input_ports=(Port("selected", "integer"),),
-                output_ports=(Port("result", "integer"),),
+                input_ports=(Port("selected", schema={"type": "integer"}),),
+                output_ports=(Port("result", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -604,29 +604,29 @@ async def test_multiple_loop_sources_form_and_join() -> None:
                 id="a",
                 type="script",
                 code="def a(ctx, seed):\n    return seed + 1",
-                input_ports=(Port("seed", "integer"),),
-                output_ports=(Port("n", "integer"),),
+                input_ports=(Port("seed", schema={"type": "integer"}),),
+                output_ports=(Port("n", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="b",
                 type="script",
                 code="def b(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("back", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("back", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="delay",
                 type="script",
                 code="def delay(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("n", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("n", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="c",
                 type="script",
                 code="def c(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("back", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("back", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -653,9 +653,7 @@ async def test_multiple_loop_sources_form_and_join() -> None:
 
     result = await execute(wf)
     stack = result.runtime["stack"]
-    assert [frame["node"] for frame in stack] == [
-        "a", "b", "delay", "c", "a", "b", "delay", "c"
-    ]
+    assert [frame["node"] for frame in stack] == ["a", "b", "delay", "c", "a", "b", "delay", "c"]
     assert [frame["step"] for frame in stack] == list(range(8))
     a_frames = [frame for frame in stack if frame["node"] == "a"]
     assert [frame["in"] for frame in a_frames] == [{"seed": 0}, {"seed": 1}]
@@ -676,9 +674,9 @@ async def test_output_sink_collects_declared_outputs() -> None:
             NodeDef(
                 id="mk",
                 type="script",
-                input_ports=(Port("a", "integer"),),
+                input_ports=(Port("a", schema={"type": "integer"}),),
                 code="def mk(ctx, a):\n    return a * 2",
-                output_ports=(Port("doubled", "integer"),),
+                output_ports=(Port("doubled", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -976,7 +974,11 @@ async def test_output_schema_multi_port_fans_out() -> None:
                 id="n1",
                 model="m",
                 prompt="plan",
-                output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
+                output_ports=(
+                    Port("summary", schema={"type": "string"}),
+                    Port("tasks", schema={"type": "array"}),
+                    Port("cost", schema={"type": "number"}),
+                ),
             ),
         ),
         edges=(),
@@ -1014,7 +1016,11 @@ async def test_output_schema_multi_port_incomplete_submission_rejected() -> None
                 id="n1",
                 model="m",
                 prompt="plan",
-                output_ports=(Port("summary", "string"), Port("tasks", "array"), Port("cost", "number")),
+                output_ports=(
+                    Port("summary", schema={"type": "string"}),
+                    Port("tasks", schema={"type": "array"}),
+                    Port("cost", schema={"type": "number"}),
+                ),
             ),
         ),
         edges=(),

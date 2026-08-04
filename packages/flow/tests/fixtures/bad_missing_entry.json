@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "name": "bad-missing-entry",
   "provider": "anthropic",
   "entry": "nonexistent",

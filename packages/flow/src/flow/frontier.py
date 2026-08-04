@@ -178,15 +178,6 @@ def take_ready(spec: FrontierSpec, state: FrontierState) -> list[Activation]:
     return ready
 
 
-def is_quiescent(state: FrontierState) -> bool:
-    """Whether no activation is currently leased.
-
-    Reached-but-structurally-blocked nodes intentionally do not prevent clean graph
-    completion; the host calls :func:`take_ready` before checking quiescence.
-    """
-    return not _set(state["running"])
-
-
 def isolate_nodes(state: FrontierState, node_ids: set[str]) -> None:
     """Suppress current and future activations for the given static node ids."""
     isolated_nodes = _set(state["isolated_nodes"])
@@ -410,7 +401,6 @@ _INLINE_FUNCTIONS = (
     _generation,
     _ready,
     take_ready,
-    is_quiescent,
     isolate_nodes,
     _enable_edge,
     _clear_node_epoch_state,

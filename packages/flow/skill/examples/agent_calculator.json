@@ -14,11 +14,11 @@
       "id": "make_problem",
       "type": "script",
       "inputs": [
-        {"name": "a", "type": "integer"},
-        {"name": "b", "type": "integer"}
+        {"name": "a", "schema": {"type": "integer"}},
+        {"name": "b", "schema": {"type": "integer"}}
       ],
       "code": "def make_problem(ctx, a, b):\n    return f'{a} + {b}'",
-      "outputs": [{"name": "problem", "type": "string"}]
+      "outputs": [{"name": "problem", "schema": {"type": "string"}}]
     },
     {
       "id": "solve",

@@ -36,21 +36,21 @@ or provider to configure.
       "type": "agent",
       "backend": "claude-cli",         // run this step via the claude CLI (no provider)
       "model": "sonnet",               // CLI --model (alias or id); optional
-      "inputs":  [{ "name": "report", "type": "string" }],
+      "inputs":  [{ "name": "report", "schema": {"type": "string"} }],
       "prompt":  "Classify:\n{{$.report}}\nFields: severity, area, summary",
       "allowed_tools": [],             // NARROW the CLI's tools; [] = none (default)
       "outputs": [                     // >1 port or a structured port => structured output
-        { "name": "severity", "type": "string" },
-        { "name": "area",     "type": "string" },
-        { "name": "summary",  "type": "string" }
+        { "name": "severity", "schema": {"type": "string"} },
+        { "name": "area",     "schema": {"type": "string"} },
+        { "name": "summary",  "schema": {"type": "string"} }
       ]
     },
     {
       "id": "route",
       "type": "script",
-      "inputs": [{ "name": "severity", "type": "string" }],
+      "inputs": [{ "name": "severity", "schema": {"type": "string"} }],
       "code": "def route(ctx, severity):\n    return {'page': severity in ('high','critical')}",
-      "outputs": [{ "name": "triage", "type": "object" }]
+      "outputs": [{ "name": "triage", "schema": {"type": "object"} }]
     }
   ],
   "edges": [

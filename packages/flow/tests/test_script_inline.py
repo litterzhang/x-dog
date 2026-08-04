@@ -32,8 +32,8 @@ def test_inline_typed_add_coerces() -> None:
             "id": "add",
             "type": "script",
             "code": "def add(ctx, a, b):\n    return a + b",
-            "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
-            "output": {"name": "sum", "type": "integer"},
+            "inputs": [{"name": "a", "schema": {"type": "integer"}}, {"name": "b", "schema": {"type": "integer"}}],
+            "outputs": [{"name": "sum", "schema": {"type": "integer"}}],
         }],
         "edges": [{"from": "$in", "to": "add", "map": {"a": "a", "b": "b"}}],
     })
@@ -52,8 +52,8 @@ def test_inline_async_script() -> None:
             "id": "s",
             "type": "script",
             "code": "async def s(ctx, x):\n    return x.upper()",
-            "inputs": [{"name": "x", "type": "string"}],
-            "output": {"name": "y", "type": "string"},
+            "inputs": [{"name": "x", "schema": {"type": "string"}}],
+            "outputs": [{"name": "y", "schema": {"type": "string"}}],
         }],
         "edges": [{"from": "$in", "to": "s", "map": {"x": "x"}}],
     })
@@ -74,8 +74,8 @@ def test_ctx_exposes_runtime_info() -> None:
                 "def s(ctx, seed):\n"
                 "    return f'{ctx.workflow_name}/{ctx.node_id}/{ctx.step}/{seed}'"
             ),
-            "inputs": [{"name": "seed", "type": "string"}],
-            "output": {"name": "out", "type": "string"},
+            "inputs": [{"name": "seed", "schema": {"type": "string"}}],
+            "outputs": [{"name": "out", "schema": {"type": "string"}}],
         }],
         "edges": [{"from": "$in", "to": "s", "map": {"seed": "seed"}}],
     })
@@ -92,7 +92,7 @@ def test_object_output_serialized() -> None:
             "id": "s",
             "type": "script",
             "code": "def s(ctx):\n    return {'a': 1, 'b': 2}",
-            "output": {"name": "d", "type": "object"},
+            "outputs": [{"name": "d", "schema": {"type": "object"}}],
         }],
         "edges": [],
     })
@@ -109,8 +109,8 @@ def test_ref_imports_from_workflow_dir(tmp_path: pathlib.Path) -> None:
     wf_path.write_text(
         '{"name":"r","provider":"copilot","entry":"g","state":{"who":"world"},'
         '"nodes":[{"id":"g","type":"script","run":"myscript:greet",'
-        '"inputs":[{"name":"who","type":"string"}],'
-        '"output":{"name":"msg","type":"string"}}],'
+        '"inputs":[{"name":"who","schema": {"type": "string"}}],'
+        '"outputs": [{"name":"msg","schema": {"type": "string"}}]}],'
         '"edges":[{"from":"$in","to":"g","map":{"who":"who"}}]}',
         encoding="utf-8",
     )

@@ -60,7 +60,7 @@ def _map_reduce(n: int, cap: int = 0, worker: str = "script", fan_cap: int = 0) 
             {
                 "id": "plan",
                 "type": "script",
-                "inputs": [{"name": "n", "type": "integer"}],
+                "inputs": [{"name": "n", "schema": {"type": "integer"}}],
                 "code": "def p(ctx, n):\n    return ['t' + str(i) for i in range(n)]",
                 "outputs": [{"name": "tasks", "schema": {"type": "array", "items": {"type": "string"}}}],
             },

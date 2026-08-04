@@ -332,20 +332,20 @@ async def test_generate_false_forward_edge_input_parity() -> None:
                 id="b",
                 type="script",
                 code="def b(ctx):\n    return 10",
-                output_ports=(Port("value", "integer"),),
+                output_ports=(Port("value", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="c",
                 type="script",
                 code="def c(ctx):\n    return 99",
-                output_ports=(Port("value", "integer"),),
+                output_ports=(Port("value", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="a",
                 type="script",
                 code="def a(ctx, selected):\n    return selected",
-                input_ports=(Port("selected", "integer"),),
-                output_ports=(Port("result", "integer"),),
+                input_ports=(Port("selected", schema={"type": "integer"}),),
+                output_ports=(Port("result", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -384,29 +384,29 @@ async def test_generate_multiple_loop_sources_and_join_parity() -> None:
                 id="a",
                 type="script",
                 code="def a(ctx, seed):\n    return seed + 1",
-                input_ports=(Port("seed", "integer"),),
-                output_ports=(Port("n", "integer"),),
+                input_ports=(Port("seed", schema={"type": "integer"}),),
+                output_ports=(Port("n", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="b",
                 type="script",
                 code="def b(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("back", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("back", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="delay",
                 type="script",
                 code="def delay(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("n", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("n", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="c",
                 type="script",
                 code="def c(ctx, n):\n    return n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("back", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("back", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -456,23 +456,23 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
             NodeDef(
                 id="route",
                 type="script",
-                input_ports=(Port("n", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
                 code="def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
-                output_ports=(Port("kind", "string"),),
+                output_ports=(Port("kind", schema={"type": "string"}),),
             ),
             NodeDef(
                 id="handle_odd",
                 type="script",
-                input_ports=(Port("n", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
                 code="def handle_odd(ctx, n):\n    return f'ODD:{n * 3}'",
-                output_ports=(Port("result", "string"),),
+                output_ports=(Port("result", schema={"type": "string"}),),
             ),
             NodeDef(
                 id="handle_even",
                 type="script",
-                input_ports=(Port("n", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
                 code="def handle_even(ctx, n):\n    return f'EVEN:{n // 2}'",
-                output_ports=(Port("result", "string"),),
+                output_ports=(Port("result", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -507,16 +507,16 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
             NodeDef(
                 id="init",
                 type="script",
-                input_ports=(Port("counter", "integer"),),
+                input_ports=(Port("counter", schema={"type": "integer"}),),
                 code="def init(ctx, counter):\n    return counter",
-                output_ports=(Port("c", "integer"),),
+                output_ports=(Port("c", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="inc",
                 type="script",
-                input_ports=(Port("c", "integer"),),
+                input_ports=(Port("c", schema={"type": "integer"}),),
                 code="def inc(ctx, c):\n    return c + 1",
-                output_ports=(Port("c", "integer"),),
+                output_ports=(Port("c", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -555,15 +555,15 @@ async def test_generate_colliding_node_ids_stay_distinct() -> None:
                 id="a-b",
                 type="script",
                 code="def f(ctx, x):\n    return x + '-B'",
-                output_ports=(Port("vb", "string"),),
-                input_ports=(Port("x", "string"),),
+                output_ports=(Port("vb", schema={"type": "string"}),),
+                input_ports=(Port("x", schema={"type": "string"}),),
             ),
             NodeDef(
                 id="a.b",
                 type="script",
                 code="def g(ctx, vb):\n    return vb + '.B'",
-                output_ports=(Port("vc", "string"),),
-                input_ports=(Port("vb", "string"),),
+                output_ports=(Port("vc", schema={"type": "string"}),),
+                input_ports=(Port("vb", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -589,7 +589,9 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
     from flow.executor import execute
 
     def sc(nid: str, code: str, out: str, inp: tuple[Port, ...]) -> NodeDef:
-        return NodeDef(id=nid, type="script", code=code, output_ports=(Port(out, "integer"),), input_ports=inp)
+        return NodeDef(
+            id=nid, type="script", code=code, output_ports=(Port(out, schema={"type": "integer"}),), input_ports=inp
+        )
 
     wf = WorkflowDef(
         name="cross-dep",
@@ -598,9 +600,14 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
         default_model="m",
         initial_state=(("x", "5"),),
         nodes=(
-            sc("A", "def A(ctx, x):\n    return x + 1", "a", (Port("x", "integer"),)),
-            sc("B", "def B(ctx, a):\n    return a * 10", "b", (Port("a", "integer"),)),
-            sc("C", "def C(ctx, a, b):\n    return a + b", "c", (Port("a", "integer"), Port("b", "integer"))),
+            sc("A", "def A(ctx, x):\n    return x + 1", "a", (Port("x", schema={"type": "integer"}),)),
+            sc("B", "def B(ctx, a):\n    return a * 10", "b", (Port("a", schema={"type": "integer"}),)),
+            sc(
+                "C",
+                "def C(ctx, a, b):\n    return a + b",
+                "c",
+                (Port("a", schema={"type": "integer"}), Port("b", schema={"type": "integer"})),
+            ),
         ),
         edges=(
             EdgeDef(src=IN_NODE_ID, dst="A", mapping=(("x", "x"),)),
@@ -637,8 +644,8 @@ async def test_generate_escapes_initial_state_values() -> None:
                 id="mk",
                 type="script",
                 code="def mk(ctx, p):\n    return p + '!' ",
-                output_ports=(Port("out", "string"),),
-                input_ports=(Port("p", "string"),),
+                output_ports=(Port("out", schema={"type": "string"}),),
+                input_ports=(Port("p", schema={"type": "string"}),),
             ),
         ),
         edges=(EdgeDef(src=IN_NODE_ID, dst="mk", mapping=(("p", "p"),)),),
@@ -653,7 +660,9 @@ async def test_generate_escapes_initial_state_values() -> None:
 
 
 def _sc(nid: str, code: str, out: str, inp: tuple[Port, ...] = ()) -> NodeDef:
-    return NodeDef(id=nid, type="script", code=code, output_ports=(Port(out, "string"),), input_ports=inp)
+    return NodeDef(
+        id=nid, type="script", code=code, output_ports=(Port(out, schema={"type": "string"}),), input_ports=inp
+    )
 
 
 async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> None:
@@ -667,10 +676,20 @@ async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> N
         default_model="m",
         initial_state=(("n", "7"),),
         nodes=(
-            _sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind", (Port("n", "integer"),)),
-            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", "integer"),)),
-            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", "integer"),)),
-            _sc("merge", "def merge(ctx, branch):\n    return 'got ' + branch", "final", (Port("branch", "string"),)),
+            _sc(
+                "route",
+                "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
+                "kind",
+                (Port("n", schema={"type": "integer"}),),
+            ),
+            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", schema={"type": "integer"}),)),
+            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", schema={"type": "integer"}),)),
+            _sc(
+                "merge",
+                "def merge(ctx, branch):\n    return 'got ' + branch",
+                "final",
+                (Port("branch", schema={"type": "string"}),),
+            ),
         ),
         edges=(
             EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
@@ -706,16 +725,21 @@ async def test_generate_conditional_skip_propagates_downstream() -> None:
                 id="route",
                 type="script",
                 code="def route(ctx, n):\n    return 'weird'",
-                output_ports=(Port("kind", "string"),),
-                input_ports=(Port("n", "integer"),),
+                output_ports=(Port("kind", schema={"type": "string"}),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
             ),
-            NodeDef(id="a", type="script", code="def a(ctx):\n    return 'A'", output_ports=(Port("ra", "string"),)),
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx):\n    return 'A'",
+                output_ports=(Port("ra", schema={"type": "string"}),),
+            ),
             NodeDef(
                 id="b",
                 type="script",
                 code="def b(ctx, ra):\n    return ra + 'B'",
-                output_ports=(Port("rb", "string"),),
-                input_ports=(Port("ra", "string"),),
+                output_ports=(Port("rb", schema={"type": "string"}),),
+                input_ports=(Port("ra", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -743,9 +767,14 @@ async def test_generate_conditional_branch_positive_path_runs_downstream() -> No
         default_model="m",
         initial_state=(("n", "4"),),
         nodes=(
-            _sc("route", "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'", "kind", (Port("n", "integer"),)),
-            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", "integer"),)),
-            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", "integer"),)),
+            _sc(
+                "route",
+                "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
+                "kind",
+                (Port("n", schema={"type": "integer"}),),
+            ),
+            _sc("odd", "def odd(ctx, n):\n    return f'O{n}'", "branch", (Port("n", schema={"type": "integer"}),)),
+            _sc("even", "def even(ctx, n):\n    return f'E{n}'", "branch", (Port("n", schema={"type": "integer"}),)),
         ),
         edges=(
             EdgeDef(src=IN_NODE_ID, dst="route", mapping=(("n", "n"),)),
@@ -831,7 +860,7 @@ def test_generate_no_retry_source_unchanged() -> None:
                 id="work",
                 type="script",
                 code="def work(ctx):\n    return 'done'",
-                output_ports=(Port("out", "string"),),
+                output_ports=(Port("out", schema={"type": "string"}),),
             ),
         ),
         edges=(),
@@ -868,7 +897,7 @@ async def test_generate_retry_script_node_retries_on_failure() -> None:
                 id="flaky",
                 type="script",
                 code=script_code,
-                output_ports=(Port("result", "string"),),
+                output_ports=(Port("result", schema={"type": "string"}),),
                 retry=RetryPolicy(max=2, backoff=0.0),
             ),
         ),
@@ -902,7 +931,7 @@ async def test_generate_retry_exhausted_raises() -> None:
                 id="always_fail",
                 type="script",
                 code=script_code,
-                output_ports=(Port("result", "string"),),
+                output_ports=(Port("result", schema={"type": "string"}),),
                 retry=RetryPolicy(max=1, backoff=0.0),
             ),
         ),
@@ -932,10 +961,7 @@ async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
 
     # The script raises the generated module's own inlined WorkflowBudgetExceeded
     # (available in the module globals) — the same class the isolate handler checks.
-    script_code = (
-        "def over_budget(ctx):\n"
-        "    raise WorkflowBudgetExceeded(100, 10)\n"
-    )
+    script_code = "def over_budget(ctx):\n    raise WorkflowBudgetExceeded(100, 10)\n"
     wf = WorkflowDef(
         name="isolate-budget-wf",
         provider="copilot",
@@ -946,7 +972,7 @@ async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
                 id="over_budget",
                 type="script",
                 code=script_code,
-                output_ports=(Port("result", "string"),),
+                output_ports=(Port("result", schema={"type": "string"}),),
                 on_error="isolate",
             ),
         ),
@@ -972,16 +998,11 @@ async def test_generate_isolate_node_reraises_budget_exceeded() -> None:
 
 
 def test_generate_checkpoint_persists_tokens_used() -> None:
-    """The generated _save_checkpoint serializes tokens_used (budget-on-resume).
-
-    Mirrors the interpreter's checkpoint schema so a run resumed across engines
-    keeps its cumulative spend instead of resetting to zero.
-    """
+    """The current generated checkpoint schema requires and restores token usage."""
     src = generate(_make_linear_wf())
     assert '"tokens_used": _TOKENS_USED,' in src
-    # ...and _load_checkpoint restores it back into the running total.
-    assert 'global _TOKENS_USED' in src
-    assert '_snap.get("tokens_used")' in src
+    assert "global _TOKENS_USED" in src
+    assert '_snap["tokens_used"]' in src
 
 
 def _make_output_schema_wf() -> WorkflowDef:
@@ -1049,7 +1070,9 @@ async def test_generate_output_schema_parity_with_interpreter() -> None:
 
     result_obj = {"summary": "all good", "score": 42}
 
-    def _submit_stream_fn(model_id: object, context: object, options: object = None) -> "AiEventStream[AssistantMessage]":  # noqa: E501
+    def _submit_stream_fn(
+        model_id: object, context: object, options: object = None
+    ) -> "AiEventStream[AssistantMessage]":  # noqa: E501
         stream: AiEventStream[AssistantMessage] = AiEventStream()
         # First turn: emit a submit_result tool call; the Agent executes it,
         # populating the result sink via tool_ctx. Second turn: stop.
@@ -1128,8 +1151,8 @@ async def test_generated_module_does_not_import_flow_internal() -> None:
                 id="s",
                 type="script",
                 code="def s(ctx, n):\n    return n + 1\n",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("o", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("o", schema={"type": "integer"}),),
             ),
         ),
         edges=(EdgeDef(src=IN_NODE_ID, dst="s", mapping=(("n", "n"),)),),
@@ -1181,12 +1204,9 @@ def _make_structured_wire_wf() -> WorkflowDef:
             NodeDef(
                 id="plan",
                 type="script",
-                code=(
-                    "def plan(ctx, topic):\n"
-                    "    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"
-                ),
-                input_ports=(Port("topic", "string"),),
-                output_ports=(Port("plan", "object"),),
+                code=("def plan(ctx, topic):\n    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"),
+                input_ports=(Port("topic", schema={"type": "string"}),),
+                output_ports=(Port("plan", schema={"type": "object"}),),
             ),
             NodeDef(
                 id="render",
@@ -1194,12 +1214,9 @@ def _make_structured_wire_wf() -> WorkflowDef:
                 # The script receives the object port as a live dict and pulls a
                 # nested field; the prompt-style nested interpolation is exercised
                 # by the agent-free assertion below on the interpreter side.
-                code=(
-                    "def render(ctx, plan):\n"
-                    "    return f\"{plan['owner']}:{plan['tasks'][1]}\"\n"
-                ),
-                input_ports=(Port("plan", "object"),),
-                output_ports=(Port("line", "string"),),
+                code=("def render(ctx, plan):\n    return f\"{plan['owner']}:{plan['tasks'][1]}\"\n"),
+                input_ports=(Port("plan", schema={"type": "object"}),),
+                output_ports=(Port("line", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -1246,18 +1263,15 @@ async def test_nested_interpolation_in_prompt_parity() -> None:
             NodeDef(
                 id="plan",
                 type="script",
-                code=(
-                    "def plan(ctx, topic):\n"
-                    "    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"
-                ),
-                input_ports=(Port("topic", "string"),),
-                output_ports=(Port("plan", "object"),),
+                code=("def plan(ctx, topic):\n    return {'owner': 'ada', 'tasks': ['spec', topic]}\n"),
+                input_ports=(Port("topic", schema={"type": "string"}),),
+                output_ports=(Port("plan", schema={"type": "object"}),),
             ),
             NodeDef(
                 id="gate",
                 type="script",
                 code="def gate(ctx):\n    return 'reached'",
-                output_ports=(Port("mark", "string"),),
+                output_ports=(Port("mark", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -1294,13 +1308,11 @@ async def test_structured_initial_state_parity() -> None:
                 id="use",
                 type="script",
                 code="def use(ctx, cfg, items):\n    return {'first': items[0], 'flag': cfg['on']}",
-                input_ports=(Port("cfg", "object"), Port("items", "array")),
-                output_ports=(Port("r", "object"),),
+                input_ports=(Port("cfg", schema={"type": "object"}), Port("items", schema={"type": "array"})),
+                output_ports=(Port("r", schema={"type": "object"}),),
             ),
         ),
-        edges=(
-            EdgeDef(src=IN_NODE_ID, dst="use", mapping=(("cfg", "cfg"), ("items", "items"))),
-        ),
+        edges=(EdgeDef(src=IN_NODE_ID, dst="use", mapping=(("cfg", "cfg"), ("items", "items"))),),
         # Type-native seed: a dict and a list, not strings.
         initial_state=(("cfg", {"on": True}), ("items", [10, 20])),
     )
@@ -1329,9 +1341,9 @@ def _make_multi_output_agent_wf() -> WorkflowDef:
                 input_ports=(Port("topic"),),
                 # THREE declared output ports, each typed, each named after a schema field.
                 output_ports=(
-                    Port("summary", "string"),
-                    Port("tasks", "array"),
-                    Port("cost", "number"),
+                    Port("summary", schema={"type": "string"}),
+                    Port("tasks", schema={"type": "array"}),
+                    Port("cost", schema={"type": "number"}),
                 ),
             ),
         ),
@@ -1434,15 +1446,15 @@ async def test_generate_subfield_mapping_parity() -> None:
                 id="plan",
                 type="script",
                 code="def plan(ctx, topic):\n    return {'owner': 'ada', 'tasks': ['spec', topic]}",
-                input_ports=(Port("topic", "string"),),
-                output_ports=(Port("plan", "object"),),
+                input_ports=(Port("topic", schema={"type": "string"}),),
+                output_ports=(Port("plan", schema={"type": "object"}),),
             ),
             NodeDef(
                 id="use",
                 type="script",
-                code="def use(ctx, who, items):\n    return f\"{who}:{items[1]}\"",
-                input_ports=(Port("who", "string"), Port("items", "array")),
-                output_ports=(Port("line", "string"),),
+                code='def use(ctx, who, items):\n    return f"{who}:{items[1]}"',
+                input_ports=(Port("who", schema={"type": "string"}), Port("items", schema={"type": "array"})),
+                output_ports=(Port("line", schema={"type": "string"}),),
             ),
         ),
         edges=(
@@ -1474,22 +1486,22 @@ async def test_generate_derived_entry_multi_parallel_parity() -> None:
                 id="a",
                 type="script",
                 code="def a(ctx, n):\n    return n + 1",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("oa", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("oa", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="b",
                 type="script",
                 code="def b(ctx, n):\n    return n * 10",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("ob", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("ob", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="c",
                 type="script",
                 code="def c(ctx, oa, ob):\n    return oa + ob",
-                input_ports=(Port("oa", "integer"), Port("ob", "integer")),
-                output_ports=(Port("oc", "integer"),),
+                input_ports=(Port("oa", schema={"type": "integer"}), Port("ob", schema={"type": "integer"})),
+                output_ports=(Port("oc", schema={"type": "integer"}),),
             ),
         ),
         edges=(
@@ -1526,8 +1538,8 @@ async def test_generate_flow_inputs_override_parity() -> None:
                 id="dbl",
                 type="script",
                 code="def dbl(ctx, n):\n    return n * 2",
-                input_ports=(Port("n", "integer"),),
-                output_ports=(Port("out", "integer"),),
+                input_ports=(Port("n", schema={"type": "integer"}),),
+                output_ports=(Port("out", schema={"type": "integer"}),),
             ),
         ),
         edges=(EdgeDef(src=IN_NODE_ID, dst="dbl", mapping=(("n", "n"),)),),
@@ -1622,9 +1634,7 @@ def test_generate_invalid_strict_loop_remains_syntactically_valid() -> None:
         name="invalid-strict",
         provider="copilot",
         entry="a",
-        nodes=(
-            NodeDef(id="a", type="script", code="def a(ctx):\n    return None"),
-        ),
+        nodes=(NodeDef(id="a", type="script", code="def a(ctx):\n    return None"),),
         edges=(EdgeDef(src="a", dst="a", loop_max=1, loop_strict=True),),
     )
     compile(generate(wf), "<invalid-strict>", "exec")
@@ -1646,22 +1656,24 @@ async def test_generate_numeric_condition_parity() -> None:
                 id="bump",
                 type="script",
                 code="def bump(ctx, count):\n    return count + 1",
-                input_ports=(Port("count", "integer"),),
-                output_ports=(Port("count", "integer"),),
+                input_ports=(Port("count", schema={"type": "integer"}),),
+                output_ports=(Port("count", schema={"type": "integer"}),),
             ),
             NodeDef(
                 id="done",
                 type="script",
                 code="def done(ctx, count):\n    return f'final:{count}'",
-                input_ports=(Port("count", "integer"),),
-                output_ports=(Port("result", "string"),),
+                input_ports=(Port("count", schema={"type": "integer"}),),
+                output_ports=(Port("result", schema={"type": "string"}),),
             ),
         ),
         edges=(
             EdgeDef(src=IN_NODE_ID, dst="bump", mapping=(("count", "count"),)),
             # loop back to bump while count < 3 (numeric)
             EdgeDef(
-                src="bump", dst="bump", mapping=(("count", "count"),),
+                src="bump",
+                dst="bump",
+                mapping=(("count", "count"),),
                 when=Condition(op="lt", value="{{$.count}}", text="3"),
                 loop_max=5,
             ),

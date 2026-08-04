@@ -5,7 +5,6 @@ from __future__ import annotations
 from flow.frontier import (
     build_frontier_spec,
     complete_batch,
-    is_quiescent,
     new_frontier_state,
     render_frontier_runtime,
     replay_completed,
@@ -93,7 +92,6 @@ def test_all_false_forward_edges_leave_destination_unreached_and_quiescent() -> 
 
     _finish(spec, state, initial, {edge_b: False, edge_c: False}, {})
     assert take_ready(spec, state) == []
-    assert is_quiescent(state) is True
 
 
 def _two_source_loop(
@@ -185,7 +183,6 @@ def test_false_loop_member_closes_group_without_increment_or_reactivation() -> N
     assert error is None
     assert counts == {}
     assert take_ready(spec, state) == []
-    assert is_quiescent(state) is True
 
 
 def test_shorter_plain_loop_stops_mixed_group_normally() -> None:

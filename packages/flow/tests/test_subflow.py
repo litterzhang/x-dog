@@ -33,7 +33,7 @@ def _child() -> dict[str, Any]:
             {
                 "id": "u",
                 "type": "script",
-                "inputs": [{"name": "topic", "type": "string"}],
+                "inputs": [{"name": "topic", "schema": {"type": "string"}}],
                 "code": "def u(ctx, topic):\n    return topic.upper()",
                 "outputs": ["verdict"],
             }
@@ -56,7 +56,7 @@ def _parent(seed: str = "hello") -> dict[str, Any]:
             {
                 "id": "plan",
                 "type": "script",
-                "inputs": [{"name": "seed", "type": "string"}],
+                "inputs": [{"name": "seed", "schema": {"type": "string"}}],
                 "code": "def p(ctx, seed):\n    return seed + '!'",
                 "outputs": ["topic"],
             },
@@ -64,7 +64,7 @@ def _parent(seed: str = "hello") -> dict[str, Any]:
             {
                 "id": "pub",
                 "type": "script",
-                "inputs": [{"name": "verdict", "type": "string"}],
+                "inputs": [{"name": "verdict", "schema": {"type": "string"}}],
                 "code": "def pub(ctx, verdict):\n    return '[' + verdict + ']'",
                 "outputs": ["done"],
             },

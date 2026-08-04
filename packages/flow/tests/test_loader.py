@@ -33,50 +33,6 @@ def test_load_bad_missing_entry_raises() -> None:
         load_workflow(FIXTURES / "bad_missing_entry.json")
 
 
-def test_workflow_version_parses_and_roundtrips() -> None:
-    from flow.builder.serialize import workflow_to_dict
-
-    data = {
-        "version": "1.2",
-        "name": "versioned",
-        "provider": "",
-        "entry": "a",
-        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
-        "edges": [],
-    }
-    wf = parse_workflow(data)
-    assert wf.version == "1.2"
-    assert workflow_to_dict(wf)["version"] == "1.2"
-    assert parse_workflow(workflow_to_dict(wf)) == wf
-
-
-def test_workflow_newer_major_warns() -> None:
-    data = {
-        "version": "2",
-        "name": "future",
-        "provider": "",
-        "entry": "a",
-        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
-        "edges": [],
-    }
-    wf = parse_workflow(data)
-    with pytest.warns(FlowWarning, match="newer major"):
-        validate_workflow(wf)
-
-
-def test_workflow_invalid_version_major_raises() -> None:
-    data = {
-        "version": "next",
-        "name": "bad-version",
-        "provider": "",
-        "entry": "a",
-        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
-        "edges": [],
-    }
-    with pytest.raises(WorkflowValidationError, match="integer major"):
-        validate_workflow(parse_workflow(data))
-
-
 def test_loop_group_allows_different_max_and_mixed_strictness() -> None:
     wf = WorkflowDef(
         name="heterogeneous-loop-group",
@@ -274,7 +230,7 @@ def test_output_sink_edge_ok() -> None:
         "name": "out-ok",
         "provider": "anthropic",
         "entry": "a",
-        "nodes": [{"id": "a", "output": "r"}],
+        "nodes": [{"id": "a", "outputs": ["r"]}],
         "edges": [{"from": "a", "to": "$output", "map": {"r": "result"}}],
     }
     validate_workflow(parse_workflow(data))
@@ -286,7 +242,7 @@ def test_output_sink_unknown_source_port_raises() -> None:
         "name": "out-bad",
         "provider": "anthropic",
         "entry": "a",
-        "nodes": [{"id": "a", "output": "r"}],
+        "nodes": [{"id": "a", "outputs": ["r"]}],
         "edges": [{"from": "a", "to": "$output", "map": {"nope": "result"}}],
     }
     with pytest.raises(WorkflowValidationError, match="output port"):
@@ -473,7 +429,7 @@ def test_optional_input_port_need_not_be_fed() -> None:
         "name": "opt-ok",
         "provider": "anthropic",
         "entry": "a",
-        "nodes": [{"id": "a", "inputs": [{"name": "ghost", "optional": True}]}],
+        "nodes": [{"id": "a", "inputs": [{"name": "ghost", "schema": {"type": "string"}, "required": False}]}],
         "edges": [],
     }
     wf = parse_workflow(data)
@@ -487,7 +443,7 @@ def test_non_optional_unfed_port_still_raises() -> None:
         "name": "opt-mixed",
         "provider": "anthropic",
         "entry": "a",
-        "nodes": [{"id": "a", "inputs": [{"name": "ok", "optional": True}, "required"]}],
+        "nodes": [{"id": "a", "inputs": [{"name": "ok", "schema": {"type": "string"}, "required": False}, "required"]}],
         "edges": [],
     }
     wf = parse_workflow(data)
@@ -504,15 +460,25 @@ def test_loop_back_edge_into_optional_port_ok() -> None:
         "entry": "draft",
         "state": {"topic": "T"},
         "nodes": [
-            {"id": "draft", "type": "agent", "inputs": ["topic", {"name": "feedback", "optional": True}],
-             "prompt": "{{topic}} {{feedback}}", "outputs": ["answer"]},
+            {
+                "id": "draft",
+                "type": "agent",
+                "inputs": ["topic", {"name": "feedback", "schema": {"type": "string"}, "required": False}],
+                "prompt": "{{topic}} {{feedback}}",
+                "outputs": ["answer"],
+            },
             {"id": "critic", "type": "agent", "inputs": ["answer"], "prompt": "{{answer}}", "outputs": ["feedback"]},
         ],
         "edges": [
             {"from": "$in", "to": "draft", "map": {"topic": "topic"}},
             {"from": "draft", "to": "critic", "map": {"answer": "answer"}},
-            {"from": "critic", "to": "draft", "map": {"feedback": "feedback"},
-             "when": {"contains": {"value": "{{feedback}}", "text": "REVISE"}}, "loop": {"max": 2}},
+            {
+                "from": "critic",
+                "to": "draft",
+                "map": {"feedback": "feedback"},
+                "when": {"contains": {"value": "{{feedback}}", "text": "REVISE"}},
+                "loop": {"max": 2},
+            },
         ],
     }
     validate_workflow(parse_workflow(data))  # does not raise
@@ -534,20 +500,20 @@ def test_two_unconditional_edges_into_one_port_raises() -> None:
                 "id": "p",
                 "type": "script",
                 "code": "def p(ctx):\n    return 1",
-                "outputs": [{"name": "z", "type": "integer"}],
+                "outputs": [{"name": "z", "schema": {"type": "integer"}}],
             },
             {
                 "id": "q",
                 "type": "script",
                 "code": "def q(ctx):\n    return 2",
-                "outputs": [{"name": "z", "type": "integer"}],
+                "outputs": [{"name": "z", "schema": {"type": "integer"}}],
             },
             {
                 "id": "end",
                 "type": "script",
-                "inputs": [{"name": "v", "type": "integer"}],
+                "inputs": [{"name": "v", "schema": {"type": "integer"}}],
                 "code": "def end(ctx, v):\n    return v",
-                "outputs": [{"name": "r", "type": "integer"}],
+                "outputs": [{"name": "r", "schema": {"type": "integer"}}],
             },
         ],
         "edges": [
@@ -571,30 +537,39 @@ def test_two_conditional_edges_into_one_port_ok() -> None:
             {
                 "id": "route",
                 "type": "script",
-                "inputs": [{"name": "n", "type": "integer"}],
+                "inputs": [{"name": "n", "schema": {"type": "integer"}}],
                 "code": "def route(ctx, n):\n    return 'odd' if n % 2 else 'even'",
-                "outputs": [{"name": "kind", "type": "string"}, {"name": "n_out", "type": "integer"}],
+                "outputs": [
+                    {"name": "kind", "schema": {"type": "string"}},
+                    {"name": "n_out", "schema": {"type": "integer"}},
+                ],
             },
             {
                 "id": "odd",
                 "type": "script",
-                "inputs": [{"name": "x", "type": "integer"}],
+                "inputs": [{"name": "x", "schema": {"type": "integer"}}],
                 "code": "def odd(ctx, x):\n    return {'z': x, 'kind': 'odd'}",
-                "outputs": [{"name": "z", "type": "integer"}, {"name": "kind", "type": "string"}],
+                "outputs": [
+                    {"name": "z", "schema": {"type": "integer"}},
+                    {"name": "kind", "schema": {"type": "string"}},
+                ],
             },
             {
                 "id": "even",
                 "type": "script",
-                "inputs": [{"name": "x", "type": "integer"}],
+                "inputs": [{"name": "x", "schema": {"type": "integer"}}],
                 "code": "def even(ctx, x):\n    return {'z': x, 'kind': 'even'}",
-                "outputs": [{"name": "z", "type": "integer"}, {"name": "kind", "type": "string"}],
+                "outputs": [
+                    {"name": "z", "schema": {"type": "integer"}},
+                    {"name": "kind", "schema": {"type": "string"}},
+                ],
             },
             {
                 "id": "merge",
                 "type": "script",
-                "inputs": [{"name": "v", "type": "integer"}],
+                "inputs": [{"name": "v", "schema": {"type": "integer"}}],
                 "code": "def merge(ctx, v):\n    return v",
-                "outputs": [{"name": "out", "type": "integer"}],
+                "outputs": [{"name": "out", "schema": {"type": "integer"}}],
             },
         ],
         "edges": [
@@ -644,8 +619,11 @@ def test_inline_script_parses_typed_io() -> None:
                     "id": "add",
                     "type": "script",
                     "code": "def add(ctx, a, b):\n    return a + b",
-                    "inputs": [{"name": "a", "type": "integer"}, {"name": "b", "type": "integer"}],
-                    "output": {"name": "sum", "type": "integer"},
+                    "inputs": [
+                        {"name": "a", "schema": {"type": "integer"}},
+                        {"name": "b", "schema": {"type": "integer"}},
+                    ],
+                    "outputs": [{"name": "sum", "schema": {"type": "integer"}}],
                 }
             ],
             "edges": [
@@ -656,9 +634,9 @@ def test_inline_script_parses_typed_io() -> None:
     validate_workflow(wf)  # must not raise
     n = wf.nodes[0]
     assert n.input_names == ("a", "b")
-    assert n.input_ports == (Port("a", "integer"), Port("b", "integer"))
+    assert n.input_ports == (Port("a", schema={"type": "integer"}), Port("b", schema={"type": "integer"}))
     assert n.output_names == ("sum",)
-    assert n.output_ports == (Port("sum", "integer"),)
+    assert n.output_ports == (Port("sum", schema={"type": "integer"}),)
     assert n.code is not None
 
 
@@ -671,7 +649,7 @@ def test_inline_bad_syntax_raises() -> None:
                 "id": "x",
                 "type": "script",
                 "code": "def x(ctx):\n    return (",
-                "output": "y",
+                "outputs": ["y"],
             }
         )
     )
@@ -688,8 +666,8 @@ def test_inline_first_param_must_be_ctx() -> None:
                 "id": "x",
                 "type": "script",
                 "code": "def x(a):\n    return a",
-                "inputs": [{"name": "a", "type": "string"}],
-                "output": "y",
+                "inputs": [{"name": "a", "schema": {"type": "string"}}],
+                "outputs": ["y"],
             }
         )
     )
@@ -706,8 +684,8 @@ def test_inline_params_must_match_inputs() -> None:
                 "id": "x",
                 "type": "script",
                 "code": "def x(ctx, a, b):\n    return a",
-                "inputs": [{"name": "a", "type": "string"}],
-                "output": "y",
+                "inputs": [{"name": "a", "schema": {"type": "string"}}],
+                "outputs": ["y"],
             }
         )
     )
@@ -725,7 +703,7 @@ def test_script_code_and_run_both_set_raises() -> None:
                 "type": "script",
                 "code": "def x(ctx):\n    return ''",
                 "run": "m:f",
-                "output": "y",
+                "outputs": ["y"],
             }
         )
     )
@@ -736,7 +714,7 @@ def test_script_code_and_run_both_set_raises() -> None:
 def test_script_neither_code_nor_run_raises() -> None:
     from flow.loader import parse_workflow, validate_workflow
 
-    wf = parse_workflow(_wf_with_script({"id": "x", "type": "script", "output": "y"}))
+    wf = parse_workflow(_wf_with_script({"id": "x", "type": "script", "outputs": ["y"]}))
     with pytest.raises(WorkflowValidationError, match="must set 'code' or 'run'"):
         validate_workflow(wf)
 
@@ -809,8 +787,11 @@ def test_validate_multi_output_agent_ok() -> None:
     # A multi-output agent needs no separately-authored schema: its ports ARE the
     # schema, so it validates fine without any ``output_schema`` key.
     node = {
-        "id": "n1", "type": "agent", "inputs": ["topic"], "prompt": "go",
-        "outputs": [{"name": "a", "type": "string"}, {"name": "b", "type": "array"}],
+        "id": "n1",
+        "type": "agent",
+        "inputs": ["topic"],
+        "prompt": "go",
+        "outputs": [{"name": "a", "schema": {"type": "string"}}, {"name": "b", "schema": {"type": "array"}}],
     }
     wf = parse_workflow(_agent_wf(node))
     validate_workflow(wf)  # no raise
@@ -818,8 +799,11 @@ def test_validate_multi_output_agent_ok() -> None:
 
 def test_validate_bad_port_type_fails_fast() -> None:
     node = {
-        "id": "n1", "type": "script", "inputs": [{"name": "topic", "type": "strng"}],
-        "code": "def n1(ctx, topic):\n    return topic", "outputs": ["out"],
+        "id": "n1",
+        "type": "script",
+        "inputs": [{"name": "topic", "schema": {"type": "strng"}}],
+        "code": "def n1(ctx, topic):\n    return topic",
+        "outputs": ["out"],
     }
     wf = parse_workflow(_agent_wf(node))
     with pytest.raises(WorkflowValidationError, match="unknown type 'strng'"):
@@ -838,11 +822,23 @@ def test_validate_unbounded_cycle_fails() -> None:
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script",
-             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
-             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
-            {"id": "b", "type": "script", "inputs": [{"name": "oa", "type": "string"}],
-             "code": "def b(ctx, oa):\n    return oa", "outputs": ["ob"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [
+                    {"name": "seed", "schema": {"type": "string"}},
+                    {"name": "back", "schema": {"type": "string"}, "required": False},
+                ],
+                "code": "def a(ctx, seed, back):\n    return seed",
+                "outputs": ["oa"],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "oa", "schema": {"type": "string"}}],
+                "code": "def b(ctx, oa):\n    return oa",
+                "outputs": ["ob"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -864,11 +860,23 @@ def test_validate_bounded_loop_not_flagged_as_cycle() -> None:
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script",
-             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
-             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
-            {"id": "b", "type": "script", "inputs": [{"name": "oa", "type": "string"}],
-             "code": "def b(ctx, oa):\n    return oa", "outputs": ["ob"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [
+                    {"name": "seed", "schema": {"type": "string"}},
+                    {"name": "back", "schema": {"type": "string"}, "required": False},
+                ],
+                "code": "def a(ctx, seed, back):\n    return seed",
+                "outputs": ["oa"],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "oa", "schema": {"type": "string"}}],
+                "code": "def b(ctx, oa):\n    return oa",
+                "outputs": ["ob"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -891,9 +899,16 @@ def test_validate_self_loop_unbounded_fails() -> None:
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script",
-             "inputs": [{"name": "seed", "type": "string"}, {"name": "back", "type": "string", "optional": True}],
-             "code": "def a(ctx, seed, back):\n    return seed", "outputs": ["oa"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [
+                    {"name": "seed", "schema": {"type": "string"}},
+                    {"name": "back", "schema": {"type": "string"}, "required": False},
+                ],
+                "code": "def a(ctx, seed, back):\n    return seed",
+                "outputs": ["oa"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -917,10 +932,20 @@ def _typed_two_node_wf(src_out_type: str, dst_in_type: str) -> dict[str, object]
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
-             "code": "def a(ctx, seed):\n    return seed", "outputs": [{"name": "oa", "type": src_out_type}]},
-            {"id": "b", "type": "script", "inputs": [{"name": "ib", "type": dst_in_type}],
-             "code": "def b(ctx, ib):\n    return ib", "outputs": ["ob"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "seed", "schema": {"type": "string"}}],
+                "code": "def a(ctx, seed):\n    return seed",
+                "outputs": [{"name": "oa", "schema": {"type": src_out_type}}],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "ib", "schema": {"type": dst_in_type}}],
+                "code": "def b(ctx, ib):\n    return ib",
+                "outputs": ["ob"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -949,8 +974,13 @@ def test_validate_edge_from_in_is_type_exempt() -> None:
         "defaults": {"model": "m"},
         "state": {"n": 5},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "n", "type": "integer"}],
-             "code": "def a(ctx, n):\n    return n", "outputs": ["oa"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "n", "schema": {"type": "integer"}}],
+                "code": "def a(ctx, n):\n    return n",
+                "outputs": ["oa"],
+            },
         ],
         "edges": [{"from": "$in", "to": "a", "map": {"n": "n"}}],
     }
@@ -970,11 +1000,20 @@ def _subfield_wf(map_obj: dict[str, str], dst: str = "b") -> dict[str, object]:
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
-             "code": "def a(ctx, seed):\n    return {'owner': seed}",
-             "outputs": [{"name": "plan", "type": "object"}]},
-            {"id": "b", "type": "script", "inputs": [{"name": "who", "type": "string"}],
-             "code": "def b(ctx, who):\n    return who", "outputs": ["ob"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "seed", "schema": {"type": "string"}}],
+                "code": "def a(ctx, seed):\n    return {'owner': seed}",
+                "outputs": [{"name": "plan", "schema": {"type": "object"}}],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "who", "schema": {"type": "string"}}],
+                "code": "def b(ctx, who):\n    return who",
+                "outputs": ["ob"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -1018,11 +1057,20 @@ def _typed_subfield_wf(plan_schema: dict[str, object], src_key: str, dst_type: s
         "defaults": {"model": "m"},
         "state": {"seed": "x"},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "seed", "type": "string"}],
-             "code": "def a(ctx, seed):\n    return {}",
-             "outputs": [{"name": "plan", "schema": plan_schema}]},
-            {"id": "b", "type": "script", "inputs": [{"name": "s", "type": dst_type}],
-             "code": "def b(ctx, s):\n    return s", "outputs": ["ob"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "seed", "schema": {"type": "string"}}],
+                "code": "def a(ctx, seed):\n    return {}",
+                "outputs": [{"name": "plan", "schema": plan_schema}],
+            },
+            {
+                "id": "b",
+                "type": "script",
+                "inputs": [{"name": "s", "schema": {"type": dst_type}}],
+                "code": "def b(ctx, s):\n    return s",
+                "outputs": ["ob"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "a", "map": {"seed": "seed"}},
@@ -1074,8 +1122,13 @@ def test_validate_subfield_from_in_exempt() -> None:
         "defaults": {"model": "m"},
         "state": {"cfg": {"n": 1}},
         "nodes": [
-            {"id": "a", "type": "script", "inputs": [{"name": "s", "type": "string"}],
-             "code": "def a(ctx, s):\n    return s", "outputs": ["oa"]},
+            {
+                "id": "a",
+                "type": "script",
+                "inputs": [{"name": "s", "schema": {"type": "string"}}],
+                "code": "def a(ctx, s):\n    return s",
+                "outputs": ["oa"],
+            },
         ],
         "edges": [{"from": "$in", "to": "a", "map": {"$.cfg.n": "s"}}],
     }
@@ -1130,15 +1183,29 @@ def test_strict_condition_operand_unknown_root_fails() -> None:
         "defaults": {"model": "m"},
         "state": {"n": 1},
         "nodes": [
-            {"id": "route", "type": "script", "inputs": [{"name": "n", "type": "integer"}],
-             "code": "def route(ctx, n):\n    return n", "outputs": [{"name": "z", "type": "integer"}]},
-            {"id": "sink", "type": "script", "inputs": [{"name": "z", "type": "integer"}],
-             "code": "def sink(ctx, z):\n    return z", "outputs": ["out"]},
+            {
+                "id": "route",
+                "type": "script",
+                "inputs": [{"name": "n", "schema": {"type": "integer"}}],
+                "code": "def route(ctx, n):\n    return n",
+                "outputs": [{"name": "z", "schema": {"type": "integer"}}],
+            },
+            {
+                "id": "sink",
+                "type": "script",
+                "inputs": [{"name": "z", "schema": {"type": "integer"}}],
+                "code": "def sink(ctx, z):\n    return z",
+                "outputs": ["out"],
+            },
         ],
         "edges": [
             {"from": "$in", "to": "route", "map": {"n": "n"}},
-            {"from": "route", "to": "sink", "map": {"z": "z"},
-             "when": {"equals": {"value": "{{ $.kind }}", "text": "x"}}},
+            {
+                "from": "route",
+                "to": "sink",
+                "map": {"z": "z"},
+                "when": {"equals": {"value": "{{ $.kind }}", "text": "x"}},
+            },
         ],
     }
     wf = parse_workflow(data)
@@ -1209,7 +1276,7 @@ def test_fan_out_element_type_mismatch_raises() -> None:
     def mut(d: dict) -> None:
         # items are integers but the worker's input port is a string
         d["nodes"][0]["outputs"] = [{"name": "tasks", "schema": {"type": "array", "items": {"type": "integer"}}}]
-        d["nodes"][1]["inputs"] = [{"name": "task", "type": "string"}]
+        d["nodes"][1]["inputs"] = [{"name": "task", "schema": {"type": "string"}}]
 
     with pytest.raises(WorkflowValidationError, match="type mismatch"):
         validate_workflow(parse_workflow(_map_reduce_wf(mut)))
@@ -1302,8 +1369,7 @@ def test_loop_with_when_does_not_warn() -> None:
         ],
         "edges": [
             {"from": "a", "to": "b"},
-            {"from": "b", "to": "a", "loop": {"max": 3},
-             "when": {"contains": {"value": "{{y}}", "text": "REVISE"}}},
+            {"from": "b", "to": "a", "loop": {"max": 3}, "when": {"contains": {"value": "{{y}}", "text": "REVISE"}}},
         ],
     }
     wf = parse_workflow(data)

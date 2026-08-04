@@ -346,23 +346,39 @@ async def execute(
         assert checkpoint is not None and run_id is not None  # narrow types
         snap = checkpoint.load(run_id)
         if snap is not None:
-            outputs = snap["outputs"]
-            completed = set(snap["completed"])
-            # Restore only the current content-hashed edge ids. Legacy
-            # ``src->dst`` checkpoint keys are intentionally not compatible.
-            lc_raw: dict[str, int] = snap.get("loop_counters", {})
+            expected_keys = {
+                "outputs",
+                "completed",
+                "loop_counters",
+                "stack",
+                "out_live",
+                "memo",
+                "tokens_used",
+            }
+            if set(snap) != expected_keys:
+                raise WorkflowExecutionError("checkpoint does not match the current seven-field schema")
+            if not isinstance(snap["outputs"], dict) or not isinstance(snap["completed"], list):
+                raise WorkflowExecutionError("checkpoint outputs/completed have invalid types")
+            if not isinstance(snap["loop_counters"], dict) or not isinstance(snap["stack"], list):
+                raise WorkflowExecutionError("checkpoint loop_counters/stack have invalid types")
+            if not isinstance(snap["out_live"], dict) or not isinstance(snap["memo"], dict):
+                raise WorkflowExecutionError("checkpoint out_live/memo have invalid types")
+            if not isinstance(snap["tokens_used"], int):
+                raise WorkflowExecutionError("checkpoint tokens_used must be an integer")
+
+            outputs = {str(k): dict(v) for k, v in snap["outputs"].items() if isinstance(v, dict)}
+            completed = {str(node_id) for node_id in snap["completed"]}
+            lc_raw = snap["loop_counters"]
             loop_counters = {
-                edge_id: count
+                str(edge_id): count
                 for edge_id, count in lc_raw.items()
                 if edge_id in edge_by_id and isinstance(count, int)
             }
-            stack = snap.get("stack", [])
-            out_live = snap.get("out_live", {})
+            stack = [dict(frame) for frame in snap["stack"] if isinstance(frame, dict)]
+            out_live = {str(k): v for k, v in snap["out_live"].items()}
             step_counter = len(stack)
-            raw_memo = snap.get("memo", {})
-            if isinstance(raw_memo, dict):
-                memo = {str(k): dict(v) for k, v in raw_memo.items() if isinstance(v, dict)}
-            tokens_used = int(snap.get("tokens_used", 0))
+            memo = {str(k): dict(v) for k, v in snap["memo"].items() if isinstance(v, dict)}
+            tokens_used = snap["tokens_used"]
 
             # A strict while may have checkpointed its final completed node just
             # before the scheduler detected non-convergence.  Re-evaluate terminal
@@ -749,14 +765,6 @@ async def execute(
         raw = fn(ctx, **kwargs)
         value = await asyncio.wait_for(raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout)
         return _coerce_script_output(node, node_id, value)
-
-    async def _store_script_output(node: NodeDef, node_id: str, value: Any) -> None:
-        """Coerce a script's return value into the node's output port(s)."""
-        stored = _coerce_script_output(node, node_id, value)
-        if not stored:
-            return
-        async with _state_lock:
-            outputs.setdefault(node_id, {}).update(stored)
 
     _sdk_runner_cache: list[SdkRunner] = []
     _cli_runner_cache: dict[str, CliRunner] = {}
