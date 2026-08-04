@@ -8,6 +8,7 @@ from flow.frontier import (
     is_quiescent,
     new_frontier_state,
     render_frontier_runtime,
+    replay_completed,
     take_ready,
 )
 from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef, edge_identities
@@ -218,6 +219,27 @@ def test_rendered_frontier_runtime_is_standalone_and_compiles() -> None:
     exec(compile(source, "<frontier-runtime>", "exec"), namespace)  # noqa: S102
     assert callable(namespace["take_ready"])
     assert callable(namespace["complete_batch"])
+
+
+def test_replay_completed_restores_partial_loop_arrival() -> None:
+    wf = _two_source_loop()
+    spec = build_frontier_spec(wf)
+    edge_ab, edge_ac, edge_ba, edge_ca = edge_identities(wf)
+    state = new_frontier_state(spec, {"a", "b"})
+    replay_completed(spec, state, "a", {edge_ab: True, edge_ac: True})
+    replay_completed(spec, state, "b", {edge_ba: True})
+
+    # C is the only remaining source; its completion joins B's replayed arrival.
+    reached = state["reached"]
+    assert isinstance(reached, set)
+    reached.add(("c", 0))
+    take_ready(spec, state)
+    counts: dict[str, int] = {}
+    error = complete_batch(spec, state, [("c", 0, {edge_ca: True})], counts)
+
+    assert error is None
+    assert counts == {edge_ba: 1, edge_ca: 1}
+    assert take_ready(spec, state) == [("a", 1, (edge_ba, edge_ca))]
 
 
 def test_loop_generation_discards_old_completion_and_arrivals() -> None:

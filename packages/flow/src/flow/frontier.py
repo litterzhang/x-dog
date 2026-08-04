@@ -323,22 +323,32 @@ def replay_completed(
     node_id: str,
     edge_results: dict[str, bool],
 ) -> None:
-    """Rebuild forward reachability from a checkpoint-completed node.
+    """Rebuild forward reachability and partial loop arrivals from a checkpoint.
 
-    Checkpoints persist nodes and outputs, not transient edge decisions.  Replay only
-    non-loop transitions: loop counters already represent committed loop firings and
-    must not be incremented again during restore.
+    Replay never increments loop counters or fires a group; it only reconstructs
+    transient decisions from saved source outputs. Already-fired activations are
+    restored separately from committed counters by :func:`restore_loop_activations`.
     """
     completed = _dict(state["completed"])
     epoch = _generation(state, node_id)
     completed[node_id] = epoch
     outgoing = _dict(spec["outgoing"])
     edges = _dict(spec["edges"])
+    arrivals = _dict(state["loop_arrivals"])
     for raw_edge_id in _tuple(outgoing[node_id]):
         edge_id = str(raw_edge_id)
         edge = _dict(edges[edge_id])
-        if not bool(edge["loop"]) and edge_results.get(edge_id, False):
-            _enable_edge(spec, state, edge_id)
+        enabled = edge_results.get(edge_id, False)
+        if not bool(edge["loop"]):
+            if enabled:
+                _enable_edge(spec, state, edge_id)
+            continue
+        destination = str(edge["dst"])
+        group_key = (destination, _generation(state, destination))
+        group_arrivals = arrivals.setdefault(group_key, {})
+        if not isinstance(group_arrivals, dict):
+            raise TypeError("loop arrivals must be a dict")
+        group_arrivals[edge_id] = enabled
 
 
 def complete_batch(

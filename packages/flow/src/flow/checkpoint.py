@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -15,6 +17,35 @@ class CheckpointStore(Protocol):
     def save(self, run_id: str, snapshot: dict[str, Any]) -> None: ...
 
     def load(self, run_id: str) -> dict[str, Any] | None: ...  # None if absent
+
+
+class CheckpointInterceptor:
+    """Persist only after a coherent state mutation completes successfully."""
+
+    def __init__(
+        self,
+        snapshot_factory: Callable[[], dict[str, object]],
+        persist: Callable[[dict[str, object]], None],
+    ) -> None:
+        self._snapshot_factory = snapshot_factory
+        self._persist = persist
+
+    def intercept(self, reason: str, mutation: Callable[[], Any]) -> Any:
+        """Run *mutation*, then persist exactly once if it returns normally."""
+        _ = reason  # diagnostic boundary label; deliberately not serialized
+        result = mutation()
+        self.commit(reason)
+        return result
+
+    def commit(self, reason: str) -> None:
+        """Persist the current state without a preceding mutation (e.g. pause)."""
+        _ = reason
+        self._persist(self._snapshot_factory())
+
+
+def render_checkpoint_interceptor() -> str:
+    """Return the exact standalone interceptor implementation for codegen."""
+    return inspect.getsource(CheckpointInterceptor)
 
 
 class JSONFileCheckpointStore:

@@ -237,11 +237,15 @@ _RUNTIME: dict[str, object] = {}
 $registry_line
 $concurrency_boilerplate
 
+$checkpoint_runtime
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint helpers — active only when FLOW_RUN_ID + FLOW_CHECKPOINT_DIR set.
 # ---------------------------------------------------------------------------
 _FLOW_RUN_ID: str | None = None
 _FLOW_CHECKPOINT_DIR: str | None = None
+_CHECKPOINT_LOADED = False
 
 
 def _checkpoint_path() -> Path | None:
@@ -251,11 +255,13 @@ def _checkpoint_path() -> Path | None:
 
 
 def _load_checkpoint() -> None:
+    global _CHECKPOINT_LOADED
     p = _checkpoint_path()
     if p is None or not p.exists():
         return
     with p.open(encoding="utf-8") as _fh:
         _snap: dict[str, object] = json.load(_fh)
+    _CHECKPOINT_LOADED = True
     _out = _snap.get("outputs")
     if isinstance(_out, dict):
         _OUT.clear()
@@ -285,12 +291,8 @@ def _load_checkpoint() -> None:
                 _LOOP_COUNTERS[str(_lk)] = _lv
 
 
-def _save_checkpoint() -> None:
-    p = _checkpoint_path()
-    if p is None:
-        return
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _snap = {
+def _checkpoint_snapshot() -> dict[str, object]:
+    return {
         "outputs": _OUT,
         "completed": list(_COMPLETED),
         "stack": _STACK,
@@ -299,10 +301,17 @@ def _save_checkpoint() -> None:
         "tokens_used": _TOKENS_USED,
         "loop_counters": _LOOP_COUNTERS,
     }
+
+
+def _persist_checkpoint(snapshot: dict[str, object]) -> None:
+    p = _checkpoint_path()
+    if p is None:
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
     _fd, _tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
     try:
         with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
-            json.dump(_snap, _fh, ensure_ascii=False)
+            json.dump(snapshot, _fh, ensure_ascii=False)
         os.replace(_tmp, p)
     except Exception:
         try:
@@ -310,6 +319,9 @@ def _save_checkpoint() -> None:
         except OSError:
             pass
         raise
+
+
+_CHECKPOINT = CheckpointInterceptor(_checkpoint_snapshot, _persist_checkpoint)
 
 
 $sdk_run_agent
@@ -524,8 +536,6 @@ async def _drive(
             _t0m = time.monotonic()
             _OUT[node_id] = dict(_MEMO[_mk])
             _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT[node_id])})
-            _COMPLETED.add(node_id)
-            _save_checkpoint()
             _EVENT_LOG.info(
                 "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0m
             )
@@ -554,13 +564,9 @@ async def _drive(
         _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
         if deterministic:
             _MEMO[_mk] = dict(_OUT.get(node_id, {}))
-        _COMPLETED.add(node_id)
-        _save_checkpoint()
         _EVENT_LOG.info(
             "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0
         )
-        if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
-            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
     except BaseException as _ev_exc:
         _EVENT_LOG.info(
             "NodeFailed node=%s step=%d duration_s=%f error=%s",
@@ -612,13 +618,9 @@ async def _drive_fan(
     store_fn(ins, _agg)
     _TOKENS_USED += _tokens
     _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
-    _COMPLETED.add(node_id)
-    _save_checkpoint()
     _EVENT_LOG.info(
         "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0
     )
-    if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:
-        raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)  # type: ignore[arg-type]
 
 
 $frontier_runtime
@@ -640,6 +642,8 @@ $signals_main_init
     # FLOW_INPUTS is a JSON object merged into the initial state; FLOW_PROVIDER
     # swaps the provider.
     _raw_inputs = os.environ.get("FLOW_INPUTS", "")
+    if _raw_inputs.strip() and _CHECKPOINT_LOADED:
+        raise WorkflowExecutionError("FLOW_INPUTS cannot override a resumed checkpoint")
     if _raw_inputs.strip():
         _OUT[$in_node_id].update(json.loads(_raw_inputs))
 $provider_init

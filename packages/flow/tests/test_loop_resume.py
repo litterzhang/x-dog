@@ -210,6 +210,22 @@ def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatc
     assert total_a_runs <= 6, f"resume re-ran too much: {total_a_runs} a-runs"
 
 
+def test_generated_resume_rejects_input_override(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    wf = parse_workflow(_count_loop_wf(exit_at=1))
+    source = generate(wf)
+    checkpoint_dir = tmp_path / "ck"
+    checkpoint_dir.mkdir()
+    monkeypatch.setenv("FLOW_RUN_ID", "override")
+    monkeypatch.setenv("FLOW_CHECKPOINT_DIR", str(checkpoint_dir))
+    _run_gen(source, "_override_initial")
+
+    monkeypatch.setenv("FLOW_INPUTS", '{"n": 99}')
+    module = types.ModuleType("_override_resume")
+    exec(compile(source, "<override-resume>", "exec"), module.__dict__)  # noqa: S102
+    with pytest.raises(Exception, match="cannot override a resumed checkpoint"):
+        asyncio.run(module.main())  # type: ignore[attr-defined]
+
+
 def _nested_loop_wf() -> dict[str, Any]:
     """An outer loop containing an inner loop, to exercise distinct loop vars."""
     return {

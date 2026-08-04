@@ -9,6 +9,7 @@ equivalent (``{$in: runtime["in"], **runtime["state"]}``).
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib.util
 import subprocess
 import sys
@@ -90,6 +91,38 @@ def test_generate_linear_compiles() -> None:
 def test_generate_linear_ruff_clean() -> None:
     ok, msg = _ruff_clean(generate(_make_linear_wf()))
     assert ok, f"ruff failed:\n{msg}"
+
+
+async def test_generated_interceptor_saves_once_per_frontier_batch() -> None:
+    wf = WorkflowDef(
+        name="generated-boundaries",
+        provider="",
+        entry="a",
+        nodes=(
+            NodeDef(id="a", type="script", code="def a(ctx):\n    return 'A'", output_ports=(Port("x"),)),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, x):\n    return x + 'B'",
+                input_ports=(Port("x"),),
+                output_ports=(Port("y"),),
+            ),
+        ),
+        edges=(EdgeDef(src="a", dst="b", mapping=(("x", "x"),)),),
+    )
+    module = types.ModuleType("_generated_checkpoint_boundaries")
+    exec(compile(generate(wf), "<generated-boundaries>", "exec"), module.__dict__)  # noqa: S102
+    snapshots: list[dict[str, object]] = []
+    module._CHECKPOINT = module.CheckpointInterceptor(  # type: ignore[attr-defined]
+        module._checkpoint_snapshot,  # type: ignore[attr-defined]
+        lambda snapshot: snapshots.append(copy.deepcopy(snapshot)),
+    )
+
+    await module.main()  # type: ignore[attr-defined]
+
+    assert len(snapshots) == 2
+    assert set(snapshots[0]["completed"]) == {"a"}  # type: ignore[arg-type]
+    assert set(snapshots[1]["completed"]) == {"a", "b"}  # type: ignore[arg-type]
 
 
 def test_generate_linear_state_seed() -> None:

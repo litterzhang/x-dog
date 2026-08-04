@@ -20,7 +20,7 @@ from typing import Any
 
 from agent.core import StreamFn
 
-from flow.checkpoint import CheckpointStore
+from flow.checkpoint import CheckpointInterceptor, CheckpointStore
 from flow.coerce import to_python, to_state
 from flow.conditions import evaluate
 from flow.errors import WorkflowBudgetExceeded, WorkflowExecutionError, WorkflowPaused
@@ -379,32 +379,25 @@ async def execute(
                 ):
                     raise _strict_loop_error(edge)
 
-    def _save_checkpoint() -> None:
-        """Persist a snapshot of the current run state (called inside _state_lock).
-
-        The generated module's checkpoint (templates/runtime.py.tmpl) shares this
-        schema, including ``loop_counters``: codegen now persists a loop's position
-        (content-hashed edge id -> iterations) and a resumed generated module continues
-        a bounded loop from that count instead of re-running it — so both engines
-        checkpoint/resume mid-loop.  (The counter's numeric meaning differs slightly —
-        the interpreter counts back-edge firings, codegen counts for-iterations — but
-        a run uses one engine, so each resumes itself correctly; checkpoints are not
-        shared across engines.)
-        """
-        if not _ckpt_active:
-            return
-        assert checkpoint is not None and run_id is not None
-        lc_serial = dict(loop_counters)
-        snap: dict[str, Any] = {
+    def _checkpoint_snapshot() -> dict[str, object]:
+        """Materialize the unchanged seven-field checkpoint schema."""
+        return {
             "outputs": outputs,
             "completed": list(completed),
-            "loop_counters": lc_serial,
+            "loop_counters": dict(loop_counters),
             "stack": stack,
             "out_live": out_live,
             "memo": memo,
             "tokens_used": tokens_used,
         }
-        checkpoint.save(run_id, snap)
+
+    def _persist_checkpoint(snapshot: dict[str, object]) -> None:
+        if not _ckpt_active:
+            return
+        assert checkpoint is not None and run_id is not None
+        checkpoint.save(run_id, snapshot)
+
+    checkpoint_interceptor = CheckpointInterceptor(_checkpoint_snapshot, _persist_checkpoint)
 
     async def _reserve_step() -> int:
         """Reserve the next monotonic step number (under the state lock)."""
@@ -542,11 +535,7 @@ async def execute(
         await _record_frame(node_id, {worker_port: items} if worker_port else {}, step)
         async with _state_lock:
             tokens_used += total_tokens
-        completed.add(node_id)
-        _save_checkpoint()
         _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=total_tokens))
-        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
-            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
     async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> None:
         """Run a ``type="subflow"`` node (G5) as ONE opaque nested workflow.
@@ -596,15 +585,11 @@ async def execute(
         await _record_frame(node_id, ins, step)
         async with _state_lock:
             tokens_used += child_tokens if isinstance(child_tokens, int) else 0
-        completed.add(node_id)
-        _save_checkpoint()
         _emit(NodeFinished(
             node_id=node_id, step=step,
             duration_s=time.monotonic() - _t0,
             tokens=child_tokens if isinstance(child_tokens, int) else 0,
         ))
-        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
-            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
     async def _run_node(node_id: str, step: int, enabled_edge_ids: tuple[str, ...]) -> None:
         """Execute one scheduler activation and store its output ports."""
@@ -632,9 +617,6 @@ async def execute(
                 async with _state_lock:
                     outputs[node_id] = dict(memo[_mk])
                 await _record_frame(node_id, ins, step)
-                async with _state_lock:
-                    completed.add(node_id)
-                    _save_checkpoint()
                 _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_memo, tokens=0))
                 return
 
@@ -649,12 +631,8 @@ async def execute(
                     if node.output_ports:
                         outputs[node_id][node.output_ports[0].name] = approval_val
                 await _record_frame(node_id, ins, step)
-                completed.add(node_id)
-                _save_checkpoint()
                 _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_human, tokens=0))
             else:
-                # Signal absent — save checkpoint and pause
-                _save_checkpoint()
                 raise WorkflowPaused(node_id, node.signal)
             return
 
@@ -692,8 +670,6 @@ async def execute(
             async with _state_lock:
                 if node.deterministic:
                     memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
-            completed.add(node_id)
-            _save_checkpoint()
             _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
             return
 
@@ -732,16 +708,12 @@ async def execute(
             tokens_used += total_tokens  # before the checkpoint so the saved total is current
             if node.deterministic:
                 memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
-        completed.add(node_id)
-        _save_checkpoint()
         _emit(NodeFinished(
             node_id=node_id, step=agent_step,
             duration_s=time.monotonic() - _t0_agent,
             tokens=total_tokens,
         ))
         # Budget circuit-breaker: abort once the cumulative total passes the ceiling.
-        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
-            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
 
     def _coerce_script_output(node: NodeDef, node_id: str, value: Any) -> dict[str, object]:
         """Coerce a script's return value into its output-port dict (no store)."""
@@ -936,7 +908,7 @@ async def execute(
                 return_exceptions=True,
             )
 
-        first_fail_exc: BaseException | None = None
+        deferred_exception: BaseException | None = None
         successful: list[tuple[str, int, dict[str, bool]]] = []
         for (node_id, epoch, _enabled_edge_ids, _step), result in zip(
             scheduled,
@@ -947,37 +919,41 @@ async def execute(
                 successful.append((node_id, epoch, _resolve_outgoing(node_id)))
                 continue
             if isinstance(result, (WorkflowPaused, WorkflowBudgetExceeded)):
-                raise result
+                if deferred_exception is None:
+                    deferred_exception = result
+                continue
             node_def = node_map[node_id]
             if node_def.on_error == "isolate":
                 failed[node_id] = f"{type(result).__name__}: {result}"
                 scope = {node_id} | _transitive_successors(node_id)
                 isolated.update(scope)
                 isolate_nodes(frontier_state, scope)
-            elif first_fail_exc is None:
-                first_fail_exc = result
+            elif deferred_exception is None:
+                deferred_exception = result
 
-        if first_fail_exc is not None:
-            raise first_fail_exc
+        def _settle_frontier_batch() -> None:
+            strict_edge_id = complete_batch(
+                frontier_spec,
+                frontier_state,
+                successful,
+                loop_counters,
+            )
+            if strict_edge_id is not None:
+                raise _strict_loop_error(edge_by_id[strict_edge_id])
+            frontier_completed = frontier_state["completed"]
+            assert isinstance(frontier_completed, dict)
+            completed.clear()
+            completed.update(str(node_id) for node_id in frontier_completed)
 
-        strict_edge_id = complete_batch(
-            frontier_spec,
-            frontier_state,
-            successful,
-            loop_counters,
-        )
-        if strict_edge_id is not None:
-            raise _strict_loop_error(edge_by_id[strict_edge_id])
+        if successful:
+            checkpoint_interceptor.intercept("frontier-batch", _settle_frontier_batch)
+        elif isinstance(deferred_exception, WorkflowPaused):
+            checkpoint_interceptor.commit("human-pause")
 
-        # Keep the existing checkpoint-facing completed view aligned with the
-        # current-generation frontier state after loop invalidation.
-        frontier_completed = frontier_state["completed"]
-        assert isinstance(frontier_completed, dict)
-        completed.clear()
-        completed.update(str(node_id) for node_id in frontier_completed)
-        # Persist the graph transition (loop counters + invalidated completion view)
-        # using the existing checkpoint schema, closing the post-node crash window.
-        _save_checkpoint()
+        if max_tokens is not None and max_tokens > 0 and tokens_used > max_tokens:
+            raise WorkflowBudgetExceeded(tokens_used, max_tokens)
+        if deferred_exception is not None:
+            raise deferred_exception
 
     last = stack[-1] if stack else {}
     runtime: dict[str, Any] = {

@@ -17,6 +17,7 @@ import pprint
 import re
 import string
 
+from flow.checkpoint import render_checkpoint_interceptor
 from flow.frontier import build_frontier_spec, render_frontier_runtime
 from flow.models import (
     IN_NODE_ID,
@@ -603,15 +604,12 @@ def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
         lines.append(f"        _OUT[{node.id!r}][{p.name!r}] = 'approved'")
     for tl in _render_node_tail(node, wf, step_expr="step"):
         lines.append("    " + tl)
-    lines.append(f"        _COMPLETED.add({node.id!r})")
-    lines.append("        _save_checkpoint()")
     _finished_log = (
         f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
         f"{node.id!r}, step, time.monotonic() - _t0)  # noqa: E501"
     )
     lines.append(_finished_log)
     lines.append("    else:")
-    lines.append("        _save_checkpoint()")
     lines.append(
         f"        print(f'PAUSED: {_ESC(node.id)} awaiting {_ESC(node.signal)}')"
     )
@@ -988,7 +986,7 @@ def _render_frontier_scheduler(wf: WorkflowDef) -> str:
         ]
     lines += [
         "        successful = []",
-        "        first_failure: BaseException | None = None",
+        "        deferred_failure: BaseException | None = None",
         "        for (node_id, epoch, _enabled, _step), result in zip(scheduled, results, strict=True):",
         "            if not isinstance(result, BaseException):",
         "                successful.append((node_id, epoch, _resolve_outgoing(node_id)))",
@@ -1000,18 +998,24 @@ def _render_frontier_scheduler(wf: WorkflowDef) -> str:
         "                scope = {node_id, *_ISOLATE_SCOPES[node_id]}",
         "                _ISOLATED.update(scope)",
         "                isolate_nodes(state, scope)",
-        "            elif first_failure is None:",
-        "                first_failure = result",
-        "        if first_failure is not None:",
-        "            raise first_failure",
-        "        strict_edge = complete_batch(_FRONTIER_SPEC, state, successful, _LOOP_COUNTERS)",
-        "        if strict_edge is not None:",
-        "            raise WorkflowExecutionError(_LOOP_ERRORS[strict_edge])",
-        "        frontier_completed = state['completed']",
-        "        assert isinstance(frontier_completed, dict)",
-        "        _COMPLETED.clear()",
-        "        _COMPLETED.update(str(node_id) for node_id in frontier_completed)",
-        "        _save_checkpoint()",
+        "            elif deferred_failure is None:",
+        "                deferred_failure = result",
+        "        def _settle_frontier_batch() -> None:",
+        "            strict_edge = complete_batch(_FRONTIER_SPEC, state, successful, _LOOP_COUNTERS)",
+        "            if strict_edge is not None:",
+        "                raise WorkflowExecutionError(_LOOP_ERRORS[strict_edge])",
+        "            frontier_completed = state['completed']",
+        "            assert isinstance(frontier_completed, dict)",
+        "            _COMPLETED.clear()",
+        "            _COMPLETED.update(str(node_id) for node_id in frontier_completed)",
+        "        if successful:",
+        "            _CHECKPOINT.intercept('frontier-batch', _settle_frontier_batch)",
+        "        elif isinstance(deferred_failure, SystemExit):",
+        "            _CHECKPOINT.commit('human-pause')",
+        "        if _MAX_TOKENS is not None and _MAX_TOKENS > 0 and _TOKENS_USED > _MAX_TOKENS:",
+        "            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)",
+        "        if deferred_failure is not None:",
+        "            raise deferred_failure",
     ]
     return "\n".join(lines)
 
@@ -1081,6 +1085,7 @@ def generate(wf: WorkflowDef) -> str:
         in_node_id=repr(IN_NODE_ID),
         node_functions=node_functions,
         frontier_runtime=render_frontier_runtime(),
+        checkpoint_runtime=render_checkpoint_interceptor(),
         provider=wf.provider,
         provider_init=provider_init,
         sdk_imports=sdk_imports,
