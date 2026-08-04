@@ -26,6 +26,7 @@ from flow.models import (
     WorkflowDef,
     agent_is_structured,
     agent_output_schema,
+    edge_identities,
     entry_frontier,
 )
 
@@ -354,16 +355,20 @@ def _incoming_loops(node_id: str, wf: WorkflowDef) -> list[EdgeDef]:
     return [e for e in wf.edges if e.dst == node_id and e.loop_max is not None]
 
 
-def _emit_ins_assign(lines: list[str], src: str, sport: str, dport: str, guard: str | None) -> None:
+def _emit_ins_assign(
+    lines: list[str], src: str, sport: str, dport: str, guard: str | None, *, concat: bool = False
+) -> None:
     """Emit the guarded ``ins[dport] = <source value>`` for one edge mapping.
 
     The source key is a JSONPath resolved against the source node's output-ports
     dict via the inlined ``jsonpath_get`` — a plain port (``plan``) or a nested
     field (``$.verdict.within_budget``).  A miss (None) leaves the port unfed —
     mirroring the interpreter's ``_build_inputs``.  *guard* is an extra condition
-    (loop edges) or None.
+    (loop edges) or None.  *concat* flattens a fan_in="concat" list-of-arrays.
     """
-    getter = f"jsonpath_get(_OUT.get({src!r}, {{}}), {sport!r})"
+    getter = f"_fan_concat(jsonpath_get(_OUT.get({src!r}, {{}}), {sport!r}))" if concat else (
+        f"jsonpath_get(_OUT.get({src!r}, {{}}), {sport!r})"
+    )
     cond = f"({guard})" if guard else None
     lines.append(f"    _rv = {getter}" if cond is None else f"    if {cond}:")
     if cond is None:
@@ -389,7 +394,7 @@ def _render_ins(node: NodeDef, wf: WorkflowDef) -> list[str]:
     for edge in _incoming(node.id, wf):
         src = IN_NODE_ID if edge.src == IN_NODE_ID else edge.src
         for sport, dport in edge.mapping:
-            _emit_ins_assign(lines, src, sport, dport, None)
+            _emit_ins_assign(lines, src, sport, dport, None, concat=edge.fan_in == "concat")
     for edge in _incoming_loops(node.id, wf):
         if not edge.mapping:
             continue
@@ -425,11 +430,18 @@ def _render_node_tail(node: NodeDef, wf: WorkflowDef) -> list[str]:
             continue
         guard = _condition_to_expr(edge.when, out_container) if edge.when is not None else None
         for sport, okey in edge.mapping:
-            cond = f"{sport!r} in _OUT[{node.id!r}]"
+            head = sport[2:] if sport.startswith("$.") else (sport[1:] if sport.startswith("$") else sport)
+            head = re.split(r"[.\[]", head, maxsplit=1)[0]
+            cond = f"{head!r} in _OUT[{node.id!r}]"
             if guard is not None:
                 cond = f"({guard}) and {cond}"
             lines.append(f"    if {cond}:")
-            lines.append(f"        _OUTPUT[{okey!r}] = _OUT[{node.id!r}][{sport!r}]")
+            getter = f"jsonpath_get(_OUT[{node.id!r}], {sport!r})"
+            if edge.fan_in == "concat":
+                getter = f"_fan_concat({getter})"
+            lines.append(f"        _rv = {getter}")
+            lines.append("        if _rv is not None:")
+            lines.append(f"            _OUTPUT[{okey!r}] = _rv")
     return lines
 
 
@@ -523,11 +535,18 @@ def _render_store_fn(node: NodeDef, wf: WorkflowDef, safe: str) -> list[str]:
             continue
         guard = _condition_to_expr(edge.when, out_container) if edge.when is not None else None
         for sport, okey in edge.mapping:
-            cond = f"{sport!r} in _OUT[{node.id!r}]"
+            head = sport[2:] if sport.startswith("$.") else (sport[1:] if sport.startswith("$") else sport)
+            head = re.split(r"[.\[]", head, maxsplit=1)[0]
+            cond = f"{head!r} in _OUT[{node.id!r}]"
             if guard is not None:
                 cond = f"({guard}) and {cond}"
             lines.append(f"    if {cond}:")
-            lines.append(f"        _OUTPUT[{okey!r}] = _OUT[{node.id!r}][{sport!r}]")
+            getter = f"jsonpath_get(_OUT[{node.id!r}], {sport!r})"
+            if edge.fan_in == "concat":
+                getter = f"_fan_concat({getter})"
+            lines.append(f"        _rv = {getter}")
+            lines.append("        if _rv is not None:")
+            lines.append(f"            _OUTPUT[{okey!r}] = _rv")
             flushed = True
     if not flushed:
         lines.append("    _ = ins  # (no $output flush; ins unused)")
@@ -891,25 +910,47 @@ def _render_main_body(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
 
 
 def _loop_maps(
-    loop_edges: list[EdgeDef], safe_ids: dict[str, str]
-) -> tuple[dict[str, tuple[str, int | None]], set[str], dict[str, str | None]]:
-    """Shared loop bookkeeping: entry->exit/max, exit set, exit->break expression."""
-    entry_map: dict[str, tuple[str, int | None]] = {}
+    wf: WorkflowDef, safe_ids: dict[str, str]
+) -> tuple[dict[str, tuple[str, int | None, str]], set[str], dict[str, str | None], set[str], dict[str, str]]:
+    """Shared loop bookkeeping: entry->exit/max, exit set, exit->break expression.
+
+    Also returns ``strict_exits`` (exit-node ids whose loop is a strict ``while``)
+    and ``strict_msg`` (exit-node id -> the non-convergence error message) so the
+    body renderers can emit a ``for/else: raise`` on a strict loop that exhausts
+    its bound without the exit condition firing.
+    """
+    entry_map: dict[str, tuple[str, int | None, str]] = {}
     exit_set: set[str] = set()
     exit_break: dict[str, str | None] = {}
-    for le in loop_edges:
-        entry_map[le.dst] = (le.src, le.loop_max)
+    strict_exits: set[str] = set()
+    strict_msg: dict[str, str] = {}
+    for le, edge_id in zip(wf.edges, edge_identities(wf), strict=True):
+        if le.loop_max is None:
+            continue
+        # A strict ``while`` runs its body up to ``loop_max + 1`` times to match the
+        # interpreter (which fires the back-edge ``loop_max`` times, one run each,
+        # after the node's initial run); a plain loop.max keeps ``loop_max``.
+        lmax = le.loop_max + 1 if le.loop_strict else le.loop_max
+        entry_map[le.dst] = (le.src, lmax, edge_id)
         exit_set.add(le.src)
         exit_break[le.src] = (
             _condition_to_negated_expr(le.when, _src_container_expr(safe_ids, le.src)) if le.when is not None else None
         )
-    return entry_map, exit_set, exit_break
+        if le.loop_strict:
+            strict_exits.add(le.src)
+            strict_msg[le.src] = (
+                f"while loop {le.src!r}->{le.dst!r} did not converge within "
+                f"{le.loop_max} iterations (condition still true)"
+            )
+    return entry_map, exit_set, exit_break, strict_exits, strict_msg
 
 
 def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit ``_ran``-gated sequential code for workflows with forward conditionals."""
-    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
-    loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
+    fwd_from, fwd_preds, _loop_edges = _build_fwd_graph(wf)
+    loop_entry_map, loop_exit_set, loop_exit_break, loop_strict_exits, loop_strict_msg = _loop_maps(
+        wf, safe_ids
+    )
 
     # Topological order over forward edges (Kahn), stable in declaration order.
     indeg: dict[str, int] = {n.id: 0 for n in wf.nodes}
@@ -948,8 +989,7 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
 
     for node_id in order:
         if node_id in loop_entry_map:
-            src, lmax = loop_entry_map[node_id]
-            key = f"{src}->{node_id}"
+            _src, lmax, key = loop_entry_map[node_id]
             var = f"_loop_i_{loop_depth}"
             lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
             loop_stack.append((key, var))
@@ -978,14 +1018,28 @@ def _render_main_body_conditional(wf: WorkflowDef, safe_ids: dict[str, str]) -> 
                 lines.append(f"{ind()}if {break_cond}:")
                 lines.append(f"{ind()}    break")
             loop_depth -= 1
+            if node_id in loop_strict_exits:
+                # A strict ``while``: for/else means the range exhausted without a
+                # break.  Re-check the condition for checkpoint resumes whose range
+                # may already be empty: only a still-true condition is non-convergence.
+                lines.append(f"{ind()}else:")
+                if break_cond is not None:
+                    lines.append(f"{ind()}    if not ({break_cond}):")
+                    lines.append(f"{ind()}        raise WorkflowExecutionError(")
+                    lines.append(f"{ind()}            {loop_strict_msg[node_id]!r}")
+                    lines.append(f"{ind()}        )")
+                else:
+                    lines.append(f"{ind()}    pass  # defensive: validate_workflow rejects strict loops without when")
 
     return "\n".join(lines)
 
 
 def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_capped: bool = False) -> str:
     """BFS-wave body: gather for parallel fan-out, for-range for bounded loops."""
-    fwd_from, fwd_preds, loop_edges = _build_fwd_graph(wf)
-    loop_entry_map, loop_exit_set, loop_exit_break = _loop_maps(loop_edges, safe_ids)
+    fwd_from, fwd_preds, _loop_edges = _build_fwd_graph(wf)
+    loop_entry_map, loop_exit_set, loop_exit_break, loop_strict_exits, loop_strict_msg = _loop_maps(
+        wf, safe_ids
+    )
 
     completed: set[str] = set()
     pending: list[str] = list(entry_frontier(wf))
@@ -1005,8 +1059,7 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
 
         for n in ready:
             if n in loop_entry_map:
-                src, lmax = loop_entry_map[n]
-                key = f"{src}->{n}"
+                _src, lmax, key = loop_entry_map[n]
                 var = f"_loop_i_{loop_depth}"
                 lines.append(f"{ind()}for {var} in range(_loop_start({key!r}), {lmax}):")
                 loop_stack.append((key, var))
@@ -1040,6 +1093,17 @@ def _render_main_body_waves(wf: WorkflowDef, safe_ids: dict[str, str], use_cappe
                     lines.append(f"{ind()}if {break_cond}:")
                     lines.append(f"{ind()}    break")
                 loop_depth -= 1
+                if n in loop_strict_exits:
+                    # Re-check after for/else so an empty range on checkpoint resume
+                    # raises only when the while condition is still true.
+                    lines.append(f"{ind()}else:")
+                    if break_cond is not None:
+                        lines.append(f"{ind()}    if not ({break_cond}):")
+                        lines.append(f"{ind()}        raise WorkflowExecutionError(")
+                        lines.append(f"{ind()}            {loop_strict_msg[n]!r}")
+                        lines.append(f"{ind()}        )")
+                    else:
+                        lines.append(f"{ind()}    pass  # defensive: validator rejects strict loops without when")
                 break
 
         for n in ready:

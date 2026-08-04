@@ -14,7 +14,9 @@ cross-engine parity for `N ∈ {0, 1, 3}`.
 ### What shipped (v1, Strategy A)
 
 - `EdgeDef.fan_out: str | None` (names the source array port) and
-  `EdgeDef.fan_in: Literal["list"] | None` (index-ordered reducer).
+  `EdgeDef.fan_in: Literal["list", "concat"] | None` (index-ordered reducers).
+  `list` preserves one value per worker instance; `concat` flattens each
+  instance's array-valued output one level into one flat list.
 - **Interpreter** (`executor._run_fan_node`): runs the worker once per array
   element (parallel `gather`), aggregates each output port into an index-ordered
   list stored under the single worker node id. One `completed` entry, one trace
@@ -22,8 +24,9 @@ cross-engine parity for `N ∈ {0, 1, 3}`.
 - **Codegen** (`_drive_fan` in the runtime template + `_invoke_expr` routing):
   emits the same runtime-sized `gather` + aggregation; the worker node function
   is unchanged (it consumes one element as a normal input).
-- **`fan_in`** is a load-time type-lift marker only (the aggregated list already
-  lives in the worker's port); at runtime the collector edge is a plain mapping.
+- **`fan_in`** selects the collector reducer. `list` reads the worker's already
+  aggregated, index-ordered list unchanged; `concat` flattens that list one level
+  at the collector. Both interpreter and codegen apply the same reducer.
 - **Validation**: array-port + element-type checks; rejects worker-in-a-loop,
   nested fan-out, and a `fan_in` whose source isn't a worker.
 - **Tests**: `tests/test_fan_out.py` — interpreter behaviour (N=3/1/0, cap=1
@@ -147,8 +150,8 @@ class EdgeDef:
     mapping: tuple[tuple[str, str], ...] = ()
     when: Condition | None = None
     loop_max: int | None = None
-    fan_out: str | None = None          # NEW
-    fan_in: Literal["list"] | None = None  # NEW
+    fan_out: str | None = None
+    fan_in: Literal["list", "concat"] | None = None
 ```
 
 - **`fan_out`** on the `plan → work` edge: names the source node's **array**
@@ -156,9 +159,10 @@ class EdgeDef:
   carries `(array_port, worker_input_port)` — element `items[i]` feeds instance
   `i`'s input port. Non-fan-out mappings on the same edge (if any) are shared
   verbatim across all instances.
-- **`fan_in`** on the `work → merge` edge: the reducer. v1 supports exactly
-  `"list"` — collect the N instance outputs into an **index-ordered** list.
-  (`"concat"` for flattening array outputs is a later addition.)
+- **`fan_in`** on the `work → merge` edge selects the reducer. `"list"` passes
+  the N instance outputs as an **index-ordered** list; `"concat"` requires each
+  instance output to be array-like and flattens those arrays one level, preserving
+  instance and intra-array order.
 
 ### 4.2 Interpreter (`executor.py`)
 

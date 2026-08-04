@@ -204,6 +204,88 @@ async def test_fan_out_interpret_equals_compile(n: int) -> None:
     assert gen_runtime["out"] == dict(interp.runtime["out"])
 
 
+@pytest.mark.parametrize(
+    ("n", "expected"),
+    [(0, ""), (1, "T0,t0"), (3, "T0,t0,T1,t1,T2,t2")],
+)
+async def test_fan_in_concat_flattens_one_level_with_parity(n: int, expected: str) -> None:
+    """concat flattens each fan instance's array once, preserving instance order."""
+    data = _map_reduce(n)
+    data["nodes"][1] = {
+        "id": "work",
+        "type": "script",
+        "inputs": ["task"],
+        "code": "def w(ctx, task):\n    return [task.upper(), task.lower()]",
+        "outputs": [{"name": "res", "schema": {"type": "array", "items": {"type": "string"}}}],
+    }
+    data["edges"][2]["fan_in"] = "concat"
+    wf = parse_workflow(data)
+
+    interp = await execute(wf, stream_fn_factory=_stub_factory("X"))
+    generated = await _run_generated(generate(wf))
+
+    assert interp.runtime["state"]["work"]["res"] == [
+        [f"T{i}", f"t{i}"] for i in range(n)
+    ]
+    assert interp.runtime["out"]["summary"] == expected
+    assert generated["state"] == dict(interp.runtime["state"])
+    assert generated["out"] == dict(interp.runtime["out"])
+
+
+async def test_fan_in_concat_can_feed_output_directly_with_parity() -> None:
+    """A fan worker may flatten its array results directly into $output."""
+    data = _map_reduce(2)
+    data["nodes"] = data["nodes"][:2]
+    data["nodes"][1] = {
+        "id": "work",
+        "type": "script",
+        "inputs": ["task"],
+        "code": "def w(ctx, task):\n    return [task.upper(), task.lower()]",
+        "outputs": [
+            {
+                "name": "res",
+                "schema": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+            }
+        ],
+    }
+    data["edges"] = [
+        data["edges"][0],
+        data["edges"][1],
+        {"from": "work", "to": "$output", "fan_in": "concat", "map": {"res": "results"}},
+    ]
+    wf = parse_workflow(data)
+
+    from flow.loader import workflow_output_schema
+
+    assert workflow_output_schema(wf)["properties"]["results"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    interpreted = await execute(wf, stream_fn_factory=_stub_factory("X"))
+    generated = await _run_generated(generate(wf))
+
+    assert interpreted.runtime["out"] == {"results": ["T0", "t0", "T1", "t1"]}
+    assert generated["out"] == dict(interpreted.runtime["out"])
+
+
+def test_fan_in_list_output_schema_wraps_worker_value() -> None:
+    """list publishes an aggregate array schema around the per-instance schema."""
+    from flow.loader import workflow_output_schema
+
+    data = _map_reduce(2)
+    data["nodes"] = data["nodes"][:2]
+    data["edges"] = [
+        data["edges"][0],
+        data["edges"][1],
+        {"from": "work", "to": "$output", "fan_in": "list", "map": {"res": "results"}},
+    ]
+    wf = parse_workflow(data)
+    assert workflow_output_schema(wf)["properties"]["results"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
 def test_fan_out_generated_module_is_ruff_clean() -> None:
     import subprocess
     import sys

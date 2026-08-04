@@ -20,7 +20,7 @@ from flow.models import Condition, EdgeDef, NodeDef, Port, ScheduleDef, Workflow
 
 def _condition_to_dict(cond: Condition) -> dict[str, Any]:
     """Inverse of ``flow.loader._parse_condition``."""
-    if cond.op in ("equals", "contains"):
+    if cond.op in ("equals", "contains", "gt", "gte", "lt", "lte"):
         return {cond.op: {"value": cond.value, "text": cond.text}}
     if cond.op == "not":
         return {"not": _condition_to_dict(cond.children[0])}
@@ -94,10 +94,17 @@ def _edge_to_dict(edge: EdgeDef) -> dict[str, Any]:
     data: dict[str, Any] = {"from": edge.src, "to": edge.dst}
     if edge.mapping:
         data["map"] = {s: d for s, d in edge.mapping}
-    if edge.when is not None:
-        data["when"] = _condition_to_dict(edge.when)
-    if edge.loop_max is not None:
-        data["loop"] = {"max": edge.loop_max}
+    if edge.loop_strict:
+        # A strict ``while`` loop is authored sugar: re-emit the long form so the
+        # round-trip law (parse(to_dict(wf)) == wf) preserves loop_strict.  ``when``
+        # carries the loop condition and ``loop_max`` the bound.
+        cond = _condition_to_dict(edge.when) if edge.when is not None else {}
+        data["while"] = {"cond": cond, "max": edge.loop_max}
+    else:
+        if edge.when is not None:
+            data["when"] = _condition_to_dict(edge.when)
+        if edge.loop_max is not None:
+            data["loop"] = {"max": edge.loop_max}
     if edge.fan_out is not None:
         data["fan_out"] = edge.fan_out
     if edge.fan_in is not None:
@@ -115,6 +122,8 @@ def workflow_to_dict(wf: WorkflowDef) -> dict[str, Any]:
         "name": wf.name,
         "provider": wf.provider,
     }
+    if wf.version:
+        data["version"] = wf.version
     if wf.default_model:
         data["defaults"] = {"model": wf.default_model}
     if wf.entry:

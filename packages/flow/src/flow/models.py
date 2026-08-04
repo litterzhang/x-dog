@@ -11,7 +11,9 @@ collected by edges targeting a reserved synthetic sink node :data:`OUT_NODE_ID`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 # Reserved id for the synthetic source node whose output ports carry the
@@ -163,11 +165,19 @@ class EdgeDef:
     # ARRAY output port whose elements are mapped one-per-instance: the worker
     # node runs once per element (in parallel) and each of its output ports is
     # aggregated into an index-ordered list stored in the worker's own port.
-    # On a worker->collector edge, ``fan_in="list"`` marks that the mapped source
-    # port already holds that aggregated list (a load-time type-lift marker;
-    # runtime treats the edge as a plain mapping).  See docs/fan-out.md.
+    # On a worker->collector edge, ``fan_in`` marks the mapped source port as the
+    # fan-out worker's aggregated result: ``"list"`` collects one value per instance
+    # into an index-ordered list; ``"concat"`` flattens each instance's array-valued
+    # port one level into a single flat list.  See docs/fan-out.md.
     fan_out: str | None = None
-    fan_in: Literal["list"] | None = None
+    fan_in: Literal["list", "concat"] | None = None
+    # ``while`` loop sugar (docs/expressiveness.md B2).  A back-edge authored as
+    # ``"while": <cond>`` desugars to ``when=<cond>`` + ``loop_max=<safe bound>`` with
+    # this flag set.  The difference from a plain ``loop.max`` is the exhaustion
+    # semantics: a strict loop that reaches its bound with the condition still true
+    # is a non-convergence error; a plain ``loop.max`` silently stops.
+    # Kept after the pre-existing fields to preserve positional constructor calls.
+    loop_strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -226,6 +236,44 @@ class WorkflowDef:
     # None = run-once (current behaviour).  Read only by ``xdog-flow install`` — the
     # engine ignores it (a scheduler wraps the built bundle, unchanged execution).
     schedule: ScheduleDef | None = None
+    # Optional wire-format version (e.g. "1").  A forward-compat marker only —
+    # absent means unversioned (current behaviour); the loader warns on a newer
+    # MAJOR version it doesn't recognize so an old flow fails loudly, not subtly.
+    # Kept after all pre-existing fields to preserve positional constructor calls.
+    version: str = ""
+
+
+def _edge_fingerprint(edge: EdgeDef) -> str:
+    """Canonical hash input for an edge's authored semantics."""
+    payload = json.dumps(asdict(edge), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _resolve_edge_ids(fingerprints: tuple[str, ...]) -> tuple[str, ...]:
+    """Resolve five-hex short hashes, suffixing only colliding bucket members."""
+    buckets: dict[str, list[tuple[str, int, int]]] = {}
+    occurrences: dict[str, int] = {}
+    for index, fingerprint in enumerate(fingerprints):
+        occurrence = occurrences.get(fingerprint, 0)
+        occurrences[fingerprint] = occurrence + 1
+        short = fingerprint[:5]
+        buckets.setdefault(short, []).append((fingerprint, occurrence, index))
+
+    resolved = [""] * len(fingerprints)
+    for short, members in buckets.items():
+        for collision, (_fingerprint, _occurrence, index) in enumerate(sorted(members)):
+            suffix = "" if collision == 0 else f"-{collision}"
+            resolved[index] = f"edge-{short}{suffix}"
+    return tuple(resolved)
+
+
+def edge_identities(wf: WorkflowDef) -> tuple[str, ...]:
+    """Internal five-hex content hashes aligned with ``wf.edges``.
+
+    IDs are not part of workflow JSON or :class:`EdgeDef`; collisions and exact
+    duplicate edges receive deterministic numeric suffixes.
+    """
+    return _resolve_edge_ids(tuple(_edge_fingerprint(edge) for edge in wf.edges))
 
 
 def entry_frontier(wf: WorkflowDef) -> tuple[str, ...]:

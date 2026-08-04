@@ -42,6 +42,16 @@ logger = logging.getLogger(__name__)
 # out to that CLI instead of the in-process SDK.
 _KNOWN_CLI_BACKENDS = frozenset({"claude-cli", "codex-cli"})
 
+# The highest workflow wire-format MAJOR version this loader understands.  A
+# workflow declaring a newer major warns (it may use fields this loader drops).
+_CURRENT_MAJOR = 1
+
+# Default loop bound for ``while`` sugar when no explicit ``max`` is given: a safe
+# ceiling so a non-converging condition fails loudly (non-convergence error)
+# instead of spinning forever.  An author who needs more iterations sets an
+# explicit ``{"while": {"cond": ..., "max": N}}``.
+_WHILE_SAFE_MAX = 100
+
 
 def _parse_condition(data: Any) -> Condition:
     if not isinstance(data, dict):
@@ -240,7 +250,50 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     if "when" in data:
         when = _parse_condition(data["when"])
     loop_max: int | None = None
-    if "loop" in data and isinstance(data["loop"], dict):
+    loop_strict = False
+    if "while" in data:
+        # ``while`` loop sugar (docs/expressiveness.md B2): a strict bounded loop.
+        # Accepts either ``"while": <condition>`` or the long form
+        # ``"while": {"cond": <condition>, "max": N?}``.  Desugars to when=<cond> +
+        # a loop bound (explicit ``max`` or a safe default); hitting the bound with
+        # the condition still true is a non-convergence error (loop_strict=True),
+        # unlike a plain ``loop.max`` which silently stops.
+        if "loop" in data:
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: cannot use both 'while' and 'loop'"
+            )
+        if "when" in data:
+            raise WorkflowValidationError(
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: cannot use both 'while' and 'when'"
+                f" ('while' already carries the loop condition)"
+            )
+        raw_while = data["while"]
+        if isinstance(raw_while, dict) and ("cond" in raw_while or "max" in raw_while):
+            if "cond" not in raw_while:
+                raise WorkflowValidationError(
+                    f"Edge {data.get('from')!r}->{data.get('to')!r}: while must declare a 'cond' condition"
+                )
+            when = _parse_condition(raw_while["cond"])
+            if "max" in raw_while:
+                try:
+                    loop_max = int(raw_while["max"])
+                except (TypeError, ValueError):
+                    raise WorkflowValidationError(
+                        f"Edge {data.get('from')!r}->{data.get('to')!r}: while 'max' must be an"
+                        f" integer, got {raw_while['max']!r}"
+                    ) from None
+                if loop_max <= 0:
+                    raise WorkflowValidationError(
+                        f"Edge {data.get('from')!r}->{data.get('to')!r}: while 'max' must be positive,"
+                        f" got {loop_max}"
+                    )
+            else:
+                loop_max = _WHILE_SAFE_MAX
+        else:
+            when = _parse_condition(raw_while)
+            loop_max = _WHILE_SAFE_MAX
+        loop_strict = True
+    elif "loop" in data and isinstance(data["loop"], dict):
         if "max" not in data["loop"]:
             raise WorkflowValidationError(
                 f"Edge {data.get('from')!r}->{data.get('to')!r}: loop must declare an integer 'max'"
@@ -267,21 +320,22 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     raw_fan_out = data.get("fan_out")
     if raw_fan_out is not None:
         fan_out = str(raw_fan_out)
-    fan_in: Literal["list"] | None = None
+    fan_in: Literal["list", "concat"] | None = None
     raw_fan_in = data.get("fan_in")
     if raw_fan_in is not None:
-        if raw_fan_in != "list":
+        if raw_fan_in not in ("list", "concat"):
             raise WorkflowValidationError(
-                f"Edge {data.get('from')!r}->{data.get('to')!r}: fan_in must be 'list',"
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: fan_in must be 'list' or 'concat',"
                 f" got {raw_fan_in!r}"
             )
-        fan_in = "list"
+        fan_in = raw_fan_in
     return EdgeDef(
         src=str(data["from"]),
         dst=str(data["to"]),
         mapping=mapping,
         when=when,
         loop_max=loop_max,
+        loop_strict=loop_strict,
         fan_out=fan_out,
         fan_in=fan_in,
     )
@@ -362,6 +416,7 @@ def parse_workflow(
     provider = str(data.get("provider", ""))
     entry = str(data.get("entry", ""))
     default_model = str(data.get("defaults", {}).get("model", ""))
+    version = str(data.get("version", ""))
 
     raw_state = data.get("state", {})
     initial_state: tuple[tuple[str, object], ...]
@@ -415,6 +470,7 @@ def parse_workflow(
         nodes=nodes,
         edges=edges,
         default_model=default_model,
+        version=version,
         initial_state=initial_state,
         in_schema=in_schema,
         tool_refs=tool_refs,
@@ -561,13 +617,8 @@ def _jsonpath_tail_steps(key: str) -> list[str] | None:
     return steps
 
 
-def _schema_subtype(schema: dict[str, object], steps: list[str]) -> str | None:
-    """Descend *schema* along *steps*; return the leaf ``type`` name, or None.
-
-    A ``field`` step reads ``schema["properties"][field]``; an ``"[]"`` step reads
-    ``schema["items"]``.  Any step the schema doesn't describe (no ``properties``/
-    ``items``, missing field) yields None — the path is left un-typed (lenient).
-    """
+def _schema_subschema(schema: dict[str, object], steps: list[str]) -> dict[str, object] | None:
+    """Descend *schema* along *steps* and return the complete leaf schema."""
     cur: object = schema
     for step in steps:
         if not isinstance(cur, dict):
@@ -581,9 +632,20 @@ def _schema_subtype(schema: dict[str, object], steps: list[str]) -> str | None:
             cur = props.get(step)
         if cur is None:
             return None
-    if not isinstance(cur, dict):
+    return cur if isinstance(cur, dict) else None
+
+
+def _schema_subtype(schema: dict[str, object], steps: list[str]) -> str | None:
+    """Descend *schema* along *steps*; return the leaf ``type`` name, or None.
+
+    A ``field`` step reads ``schema["properties"][field]``; an ``"[]"`` step reads
+    ``schema["items"]``.  Any step the schema doesn't describe (no ``properties``/
+    ``items``, missing field) yields None — the path is left un-typed (lenient).
+    """
+    leaf = _schema_subschema(schema, steps)
+    if leaf is None:
         return None
-    t = cur.get("type")
+    t = leaf.get("type")
     return t if isinstance(t, str) else None
 
 
@@ -676,10 +738,10 @@ def workflow_output_schema(wf: WorkflowDef) -> dict[str, object]:
     """The workflow's output signature as a JSON Schema object, derived statically.
 
     For every edge into the ``$output`` sink, the mapped output key takes the
-    schema of its source node's output port (looked up by port name).  The result
-    is ``{"type": "object", "properties": {out_key: port_schema, ...}}``.  A key
-    whose source port has no schema, or comes from an untyped ``$in`` seed, is
-    typed as a bare ``string`` (the wire default).  A ``when``-guarded ``$output``
+    schema of its source node's output port or statically-resolvable JSONPath leaf.
+    The result is ``{"type": "object", "properties": {out_key: port_schema, ...}}``.
+    A key whose source has no schema, or whose path cannot be typed statically, is
+    typed as a bare ``string`` (the wire default). A ``when``-guarded ``$output``
     edge still contributes its key (the schema is static; the guard is runtime).
     """
     props: dict[str, object] = {}
@@ -688,10 +750,27 @@ def workflow_output_schema(wf: WorkflowDef) -> dict[str, object]:
             continue
         src_schemas = _output_port_schemas(wf, edge.src)
         for sport, okey in edge.mapping:
-            # $output mappings map whole ports (sub-field keys are rejected in
-            # validation), so the source key is a plain port name.
-            schema = src_schemas.get(sport)
-            props[okey] = dict(schema) if isinstance(schema, dict) else {"type": "string"}
+            head, subpath = _jsonpath_root(sport)
+            schema = src_schemas.get(head)
+            if subpath and isinstance(schema, dict):
+                steps = _jsonpath_tail_steps(sport)
+                schema = _schema_subschema(schema, steps) if steps is not None else None
+            source_schema = dict(schema) if isinstance(schema, dict) else {"type": "string"}
+            if edge.fan_in == "list":
+                # One value per worker instance becomes an ordered aggregate array.
+                props[okey] = {"type": "array", "items": source_schema}
+            elif edge.fan_in == "concat":
+                # Each instance emits an array, but aggregate cardinality differs from
+                # any one instance. Preserve only its element schema, not whole-array
+                # constraints such as minItems/maxItems/uniqueItems.
+                items = source_schema.get("items")
+                props[okey] = (
+                    {"type": "array", "items": dict(items)}
+                    if isinstance(items, dict)
+                    else {"type": "array"}
+                )
+            else:
+                props[okey] = source_schema
     return {"type": "object", "properties": props, "required": sorted(props)}
 
 
@@ -796,6 +875,27 @@ def _validate_fan_in_edge(edge: EdgeDef, fan_out_workers: set[str]) -> None:
         )
 
 
+def _validate_concat_source(
+    wf: WorkflowDef,
+    edge: EdgeDef,
+    sport: str,
+    head: str,
+    subpath: bool,
+) -> None:
+    """Require concat to read a whole array-valued worker output port."""
+    if edge.fan_in != "concat":
+        return
+    # The worker store is already ``port -> [value_i]``; subpaths address that
+    # aggregate, not each instance independently, so they are not concat sources.
+    src_types = _output_port_types(wf, edge.src)
+    item_type = src_types.get(head) if not subpath else None
+    if item_type != "array":
+        raise WorkflowValidationError(
+            f"Edge {edge.src!r}->{edge.dst!r}: fan_in='concat' source {sport!r} must be"
+            " a whole array-valued worker output port"
+        )
+
+
 def _validate_subflow_node(node: NodeDef) -> None:
     """Validate a ``type="subflow"`` node (G5): inline child, no nesting, strict
     signature, and the mutually-exclusive-field rules.  Recursively validates the
@@ -826,6 +926,20 @@ def _validate_subflow_node(node: NodeDef) -> None:
 
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
+    # Wire-format version: a newer MAJOR than this loader understands warns (it may
+    # rely on fields this loader silently ignored).  An unparseable version errors.
+    if wf.version:
+        try:
+            major = int(wf.version.split(".", 1)[0])
+        except ValueError:
+            raise WorkflowValidationError(f"version must start with an integer major, got {wf.version!r}") from None
+        if major > _CURRENT_MAJOR:
+            warnings.warn(
+                f"workflow version {wf.version!r} has a newer major than this loader understands "
+                f"(v{_CURRENT_MAJOR}); some fields may be ignored.",
+                FlowWarning,
+                stacklevel=2,
+            )
     node_ids = [n.id for n in wf.nodes]
 
     for nid in node_ids:
@@ -964,9 +1078,8 @@ def validate_workflow(wf: WorkflowDef) -> None:
     # loop_touched nodes appear on either end of a bounded-loop edge.  Used to reject
     # a worker inside a loop, nested fan-out, and a fan_in whose src isn't a worker.
     fan_out_workers = {e.dst for e in wf.edges if e.fan_out is not None}
-    loop_touched = {e.src for e in wf.edges if e.loop_max is not None} | {
-        e.dst for e in wf.edges if e.loop_max is not None
-    }
+    loop_edges = [e for e in wf.edges if e.loop_max is not None]
+    loop_touched = {e.src for e in loop_edges} | {e.dst for e in loop_edges}
     # v1 scope guards for subflow nodes: no subflow inside a loop or as a fan-out
     # worker (the loop×subflow and fan×subflow interactions are out of scope; the
     # fan-out limiter is the prerequisite for the latter).
@@ -990,6 +1103,12 @@ def validate_workflow(wf: WorkflowDef) -> None:
             raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
         if edge.dst == IN_NODE_ID:
             raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
+        # Strict ``while`` is a public-model invariant too (not only loader sugar):
+        # it must have both a positive bound and a condition to converge against.
+        if edge.loop_strict and (edge.loop_max is None or edge.loop_max < 1 or edge.when is None):
+            raise WorkflowValidationError(
+                f"Edge {edge.src!r} -> {edge.dst!r}: loop_strict requires loop_max >= 1 and a 'when' condition"
+            )
 
         src_outputs = _output_port_names(wf, edge.src, in_ports)
         # Strict interpolation for a condition: every {{ $.x }} operand must root at
@@ -1013,17 +1132,14 @@ def validate_workflow(wf: WorkflowDef) -> None:
         if edge.dst == OUT_NODE_ID:
             for sport, _dport in edge.mapping:
                 head, subpath = _jsonpath_root(sport)
-                if subpath:
-                    # Sub-field mapping to the $output sink is not supported (only
-                    # node->node edges resolve sub-fields); map the whole port.
-                    raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{OUT_NODE_ID}: sub-field key {sport!r} is not "
-                        f"allowed into $output; map the whole port {head!r}"
-                    )
+                # A sub-field key (``$.verdict.within_budget``) into $output resolves
+                # a nested field of a structured source port at run time (both engines
+                # use jsonpath_get); its root must still be a real output port.
                 if head not in src_outputs:
                     raise WorkflowValidationError(
                         f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
                     )
+                _validate_concat_source(wf, edge, sport, head, subpath)
             continue
 
         dst_inputs = set(node_by_id[edge.dst].input_names)
@@ -1042,14 +1158,16 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 raise WorkflowValidationError(
                     f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
                 )
+            # concat flattens one whole array emitted by each worker instance.
+            _validate_concat_source(wf, edge, sport, head, subpath)
+
             # Edge type consistency: the resolved source type must match the
             # destination input type.  $in seeds are untyped (absent from
             # src_types/src_schemas) so edges out of $in are exempt.
             if dport in dst_types and (head in src_types or head in src_schemas):
                 src_type: str | None
                 if edge.fan_in is not None:
-                    # fan_in (G1): the worker's port is aggregated into a list at
-                    # runtime, so the destination must accept an array.
+                    # fan_in (G1): both reducers feed an array to the collector.
                     src_type = "array"
                 elif edge.fan_out is not None and head == edge.fan_out and not subpath:
                     # fan_out (G1): the worker consumes ONE array element, so the

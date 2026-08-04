@@ -33,6 +33,7 @@ from flow.models import (
     NodeDef,
     WorkflowDef,
     agent_is_structured,
+    edge_identities,
     entry_frontier,
 )
 from flow.runners import AgentRunner, CliRunner, SdkRunner, cli_adapter_for
@@ -84,6 +85,19 @@ def _mapping_root(sport: str) -> str:
     """
     body = sport[2:] if sport.startswith("$.") else (sport[1:] if sport.startswith("$") else sport)
     return re.split(r"[.\[]", body, maxsplit=1)[0]
+
+
+def _fan_concat(value: object) -> object:
+    """Flatten one level for ``fan_in='concat'`` while preserving item order."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    flat: list[object] = []
+    for item in value:
+        if isinstance(item, (list, tuple)):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return flat
 
 
 def _incoming_fan_out_edge(node_id: str, in_edges: Mapping[str, list[EdgeDef]]) -> EdgeDef | None:
@@ -253,18 +267,27 @@ async def execute(
     out_live: dict[str, object] = {}
 
     node_map = {n.id: n for n in wf.nodes}
+    edge_ids = edge_identities(wf)
 
-    # edges_from: src -> list[EdgeDef]
+    # edges_from: src -> list[EdgeDef], with parallel internal hash ids.
     edges_from: dict[str, list[EdgeDef]] = defaultdict(list)
+    edge_ids_from: dict[str, list[str]] = defaultdict(list)
     # in_edges: dst -> list[EdgeDef]
     in_edges: dict[str, list[EdgeDef]] = defaultdict(list)
-    for edge in wf.edges:
+    for edge, edge_id in zip(wf.edges, edge_ids, strict=True):
         edges_from[edge.src].append(edge)
+        edge_ids_from[edge.src].append(edge_id)
         in_edges[edge.dst].append(edge)
 
     def _source_ports(node_id: str) -> dict[str, object]:
         """Output ports available for reading from *node_id* (empty if not yet run)."""
         return outputs.get(node_id, {})
+
+    def _strict_loop_error(edge: EdgeDef) -> WorkflowExecutionError:
+        return WorkflowExecutionError(
+            f"while loop {edge.src!r}->{edge.dst!r} did not converge within"
+            f" {edge.loop_max} iterations (condition still true)"
+        )
 
     def _build_inputs(node_id: str) -> dict[str, object]:
         """Assemble a node's input namespace from its incoming edge mappings.
@@ -283,14 +306,20 @@ async def execute(
                 # output ports: a plain port (``plan``) or a nested field
                 # (``$.verdict.within_budget``).  A miss leaves the port unfed.
                 resolved = jsonpath_get(src_ports, sport)
-                if resolved is not None:
-                    ins[dport] = resolved
+                if resolved is None:
+                    continue
+                # fan_in="concat": the worker's port is a list-of-arrays; flatten it
+                # one level into a single flat list (vs "list" which passes it through).
+                if edge.fan_in == "concat":
+                    resolved = _fan_concat(resolved)
+                ins[dport] = resolved
         return ins
 
     # Track which nodes have finished
     completed: set[str] = set()
-    # Per-edge loop fire counter (loop_max edges only)
-    loop_counters: dict[EdgeDef, int] = {}
+    # Per-edge loop fire counter (loop_max edges only), keyed by internal hash id.
+    edge_by_id = {edge_id: edge for edge, edge_id in zip(wf.edges, edge_ids, strict=True)}
+    loop_counters: dict[str, int] = {}
     # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
     memo: dict[str, dict[str, object]] = {}
 
@@ -305,12 +334,14 @@ async def execute(
         if snap is not None:
             outputs = snap["outputs"]
             completed = set(snap["completed"])
-            # Rebuild EdgeDef→int from "src->dst" string keys
+            # Restore only the current content-hashed edge ids. Legacy
+            # ``src->dst`` checkpoint keys are intentionally not compatible.
             lc_raw: dict[str, int] = snap.get("loop_counters", {})
-            for edge in wf.edges:
-                key = f"{edge.src}->{edge.dst}"
-                if key in lc_raw:
-                    loop_counters[edge] = lc_raw[key]
+            loop_counters = {
+                edge_id: count
+                for edge_id, count in lc_raw.items()
+                if edge_id in edge_by_id and isinstance(count, int)
+            }
             stack = snap.get("stack", [])
             out_live = snap.get("out_live", {})
             step_counter = len(stack)
@@ -319,13 +350,28 @@ async def execute(
                 memo = {str(k): dict(v) for k, v in raw_memo.items() if isinstance(v, dict)}
             tokens_used = int(snap.get("tokens_used", 0))
 
+            # A strict while may have checkpointed its final completed node just
+            # before the scheduler detected non-convergence.  Re-evaluate terminal
+            # strict loops on restore so a fully-completed checkpoint cannot turn a
+            # previous non-convergence failure into a successful resumed result.
+            for edge_id, count in loop_counters.items():
+                edge = edge_by_id[edge_id]
+                if (
+                    edge.loop_strict
+                    and edge.loop_max is not None
+                    and count >= edge.loop_max
+                    and edge.when is not None
+                    and evaluate(edge.when, _source_ports(edge.src))
+                ):
+                    raise _strict_loop_error(edge)
+
     def _save_checkpoint() -> None:
         """Persist a snapshot of the current run state (called inside _state_lock).
 
         The generated module's checkpoint (templates/runtime.py.tmpl) shares this
         schema, including ``loop_counters``: codegen now persists a loop's position
-        (``"<src>-><dst>" -> iterations``) and a resumed generated module continues a
-        bounded loop from that count instead of re-running it — so both engines
+        (content-hashed edge id -> iterations) and a resumed generated module continues
+        a bounded loop from that count instead of re-running it — so both engines
         checkpoint/resume mid-loop.  (The counter's numeric meaning differs slightly —
         the interpreter counts back-edge firings, codegen counts for-iterations — but
         a run uses one engine, so each resumes itself correctly; checkpoints are not
@@ -334,7 +380,7 @@ async def execute(
         if not _ckpt_active:
             return
         assert checkpoint is not None and run_id is not None
-        lc_serial = {f"{e.src}->{e.dst}": cnt for e, cnt in loop_counters.items()}
+        lc_serial = dict(loop_counters)
         snap: dict[str, Any] = {
             "outputs": outputs,
             "completed": list(completed),
@@ -372,8 +418,16 @@ async def execute(
                 if edge.when is not None and not evaluate(edge.when, node_ports):
                     continue
                 for sport, okey in edge.mapping:
-                    if sport in node_ports:
-                        out_live[okey] = node_ports[sport]
+                    # ``sport`` may be a bare port ("verdict") or a JSONPath into a
+                    # structured port ("$.verdict.within_budget"); jsonpath_get
+                    # resolves both (mirrors codegen's $output flush).
+                    head = _mapping_root(sport)
+                    if head in node_ports:
+                        resolved = jsonpath_get(node_ports, sport)
+                        if resolved is not None:
+                            if edge.fan_in == "concat":
+                                resolved = _fan_concat(resolved)
+                            out_live[okey] = resolved
 
     def _emit(ev: FlowEvent) -> None:
         """Deliver a lifecycle event to the caller's callback (best-effort)."""
@@ -830,22 +884,36 @@ async def execute(
     def _activate_loops(just_finished: list[str], pending: set[str]) -> None:
         """Check loop back-edges from just_finished nodes; re-activate dst if condition holds."""
         for node_id in just_finished:
-            for edge in edges_from.get(node_id, []):
+            outgoing = edges_from.get(node_id, [])
+            outgoing_ids = edge_ids_from.get(node_id, [])
+            for edge, edge_id in zip(outgoing, outgoing_ids, strict=True):
                 if edge.loop_max is None:
                     continue
-                count = loop_counters.get(edge, 0)
+                count = loop_counters.get(edge_id, 0)
+                cond_holds = edge.when is None or evaluate(edge.when, _source_ports(edge.src))
                 if count >= edge.loop_max:
+                    # Bound reached.  A strict (``while``) loop whose condition still
+                    # holds never converged — that's an error, not a silent stop.
+                    if edge.loop_strict and cond_holds:
+                        raise _strict_loop_error(edge)
                     continue
-                if edge.when is not None and not evaluate(edge.when, _source_ports(edge.src)):
+                if not cond_holds:
                     continue
                 # Fire the loop: increment counter, un-complete dst + its successors
-                loop_counters[edge] = count + 1
+                loop_counters[edge_id] = count + 1
                 dst = edge.dst
                 to_reset = {dst} | _transitive_successors(dst)
                 for n in to_reset:
                     completed.discard(n)
                 pending.add(dst)
-                logger.debug("Loop edge %r->%r fired (count %d/%d)", node_id, dst, loop_counters[edge], edge.loop_max)
+                logger.debug(
+                    "Loop edge %s (%r->%r) fired (count %d/%d)",
+                    edge_id,
+                    node_id,
+                    dst,
+                    loop_counters[edge_id],
+                    edge.loop_max,
+                )
 
     # --- Scheduler loop ---
     # pending: nodes whose predecessors are all done but haven't started yet.

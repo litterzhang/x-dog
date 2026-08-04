@@ -253,20 +253,34 @@ input/output mapping and on how child checkpoints nest under the parent run id.
 
 ---
 
-### G6 — Loops are bounded-count, not condition-driven; nesting is awkward
+### G6 — Condition-driven loops (**shipped**)
 
-(Related to G1 but distinct.) A loop is *"at most N iterations, exit early if the
-back-edge `when` fails."* There's no natural *"while <condition>: continue"*.
-You always invert it into a bound plus a per-iteration guard, and the guard is
-limited by G2's weak conditions. Nested loops work in codegen (`loop_depth`) but,
-combined with the flat string state, are hard to author correctly.
+A plain loop remains *"at most N back-edge firings, exit early if the back-edge
+`when` fails."* For clearer authoring, an edge may now use bounded `while` sugar:
 
-**Fix:** largely *falls out of G2* (real conditions make the exit guard
-expressive) — no separate primitive needed. Document the "bounded + guard"
-idiom clearly; consider a validation warning when a loop has `loop_max` but no
-`when` (an unconditional N-times loop is usually a mistake).
+```json
+{
+  "from": "review",
+  "to": "draft",
+  "while": {
+    "cond": {"lt": {"value": "{{ $.score }}", "text": "0.8"}},
+    "max": 20
+  }
+}
+```
 
-**`interpret == compile` impact:** NONE beyond G2.
+The short form `"while": <condition>` uses a safe default bound of 100. The
+loader desugars either form to the same static bounded back-edge (`when` +
+`loop_max`), so the graph remains static. Its only semantic distinction from an
+explicit `loop.max` is exhaustion: if the condition is still true at the bound,
+both engines raise a non-convergence error instead of silently stopping.
+
+Nested generated loops use depth-indexed variables and checkpoint their loop
+position; strict-while boundary convergence and non-convergence are covered by
+cross-engine tests.
+
+**`interpret == compile` impact:** LOW. Both engines evaluate the same condition
+and fail on the same strict bound; the generated loop uses `for/else`.
 
 ---
 
@@ -279,7 +293,7 @@ idiom clearly; consider a validation warning when a loop has `loop_max` but no
 | **G1** dynamic fan-out | *can't* map over runtime lists | **High** | High (tractable) | Design doc, then do |
 | **G5** sub-workflows | no reuse; no per-item sub-flow | Medium | Medium | After G1–G3 |
 | **G4** structured agent data | type-unsafe agent→agent | Medium | Low-Med (rides G3) | After G3 |
-| **G6** while-loops | awkward loop authoring | Low | None (rides G2) | Falls out of G2 |
+| **G6** while-loops | awkward loop authoring | Low | Low | **Shipped** |
 
 **Reading:** the top-left quadrant (G2, G3) is pure upside — small, local, low
 risk, immediately useful, and G3 fixes a *correctness* hazard. G1 is the only
@@ -317,6 +331,17 @@ ramifications.
   cross-engine parity for `N ∈ {0,1,3}` in `tests/test_fan_out.py`.
 - G4 rides on G1 + G3: once instances carry structured ports and interpolation
   can reach nested fields, agent→agent structured data is mostly free.
+
+### Shipped expressiveness polish
+
+- `fan_in: "concat"` flattens each worker instance's array output one level;
+  `"list"` keeps one value per instance. Both preserve runtime instance order.
+- Nested-field interpolation remains shared JSONPath semantics in both engines,
+  including paths such as `{{ $.plan.tasks[0] }}`.
+- A source sub-field may map directly into `$output`, for example
+  `"$.verdict.within_budget": "within_budget"`; missing leaves are omitted.
+- Optional top-level `version` is a wire-format compatibility marker. The loader
+  preserves it through serialization and emits `FlowWarning` for a newer major.
 
 **Non-goals (unchanged):** distributed execution, multi-tenancy, external
 telemetry export, compensation/rollback. Dynamic fan-out (G1) is *single-machine*

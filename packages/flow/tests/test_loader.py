@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from flow.errors import FlowWarning, WorkflowValidationError
 from flow.loader import load_workflow, parse_workflow, validate_workflow
-from flow.models import Port, WorkflowDef
+from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -31,6 +31,62 @@ def test_load_linear_ok() -> None:
 def test_load_bad_missing_entry_raises() -> None:
     with pytest.raises(WorkflowValidationError, match="Entry node"):
         load_workflow(FIXTURES / "bad_missing_entry.json")
+
+
+def test_workflow_version_parses_and_roundtrips() -> None:
+    from flow.builder.serialize import workflow_to_dict
+
+    data = {
+        "version": "1.2",
+        "name": "versioned",
+        "provider": "",
+        "entry": "a",
+        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    assert wf.version == "1.2"
+    assert workflow_to_dict(wf)["version"] == "1.2"
+    assert parse_workflow(workflow_to_dict(wf)) == wf
+
+
+def test_workflow_newer_major_warns() -> None:
+    data = {
+        "version": "2",
+        "name": "future",
+        "provider": "",
+        "entry": "a",
+        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
+        "edges": [],
+    }
+    wf = parse_workflow(data)
+    with pytest.warns(FlowWarning, match="newer major"):
+        validate_workflow(wf)
+
+
+def test_workflow_invalid_version_major_raises() -> None:
+    data = {
+        "version": "next",
+        "name": "bad-version",
+        "provider": "",
+        "entry": "a",
+        "nodes": [{"id": "a", "type": "script", "code": "def a(ctx):\n    return 'ok'", "outputs": ["out"]}],
+        "edges": [],
+    }
+    with pytest.raises(WorkflowValidationError, match="integer major"):
+        validate_workflow(parse_workflow(data))
+
+
+def test_strict_loop_model_requires_bound_and_condition() -> None:
+    wf = WorkflowDef(
+        name="bad-strict",
+        provider="copilot",
+        entry="a",
+        nodes=(NodeDef(id="a"),),
+        edges=(EdgeDef(src="a", dst="a", loop_max=1, loop_strict=True),),
+    )
+    with pytest.raises(WorkflowValidationError, match="loop_strict requires"):
+        validate_workflow(wf)
 
 
 def test_cyclic_edge_without_loop_max_raises() -> None:
@@ -896,11 +952,13 @@ def test_validate_subfield_ok() -> None:
     validate_workflow(wf)  # no raise
 
 
-def test_validate_subfield_to_output_rejected() -> None:
+def test_validate_subfield_to_output_allowed() -> None:
     data = _subfield_wf({"plan.owner": "who"}, dst="$output")
+    # Node b is unrelated when the mapping targets $output; remove it so its required
+    # input does not obscure the behaviour under test.
+    data["nodes"] = data["nodes"][:1]  # type: ignore[index]
     wf = parse_workflow(data)
-    with pytest.raises(WorkflowValidationError, match="sub-field key"):
-        validate_workflow(wf)
+    validate_workflow(wf)
 
 
 # --- Sub-field TYPE checking (2b-2) ----------------------------------------
@@ -1134,12 +1192,30 @@ def test_fan_out_worker_in_loop_raises() -> None:
         validate_workflow(parse_workflow(_map_reduce_wf(mut)))
 
 
-def test_fan_in_bad_reducer_raises() -> None:
+def test_fan_in_concat_reducer_parses() -> None:
     def mut(d: dict) -> None:
         d["edges"][2]["fan_in"] = "concat"
 
-    with pytest.raises(WorkflowValidationError, match="fan_in must be 'list'"):
+    wf = parse_workflow(_map_reduce_wf(mut))
+    fan_in = next(e for e in wf.edges if e.src == "work" and e.dst == "merge")
+    assert fan_in.fan_in == "concat"
+
+
+def test_fan_in_unknown_reducer_raises() -> None:
+    def mut(d: dict) -> None:
+        d["edges"][2]["fan_in"] = "flatten"
+
+    with pytest.raises(WorkflowValidationError, match="fan_in must be 'list' or 'concat'"):
         parse_workflow(_map_reduce_wf(mut))
+
+
+def test_fan_in_concat_requires_array_worker_output() -> None:
+    def mut(d: dict) -> None:
+        d["edges"][2]["fan_in"] = "concat"
+        d["nodes"][1]["outputs"] = ["res"]
+
+    with pytest.raises(WorkflowValidationError, match="whole array-valued worker output port"):
+        validate_workflow(parse_workflow(_map_reduce_wf(mut)))
 
 
 def test_fan_out_roundtrips() -> None:

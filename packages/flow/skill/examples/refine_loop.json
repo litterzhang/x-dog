@@ -2,7 +2,7 @@
   "name": "refine-loop",
   "provider": "copilot",
   "defaults": {
-    "model": "claude-sonnet-4.6"
+    "model": "gpt-5.6-sol"
   },
   "entry": "draft",
   "state": {

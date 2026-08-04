@@ -215,6 +215,44 @@ def test_output_schema_from_structured_port() -> None:
     assert osc["required"] == ["result"]
 
 
+def test_output_schema_from_nested_jsonpath_leaf() -> None:
+    """A nested $output projection publishes the selected leaf's real schema."""
+    d = {
+        "name": "osc-nested",
+        "provider": "copilot",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "type": "agent",
+                "prompt": "p",
+                "outputs": [
+                    {
+                        "name": "plan",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "count": {"type": "integer"},
+                                "tasks": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    }
+                ],
+            }
+        ],
+        "edges": [
+            {
+                "from": "a",
+                "to": "$output",
+                "map": {"$.plan.count": "count", "$.plan.tasks": "tasks"},
+            }
+        ],
+    }
+    osc = workflow_output_schema(parse_workflow(d))
+    assert osc["properties"]["count"] == {"type": "integer"}
+    assert osc["properties"]["tasks"] == {"type": "array", "items": {"type": "string"}}
+
+
 def test_output_schema_scalar_port() -> None:
     """A plain string output port yields a string schema in the signature."""
     d = {

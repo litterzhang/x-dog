@@ -77,6 +77,13 @@ def test_roundtrip_rich() -> None:
     assert parse_workflow(workflow_to_dict(wf)) == wf
 
 
+def test_workflow_version_preserves_previous_positional_arguments() -> None:
+    """Adding version must not rebind the old positional initial_state argument."""
+    wf = WorkflowDef("positional", "copilot", "a", (NodeDef(id="a"),), (), "m", (("seed", "x"),))
+    assert wf.initial_state == (("seed", "x"),)
+    assert wf.version == ""
+
+
 def test_roundtrip_optional_input_port() -> None:
     """An optional input port survives serialize -> parse (object form, optional:true)."""
     wf = WorkflowDef(

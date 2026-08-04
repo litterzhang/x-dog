@@ -98,6 +98,19 @@ def jsonpath_get(state: object, path: str) -> object:
     return matches[0].value if matches else None
 
 
+def _fan_concat(value: object) -> object:
+    """fan_in="concat": flatten a list-of-arrays one level (mirrors _build_inputs)."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    _flat: list[object] = []
+    for _item in value:
+        if isinstance(_item, (list, tuple)):
+            _flat.extend(_item)
+        else:
+            _flat.append(_item)
+    return _flat
+
+
 def interp_path(state: dict[str, object], path: str) -> str:
     """Resolve a JSONPath ``{{path}}`` against *state* and project to text ('' on miss)."""
     resolved = jsonpath_get(state, path)
@@ -211,8 +224,8 @@ _TOKENS_USED: int = 0
 _MAX_TOKENS: int | None = None
 # Determinism memo ledger: memo_key(node_id, inputs) -> output ports (persisted in checkpoint).
 _MEMO: dict[str, dict[str, object]] = {}
-# Loop position ledger: "<src>-><dst>" -> iterations completed (persisted; enables
-# mid-loop resume, aligned with the interpreter's loop_counters).
+# Loop position ledger: content-hashed edge id -> iterations completed (persisted;
+# enables mid-loop resume, aligned with the interpreter's loop_counters).
 _LOOP_COUNTERS: dict[str, int] = {}
 # Run-wide context the driver hands each pure node function.
 _WORKFLOW_NAME = "$workflow_name"
@@ -300,8 +313,8 @@ def _save_checkpoint() -> None:
 
 
 # Loop-position tracking for checkpoint/resume, aligned with the interpreter's
-# loop_counters ("<src>-><dst>" -> iterations completed).  A resumed run continues
-# a mid-loop from the persisted count instead of re-running the whole loop.
+# loop_counters (content-hashed edge id -> iterations completed). A resumed run
+# continues mid-loop from the persisted count instead of replaying the whole loop.
 def _loop_start(key: str) -> int:
     _n = _LOOP_COUNTERS.get(key, 0)
     return _n if isinstance(_n, int) else 0

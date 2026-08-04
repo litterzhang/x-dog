@@ -12,9 +12,13 @@ import pathlib
 import types
 from typing import Any
 
+import pytest
+from flow.builder.serialize import workflow_to_dict
+from flow.checkpoint import JSONFileCheckpointStore
 from flow.codegen import generate
 from flow.executor import execute
 from flow.loader import parse_workflow
+from flow.models import _resolve_edge_ids, edge_identities
 
 
 def _count_loop_wf(loop_max: int = 10, exit_at: int = 5, crash_code: str = "") -> dict[str, Any]:
@@ -54,9 +58,95 @@ def test_loop_fresh_run_parity() -> None:
 
 
 def test_generated_loop_uses_depth_indexed_var_and_tick() -> None:
-    src = generate(parse_workflow(_count_loop_wf()))
-    assert "for _loop_i_0 in range(_loop_start('b->a')" in src
-    assert "_loop_tick('b->a', _loop_i_0)" in src
+    wf = parse_workflow(_count_loop_wf())
+    key = edge_identities(wf)[2]
+    src = generate(wf)
+    assert f"for _loop_i_0 in range(_loop_start({key!r})" in src
+    assert f"_loop_tick({key!r}, _loop_i_0)" in src
+
+
+def test_edge_identity_is_content_hashed_and_duplicate_safe() -> None:
+    data = _count_loop_wf()
+    wf = parse_workflow(data)
+    key = edge_identities(wf)[2]
+    assert key.startswith("edge-") and len(key) == 10
+
+    # Inserting an unrelated edge does not renumber the loop identity.
+    shifted = _count_loop_wf()
+    shifted["edges"].insert(1, {"from": "a", "to": "$output", "map": {"c": "debug"}})
+    shifted_wf = parse_workflow(shifted)
+    assert edge_identities(shifted_wf)[3] == key
+
+    # Exact duplicate edges receive distinct occurrence hashes.
+    duplicate = _count_loop_wf()
+    duplicate["edges"].insert(3, dict(duplicate["edges"][2]))
+    duplicate_wf = parse_workflow(duplicate)
+    duplicate_ids = edge_identities(duplicate_wf)
+    assert duplicate_ids[2] != duplicate_ids[3]
+
+
+def test_edge_identity_short_hash_collision_gets_suffix() -> None:
+    fingerprints = (
+        "abcde" + "1" * 59,
+        "fffff" + "0" * 59,
+        "abcde" + "2" * 59,
+        "abcde" + "1" * 59,  # exact duplicate of the first fingerprint
+    )
+    assert _resolve_edge_ids(fingerprints) == (
+        "edge-abcde",
+        "edge-fffff",
+        "edge-abcde-2",
+        "edge-abcde-1",
+    )
+
+
+def _while_loop_wf(loop_max: int | None, exit_at: int) -> dict[str, Any]:
+    data = _count_loop_wf(loop_max=10, exit_at=exit_at)
+    loop_edge = data["edges"][2]
+    cond = loop_edge.pop("when")
+    loop_edge.pop("loop")
+    loop_edge["while"] = {"cond": cond} if loop_max is None else {"cond": cond, "max": loop_max}
+    return data
+
+
+def test_while_sugar_defaults_to_safe_bound_and_roundtrips() -> None:
+    wf = parse_workflow(_while_loop_wf(loop_max=None, exit_at=5))
+    edge = wf.edges[2]
+    assert edge.loop_max == 100
+    assert edge.loop_strict is True
+    assert edge.when is not None
+    assert parse_workflow(workflow_to_dict(wf)) == wf
+
+
+@pytest.mark.parametrize("loop_max", [2, 5])
+def test_while_converges_at_and_before_bound_with_parity(loop_max: int) -> None:
+    """Initial node run plus loop_max back-edge firings may reach the exit value."""
+    wf = parse_workflow(_while_loop_wf(loop_max=loop_max, exit_at=3))
+    interpreted = asyncio.run(execute(wf))
+    generated = _run_gen(generate(wf), f"_while_{loop_max}")
+    assert generated["out"] == dict(interpreted.runtime["out"]) == {"r": 3}
+
+
+def test_while_non_convergence_raises_in_both_engines() -> None:
+    wf = parse_workflow(_while_loop_wf(loop_max=1, exit_at=3))
+    message = "while loop 'b'->'a' did not converge within 1 iterations"
+
+    with pytest.raises(Exception, match=message):
+        asyncio.run(execute(wf))
+    with pytest.raises(Exception, match=message):
+        _run_gen(generate(wf), "_while_non_converging")
+
+
+def test_interpreter_resume_preserves_while_non_convergence(tmp_path: pathlib.Path) -> None:
+    """A terminal checkpoint must not turn a failed strict while into success."""
+    wf = parse_workflow(_while_loop_wf(loop_max=1, exit_at=3))
+    store = JSONFileCheckpointStore(tmp_path)
+    message = "while loop 'b'->'a' did not converge within 1 iterations"
+
+    with pytest.raises(Exception, match=message):
+        asyncio.run(execute(wf, checkpoint=store, run_id="strict"))
+    with pytest.raises(Exception, match=message):
+        asyncio.run(execute(wf, checkpoint=store, run_id="strict"))
 
 
 def test_generated_loop_persists_counter(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
@@ -65,9 +155,11 @@ def test_generated_loop_persists_counter(tmp_path: pathlib.Path, monkeypatch: An
     ck.mkdir()
     monkeypatch.setenv("FLOW_RUN_ID", "done")
     monkeypatch.setenv("FLOW_CHECKPOINT_DIR", str(ck))
-    _run_gen(generate(parse_workflow(_count_loop_wf())))
+    wf = parse_workflow(_count_loop_wf())
+    key = edge_identities(wf)[2]
+    _run_gen(generate(wf))
     snap = json.loads((ck / "done.json").read_text())
-    assert snap["loop_counters"] == {"b->a": 5}
+    assert snap["loop_counters"] == {key: 5}
 
 
 def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
@@ -84,7 +176,9 @@ def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatc
         "    if _k == 3 and not os.environ.get('RESUMED'):\n"
         "        raise RuntimeError('crash')\n"
     )
-    src = generate(parse_workflow(_count_loop_wf(crash_code=crash)))
+    wf = parse_workflow(_count_loop_wf(crash_code=crash))
+    key = edge_identities(wf)[2]
+    src = generate(wf)
     ck = tmp_path / "ck"
     ck.mkdir()
     monkeypatch.setenv("FLOW_RUN_ID", "c")
@@ -100,7 +194,7 @@ def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatc
         pass
     snap = json.loads((ck / "c.json").read_text())
     # Progress was persisted mid-loop (some iterations completed before the crash).
-    assert snap["loop_counters"].get("b->a", 0) >= 1
+    assert snap["loop_counters"].get(key, 0) >= 1
 
     # Run 2 resumes; 'a' no longer crashes.
     monkeypatch.setenv("RESUMED", "1")

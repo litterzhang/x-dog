@@ -2,7 +2,7 @@
   "name": "trip-planner",
   "provider": "copilot",
   "defaults": {
-    "model": "claude-sonnet-4.6"
+    "model": "gpt-5.6-sol"
   },
   "state": {
     "destination": "Kyoto, Japan",

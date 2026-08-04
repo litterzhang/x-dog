@@ -2,7 +2,7 @@
   "name": "essay-writer",
   "provider": "copilot",
   "defaults": {
-    "model": "claude-sonnet-4.6"
+    "model": "gpt-5.6-sol"
   },
   "state": {
     "question": "Should cities replace on-street parking with protected bike lanes?"

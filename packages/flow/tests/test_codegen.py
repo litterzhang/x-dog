@@ -13,6 +13,7 @@ import importlib.util
 import subprocess
 import sys
 import tempfile
+import types
 import uuid
 from pathlib import Path
 
@@ -1409,6 +1410,71 @@ async def test_generate_flow_inputs_override_parity() -> None:
 
     assert gen_state["dbl"]["out"] == 42  # 21 * 2, the override took effect
     assert gen_state == _interp_out(interp)
+
+
+async def test_subfield_mapping_to_output_matches_runtime() -> None:
+    """A JSONPath leaf can be projected directly into a named workflow output."""
+    from flow.executor import execute
+
+    wf = WorkflowDef(
+        name="nested-output",
+        provider="copilot",
+        entry="plan",
+        nodes=(
+            NodeDef(
+                id="plan",
+                type="script",
+                code="def plan(ctx):\n    return {'owner': 'ada', 'tasks': ['spec', 'ship']}",
+                output_ports=(
+                    Port(
+                        "result",
+                        schema={
+                            "type": "object",
+                            "properties": {
+                                "owner": {"type": "string"},
+                                "tasks": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    ),
+                ),
+            ),
+        ),
+        edges=(
+            EdgeDef(
+                src="plan",
+                dst="$output",
+                mapping=(
+                    ("$.result.owner", "who"),
+                    ("$.result.tasks[0]", "first"),
+                    ("$.result.missing", "absent"),
+                ),
+            ),
+        ),
+    )
+
+    interpreted = await execute(wf)
+    source = generate(wf)
+    module = types.ModuleType("_nested_output")
+    exec(compile(source, "<nested-output>", "exec"), module.__dict__)  # noqa: S102
+    await module.main()  # type: ignore[attr-defined]
+
+    expected = {"who": "ada", "first": "spec"}
+    assert interpreted.runtime["out"] == expected
+    assert module._RUNTIME["out"] == expected  # type: ignore[attr-defined]
+
+
+def test_generate_invalid_strict_loop_remains_syntactically_valid() -> None:
+    """Validation rejects this model, but codegen still emits a legal defensive else."""
+    wf = WorkflowDef(
+        name="invalid-strict",
+        provider="copilot",
+        entry="a",
+        nodes=(
+            NodeDef(id="a", type="script", code="def a(ctx):\n    return None"),
+        ),
+        edges=(EdgeDef(src="a", dst="a", loop_max=1, loop_strict=True),),
+    )
+    compile(generate(wf), "<invalid-strict>", "exec")
 
 
 async def test_generate_numeric_condition_parity() -> None:
