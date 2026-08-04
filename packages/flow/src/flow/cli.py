@@ -11,6 +11,9 @@ Usage::
     xdog-flow generate <config.json|.svg> -o OUT   Generate Python code
     xdog-flow generate <config> --portable -o DIR  Emit a self-contained bundle
     xdog-flow graph <config.json|.svg> [--mermaid|--svg]  Print workflow graph
+    xdog-flow scheduling install <config.json|.svg>     Install a schedule
+    xdog-flow scheduling uninstall <name>               Uninstall a schedule
+    xdog-flow scheduling list                           List schedules
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +36,7 @@ from flow.codegen import generate
 from flow.errors import WorkflowValidationError
 from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid
+from flow.result import build_run_result
 
 # ---------------------------------------------------------------------------
 # Dry-run stub factory
@@ -106,27 +111,29 @@ async def _cmd_run(
     timeout: float = 120.0,
     inputs: dict[str, object] | None = None,
 ) -> None:
-    """Execute a workflow and print its outputs ($output) as JSON."""
+    """Execute a workflow and print a stable structured result envelope."""
+    start_time = time.time()
+    workflow_name = Path(config_path).stem
     try:
         wf = load_any(config_path)
-    except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
-        print(str(exc))
-        raise SystemExit(1)
+        workflow_name = wf.name
+        if inputs:
+            logging.getLogger("flow").debug("run inputs override $in: %s", inputs)
 
-    if inputs:
-        logging.getLogger("flow").debug("run inputs override $in: %s", inputs)
-
-    base_dir = Path(config_path).resolve().parent
-    if dry_run:
-        factory = _dry_run_stream_fn_factory
-        result = await execute(wf, stream_fn_factory=factory, timeout=timeout, base_dir=base_dir, inputs=inputs)
-    else:
-        if provider is not None:
+        base_dir = Path(config_path).resolve().parent
+        if dry_run:
+            result = await execute(
+                wf,
+                stream_fn_factory=_dry_run_stream_fn_factory,
+                timeout=timeout,
+                base_dir=base_dir,
+                inputs=inputs,
+            )
+        elif provider is not None:
             import ai
             from agent.helpers import stream_fn_from_provider
 
-            prov = ai.provider(provider)
-            base_stream_fn = stream_fn_from_provider(prov)
+            base_stream_fn = stream_fn_from_provider(ai.provider(provider))
 
             def _factory(model: str) -> StreamFn:
                 return base_stream_fn
@@ -136,11 +143,35 @@ async def _cmd_run(
             )
         else:
             result = await execute(wf, timeout=timeout, base_dir=base_dir, inputs=inputs)
+    except Exception as exc:
+        envelope = build_run_result(
+            success=False,
+            message=str(exc) or type(exc).__name__,
+            output={},
+            workflow=workflow_name,
+            run_id=None,
+            start_time=start_time,
+            end_time=time.time(),
+            tokens_used=0,
+            last_node="",
+        )
+        print(json.dumps(envelope, indent=2, ensure_ascii=False))
+        raise SystemExit(1)
 
-    # By default show the workflow's declared outputs ($output); when a workflow
-    # declares none, fall back to the full runtime container for debugging.
-    rt = result.runtime
-    print(json.dumps(rt["out"] if rt["out"] else rt, indent=2, ensure_ascii=False))
+    runtime = result.runtime
+    context = runtime["ctx"]
+    envelope = build_run_result(
+        success=True,
+        message="Workflow completed",
+        output=dict(runtime["out"]),
+        workflow=workflow_name,
+        run_id=None,
+        start_time=start_time,
+        end_time=time.time(),
+        tokens_used=int(runtime["tokens_used"]),
+        last_node=str(context["node_id"]),
+    )
+    print(json.dumps(envelope, indent=2, ensure_ascii=False))
 
 
 def _cmd_generate(config_path: str, *, output: str | None, portable: bool = False, offline: bool = False) -> None:
@@ -198,52 +229,51 @@ def _cmd_build(config_path: str) -> None:
     run_builder(config_path)
 
 
-def _cmd_install(
-    config_path: str | None,
+def _scheduling_installer() -> Any:
+    from flow.scheduler.install import Installer, default_data_dir, default_unit_dir
+
+    return Installer(unit_dir=default_unit_dir(), data_dir=default_data_dir())
+
+
+def _cmd_scheduling_install(
+    config_path: str,
     *,
-    list_: bool,
-    delete: str | None,
     name: str | None,
     dry_run: bool,
 ) -> None:
-    """Install a scheduled workflow, or list/delete installed ones."""
-    from flow.scheduler.install import Installer, default_data_dir, default_unit_dir
-
-    inst = Installer(unit_dir=default_unit_dir(), data_dir=default_data_dir())
-
-    if list_:
-        rows = inst.list_installed()
-        if not rows:
-            print("(no scheduled workflows installed)")
-            return
-        for e in rows:
-            extra = e.get("signal") if e.get("mode") == "hook" else ""
-            print(f"{e['name']:24} {e['mode']:6} {e.get('bundle', '')}  {extra}".rstrip())
-        return
-
-    if delete is not None:
-        try:
-            inst.delete(delete, dry_run=dry_run)
-        except ValueError as exc:
-            print(str(exc))
-            raise SystemExit(1)
-        print(f"Deleted {delete}" if not dry_run else f"(dry-run) would delete {delete}")
-        return
-
-    if config_path is None:
-        print("install: give a <workflow.json>, or use --list / --delete NAME")
-        raise SystemExit(2)
+    """Install one scheduled workflow."""
     try:
         wf = load_any(config_path)
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
     try:
-        installed = inst.install(wf, name=name, dry_run=dry_run)
+        installed = _scheduling_installer().install(wf, name=name, dry_run=dry_run)
     except ValueError as exc:
         print(str(exc))
         raise SystemExit(1)
     print(f"Installed {installed}" if not dry_run else f"(dry-run) would install {installed}")
+
+
+def _cmd_scheduling_uninstall(name: str, *, dry_run: bool) -> None:
+    """Uninstall one scheduled workflow."""
+    try:
+        _scheduling_installer().delete(name, dry_run=dry_run)
+    except ValueError as exc:
+        print(str(exc))
+        raise SystemExit(1)
+    print(f"Uninstalled {name}" if not dry_run else f"(dry-run) would uninstall {name}")
+
+
+def _cmd_scheduling_list() -> None:
+    """List installed scheduled workflows."""
+    rows = _scheduling_installer().list_installed()
+    if not rows:
+        print("(no scheduled workflows installed)")
+        return
+    for entry in rows:
+        extra = entry.get("signal") if entry.get("mode") == "hook" else ""
+        print(f"{entry['name']:24} {entry['mode']:6} {entry.get('bundle', '')}  {extra}".rstrip())
 
 
 # ---------------------------------------------------------------------------
@@ -307,13 +337,24 @@ def main(argv: list[str] | None = None) -> None:
     build_p = sub.add_parser("build", help="Interactively build/edit a workflow (TUI)")
     build_p.add_argument("config", help="Path to workflow JSON file (created if missing)")
 
-    # -- install -------------------------------------------------------------
-    inst_p = sub.add_parser("install", help="Install a scheduled workflow (or --list / --delete)")
-    inst_p.add_argument("config", nargs="?", help="Path to workflow .json/.svg (omit for --list/--delete)")
-    inst_p.add_argument("--name", help="Install name (default: the workflow name)")
-    inst_p.add_argument("--list", action="store_true", dest="list_", help="List installed scheduled workflows")
-    inst_p.add_argument("--delete", metavar="NAME", help="Uninstall a scheduled workflow by name")
-    inst_p.add_argument("--dry-run", action="store_true", help="Print units/actions without touching the OS")
+    # -- scheduling ---------------------------------------------------------
+    scheduling_p = sub.add_parser("scheduling", help="Manage scheduled workflows")
+    scheduling_sub = scheduling_p.add_subparsers(dest="scheduling_command", required=True)
+
+    scheduling_install = scheduling_sub.add_parser("install", help="Install a scheduled workflow")
+    scheduling_install.add_argument("config", help="Path to workflow .json/.svg")
+    scheduling_install.add_argument("--name", help="Install name (default: the workflow name)")
+    scheduling_install.add_argument(
+        "--dry-run", action="store_true", help="Print units/actions without touching the OS"
+    )
+
+    scheduling_uninstall = scheduling_sub.add_parser("uninstall", help="Uninstall a scheduled workflow")
+    scheduling_uninstall.add_argument("name", help="Installed workflow name")
+    scheduling_uninstall.add_argument(
+        "--dry-run", action="store_true", help="Print units/actions without touching the OS"
+    )
+
+    scheduling_sub.add_parser("list", help="List installed scheduled workflows")
 
     args = parser.parse_args(argv)
 
@@ -340,14 +381,13 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_graph(args.config, mermaid=args.mermaid, svg=args.svg)
     elif args.command == "build":
         _cmd_build(args.config)
-    elif args.command == "install":
-        _cmd_install(
-            args.config,
-            list_=args.list_,
-            delete=args.delete,
-            name=args.name,
-            dry_run=args.dry_run,
-        )
+    elif args.command == "scheduling":
+        if args.scheduling_command == "install":
+            _cmd_scheduling_install(args.config, name=args.name, dry_run=args.dry_run)
+        elif args.scheduling_command == "uninstall":
+            _cmd_scheduling_uninstall(args.name, dry_run=args.dry_run)
+        elif args.scheduling_command == "list":
+            _cmd_scheduling_list()
     else:
         parser.print_help()
 

@@ -165,7 +165,7 @@ class EdgeDef:
 class ScheduleDef:
     """How a workflow fires on its own (docs/scheduling.md).
 
-    Declarative config for ``xdog-flow install`` — the engine never reads it; a
+    Declarative config for ``xdog-flow scheduling install`` — the engine never reads it; a
     scheduler (systemd timer / listener) wraps the built bundle.  Two modes:
 
     * ``mode="timer"`` — fire on a schedule: exactly one of ``every`` ("30s"/"15m"/
@@ -214,7 +214,7 @@ class WorkflowDef:
     # deadlock at cap=1).  Both engines apply it identically (interpret == compile).
     fan_max_concurrency: int = 0
     # Optional scheduling (docs/scheduling.md): how the workflow fires on its own.
-    # None = run-once (current behaviour).  Read only by ``xdog-flow install`` — the
+    # None = run-once (current behaviour).  Read only by ``xdog-flow scheduling install`` — the
     # engine ignores it (a scheduler wraps the built bundle, unchanged execution).
     schedule: ScheduleDef | None = None
 

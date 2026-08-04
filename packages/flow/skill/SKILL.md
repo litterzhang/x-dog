@@ -111,11 +111,11 @@ bounded loops (`loop: {max: N}` on a back-edge), and dynamic fan-out
 
 ```bash
 xdog-flow validate workflow.json     # fast structural + type check (do this first)
-xdog-flow run      workflow.json     # execute; prints the collected $output as JSON
+xdog-flow run      workflow.json     # execute; prints success/message/output/context JSON
 xdog-flow run      workflow.json --input key=value   # override a $in seed
 xdog-flow generate workflow.json -o out.py           # compile to a Python module
 xdog-flow graph    workflow.json     # print the ASCII diagram
-xdog-flow install  workflow.json     # install a scheduled workflow (see Scheduling)
+xdog-flow scheduling install  workflow.json     # install a scheduled workflow (see Scheduling)
 ```
 
 Workflow: **write JSON → `validate` (fix any reported errors — they are precise) →
@@ -123,7 +123,7 @@ Workflow: **write JSON → `validate` (fix any reported errors — they are prec
 
 ## Scheduling (optional) — make a workflow fire on its own
 
-Add a top-level `schedule` block, then `xdog-flow install <wf.json>` (Linux/systemd):
+Add a top-level `schedule` block, then `xdog-flow scheduling install <wf.json>` (Linux/systemd):
 
 ```jsonc
 // active / timer — fire on a schedule
@@ -136,10 +136,10 @@ Add a top-level `schedule` block, then `xdog-flow install <wf.json>` (Linux/syst
               "listen": { "type": "http", "path": "/hooks/triage", "port": 8787 } }
 ```
 
-- `xdog-flow install <wf.json>` — build the bundle + install the scheduler
+- `xdog-flow scheduling install <wf.json>` — build the bundle + install the scheduler
   (`--dry-run` to preview the systemd units without touching the OS).
-- `xdog-flow install --list` — list installed scheduled workflows.
-- `xdog-flow install --delete <name>` — uninstall one.
+- `xdog-flow scheduling list` — list installed scheduled workflows.
+- `xdog-flow scheduling uninstall <name>` — uninstall one.
 
 Each firing is an independent `python <bundle>` run; the engine is unchanged.
 See `examples/digest_timer.json` (timer) and `examples/triage_hook.json` (hook).

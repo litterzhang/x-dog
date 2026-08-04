@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +239,9 @@ $registry_line
 $concurrency_boilerplate
 
 $checkpoint_runtime
+
+
+$result_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +629,7 @@ $node_functions
 
 
 async def main() -> None:
+    start_time = time.time()
     global _FLOW_RUN_ID, _FLOW_CHECKPOINT_DIR
     _FLOW_RUN_ID = os.environ.get("FLOW_RUN_ID")
     _FLOW_CHECKPOINT_DIR = os.environ.get("FLOW_CHECKPOINT_DIR")
@@ -656,15 +661,42 @@ $main_body
             "tokens_used": _TOKENS_USED,
         }
     )
-    print(json.dumps(_RUNTIME["out"] if _RUNTIME["out"] else _RUNTIME, indent=2, ensure_ascii=False))
+    result = build_run_result(
+        success=True,
+        message="Workflow completed",
+        output=dict(_OUTPUT),
+        workflow=_WORKFLOW_NAME,
+        run_id=_FLOW_RUN_ID,
+        start_time=start_time,
+        end_time=time.time(),
+        tokens_used=_TOKENS_USED,
+        last_node=str(_last["node"]),
+    )
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     import sys
 
     if "-v" in sys.argv or "--verbose" in sys.argv:
-        # Surface the P3 node lifecycle events (NodeStarted / NodeFinished /
-        # NodeFailed) that this module logs to "flow.generated.events".  Off by
-        # default so a plain run only prints the workflow's JSON output.
         logging.basicConfig(level=logging.INFO, format="%(message)s")
-    asyncio.run(main())
+    _process_start = time.time()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        raise
+    except BaseException as _exc:
+        _last_node = str(_STACK[-1]["node"]) if _STACK else ""
+        _failure = build_run_result(
+            success=False,
+            message=str(_exc) or type(_exc).__name__,
+            output={},
+            workflow=_WORKFLOW_NAME,
+            run_id=_FLOW_RUN_ID,
+            start_time=_process_start,
+            end_time=time.time(),
+            tokens_used=_TOKENS_USED,
+            last_node=_last_node,
+        )
+        print(json.dumps(_failure, indent=2, ensure_ascii=False))
+        raise SystemExit(1) from None

@@ -1,7 +1,7 @@
 """Workflow scheduling (docs/scheduling.md).
 
 A top-level ``schedule`` block declares how a workflow fires on its own (timer or
-hook). It is declarative config for ``xdog-flow install`` — the engine ignores it.
+hook). It is declarative config for ``xdog-flow scheduling install`` — the engine ignores it.
 flow.scheduler renders the systemd units / crontab lines.
 """
 
@@ -171,7 +171,53 @@ def test_listener_service_render() -> None:
     assert "WantedBy=default.target" in svc
 
 
-# --- Phase 3: install / --list / --delete + registry -----------------------
+# --- Phase 3: scheduling CLI + registry ------------------------------------
+
+
+def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import flow.cli as cli
+
+    calls: list[tuple[str, object]] = []
+
+    class FakeInstaller:
+        def install(self, wf: object, *, name: str | None, dry_run: bool) -> str:
+            calls.append(("install", (wf, name, dry_run)))
+            return name or "demo"
+
+        def delete(self, name: str, *, dry_run: bool) -> None:
+            calls.append(("uninstall", (name, dry_run)))
+
+        def list_installed(self) -> list[dict[str, object]]:
+            calls.append(("list", None))
+            return [{"name": "demo", "mode": "timer", "bundle": "/tmp/demo"}]
+
+    workflow = object()
+    monkeypatch.setattr(cli, "_scheduling_installer", lambda: FakeInstaller())
+    monkeypatch.setattr(cli, "load_any", lambda path: workflow)
+
+    cli.main(["scheduling", "install", "workflow.json", "--name", "custom", "--dry-run"])
+    cli.main(["scheduling", "uninstall", "custom", "--dry-run"])
+    cli.main(["scheduling", "list"])
+
+    assert calls == [
+        ("install", (workflow, "custom", True)),
+        ("uninstall", ("custom", True)),
+        ("list", None),
+    ]
+    output = capsys.readouterr().out
+    assert "would install custom" in output
+    assert "would uninstall custom" in output
+    assert "demo" in output
+
+
+def test_legacy_install_command_is_removed() -> None:
+    import flow.cli as cli
+
+    with pytest.raises(SystemExit):
+        cli.main(["install", "workflow.json"])
+
+
+# --- Installer internals ---------------------------------------------------
 
 
 def _installer(tmp_path: Path) -> tuple[Installer, Path]:

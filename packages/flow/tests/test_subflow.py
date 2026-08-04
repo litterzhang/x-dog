@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from flow.codegen import generate
 from flow.executor import execute
-from flow.loader import parse_workflow
+from flow.loader import load_workflow, parse_workflow
 
 
 def _child() -> dict[str, Any]:
@@ -114,6 +114,18 @@ async def test_subflow_interpret_equals_compile() -> None:
 
     assert gen_runtime["state"] == dict(interp.runtime["state"])
     assert gen_runtime["out"] == dict(interp.runtime["out"])
+
+
+def test_path_subflow_child_is_valid_python_literal() -> None:
+    """Canonical booleans in an embedded path child must use Python literals."""
+    example = pathlib.Path(__file__).parent.parent / "examples" / "essay_writer.json"
+    source = generate(load_workflow(example))
+    module = types.ModuleType("_essay_writer_literal")
+    exec(compile(source, "<essay-writer>", "exec"), module.__dict__)  # noqa: S102
+    child = module._CHILD_compose  # type: ignore[attr-defined]
+    points = child["nodes"][0]["inputs"][1]
+    assert points["required"] is True
+    assert "'required': True" in source
 
 
 def test_subflow_generated_module_imports_flow() -> None:

@@ -111,7 +111,8 @@ xdog-flow validate examples/refine_loop.json
 
 ### run
 
-Execute a workflow and print the nested outputs (`{node_id: {port: value}}`) as JSON.
+Execute a workflow and print a stable result envelope containing `success`, `message`,
+collected `output`, and timing/token `context`.
 
 ```bash
 # Live execution using the provider declared in the JSON

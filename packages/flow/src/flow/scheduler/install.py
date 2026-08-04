@@ -3,7 +3,7 @@
 Wires :mod:`flow.bundle` (build the deployable artifact) and
 :mod:`flow.scheduler.systemd` (render units) to the OS: writes user unit files,
 calls ``systemctl --user``, and maintains a small JSON **install registry** so
-``--list`` / ``--delete`` know which units are flow's (independent of systemd's
+``scheduling list`` / ``scheduling uninstall`` know which units are flow's (independent of systemd's
 global list).  The scheduler wraps the built bundle; it never changes execution.
 See docs/scheduling.md.
 

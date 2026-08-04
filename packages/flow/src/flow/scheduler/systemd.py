@@ -3,7 +3,7 @@ scheduled workflow.
 
 Pure string rendering: given a :class:`~flow.models.ScheduleDef`, the installed
 bundle path, and a name, produce the unit-file text.  No OS side effects — the
-installer (``xdog-flow install``) writes these and calls ``systemctl``.  See
+installer (``xdog-flow scheduling install``) writes these and calls ``systemctl``.  See
 docs/scheduling.md.
 
 - **timer** → a oneshot ``.service`` (runs ``python <bundle>``) + a ``.timer``

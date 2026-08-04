@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ast
 import importlib.resources
-import json
 import pprint
 import re
 import string
@@ -30,6 +29,7 @@ from flow.models import (
     agent_output_schema,
     edge_identities,
 )
+from flow.result import render_run_result
 
 # A ContainerExpr is a Python expression string evaluating to the state dict
 # (``dict[str, object]``) that a ``{{path}}`` placeholder is resolved against.
@@ -575,9 +575,6 @@ def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     )
     lines.append(_finished_log)
     lines.append("    else:")
-    lines.append(
-        f"        print(f'PAUSED: {_ESC(node.id)} awaiting {_ESC(node.signal)}')"
-    )
     lines.append(f"        raise SystemExit(f'PAUSED: {_ESC(node.id)} awaiting {_ESC(node.signal)}')")
     return "\n".join(lines)
 
@@ -699,7 +696,7 @@ def _render_subflow_node(node: NodeDef, fn_name: str, safe: str) -> str:
     from flow.builder.serialize import workflow_to_dict
 
     assert node.child is not None
-    child_json = json.dumps(workflow_to_dict(node.child), ensure_ascii=False)
+    child_literal = repr(workflow_to_dict(node.child))
     in_names = [p.name for p in node.input_ports]
     out_names = [p.name for p in node.output_ports]
     params = ["provider: object", "ctx: RuntimeContext"]
@@ -721,7 +718,7 @@ def _render_subflow_node(node: NodeDef, fn_name: str, safe: str) -> str:
     lines.append("    _ctoks = _res.runtime.get('tokens_used', 0)")
     lines.append("    return _out, _ctoks if isinstance(_ctoks, int) else 0")
     # Module-level embedded child literal (emitted before the function).
-    literal = f"_CHILD_{safe} = {child_json}"
+    literal = f"_CHILD_{safe} = {child_literal}"
     literal_line = literal if len(literal) <= 120 else literal + "  # noqa: E501"
     return literal_line + "\n\n\n" + "\n".join(lines)
 
@@ -1051,6 +1048,7 @@ def generate(wf: WorkflowDef) -> str:
         node_functions=node_functions,
         frontier_runtime=render_frontier_runtime(),
         checkpoint_runtime=render_checkpoint_interceptor(),
+        result_runtime=render_run_result(),
         provider_init=provider_init,
         sdk_imports=sdk_imports,
         sdk_registry=sdk_registry,

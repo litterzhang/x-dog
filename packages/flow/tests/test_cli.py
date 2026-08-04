@@ -41,6 +41,17 @@ def test_validate_missing_file(capsys: pytest.CaptureFixture[str]) -> None:
     assert exc_info.value.code == 1
 
 
+def test_run_failure_prints_structured_envelope(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["run", "/nonexistent/path/workflow.json"])
+    assert exc_info.value.code == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["success"] is False
+    assert data["output"] == {}
+    assert data["message"]
+    assert data["context"]["workflow"] == "workflow"
+
+
 # ---------------------------------------------------------------------------
 # graph
 # ---------------------------------------------------------------------------
@@ -73,9 +84,13 @@ async def test_run_dry_run(capsys: pytest.CaptureFixture[str]) -> None:
 
     await _cmd_run(_LINEAR, provider=None, dry_run=True)
     out = capsys.readouterr().out
-    # Output should be valid JSON
     data = json.loads(out)
-    assert isinstance(data, dict)
+    assert data["success"] is True
+    assert data["message"] == "Workflow completed"
+    assert data["output"] == {}
+    assert data["context"]["workflow"] == "linear-workflow"
+    assert data["context"]["startTime"].endswith("Z")
+    assert data["context"]["durationMs"] >= 0
 
 
 def test_run_dry_run_sync(capsys: pytest.CaptureFixture[str]) -> None:
@@ -84,10 +99,9 @@ def test_run_dry_run_sync(capsys: pytest.CaptureFixture[str]) -> None:
     main(["run", _LINEAR, "--dry-run"])
     out = capsys.readouterr().out
     data = json.loads(out)
-    assert isinstance(data, dict)
-    # fallback container shape: ctx/stack/state/in/out keys present
-    assert {"ctx", "stack", "state", "in", "out"} <= set(data)
-    assert data["out"] == {}  # no $output declared
+    assert data["success"] is True
+    assert data["output"] == {}
+    assert data["context"]["lastNode"] == "c"
 
 
 # ---------------------------------------------------------------------------
@@ -155,13 +169,13 @@ def test_run_input_overrides_seed(capsys: pytest.CaptureFixture[str]) -> None:
     """`run --input a=2 --input b=40 --dry-run` prints the workflow's $output."""
     main(["run", _AGENT_CALC, "--input", "a=2", "--input", "b=40", "--dry-run"])
     out = json.loads(capsys.readouterr().out)
-    # agent_calculator declares $output (solve.answer -> result); the CLI prints it.
-    assert "result" in out
-    assert out["result"].startswith("DRYRUN:")
+    assert out["success"] is True
+    assert "result" in out["output"]
+    assert out["output"]["result"].startswith("DRYRUN:")
 
 
 def test_run_without_input_uses_defaults(capsys: pytest.CaptureFixture[str]) -> None:
     main(["run", _AGENT_CALC, "--dry-run"])
     out = json.loads(capsys.readouterr().out)
-    assert "result" in out
-    assert out["result"].startswith("DRYRUN:")
+    assert "result" in out["output"]
+    assert out["output"]["result"].startswith("DRYRUN:")

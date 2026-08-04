@@ -1,11 +1,11 @@
-# flow — Workflow Scheduling & `xdog-flow install`
+# flow — Workflow Scheduling & `xdog-flow scheduling install`
 
 Status: **v1 shipped** (Linux/systemd) · Audience: flow maintainers · Prerequisite:
 skim `cli-agent.md` (the bundle is the deployable artifact a scheduler wraps).
 
 Today a workflow runs once, on demand (`xdog-flow run`, or `python <bundle>`).
 This doc designs **scheduling** — making a workflow fire on its own — plus an
-`xdog-flow install` command that builds a portable bundle and installs the
+`xdog-flow scheduling install` command that builds a portable bundle and installs the
 scheduler on Linux. Two scheduling modes:
 
 1. **Active / timer** — fire on a schedule (every N minutes, or a cron expression).
@@ -72,21 +72,18 @@ reads at run time — the engine still just runs once per invocation.
 
 ---
 
-## 3. `xdog-flow install`
+## 3. `xdog-flow scheduling install`
 
-The one command manages the full lifecycle — install, list, and delete — so all
-scheduling operations live under `install`:
+Scheduling lifecycle operations are grouped under one CLI namespace:
 
 ```
-xdog-flow install <workflow.json> [--prefix DIR] [--name NAME] [--dry-run]
-                                              Build + install a scheduled workflow
-xdog-flow install --list                      List installed scheduled workflows
-xdog-flow install --delete <NAME>             Uninstall one (units + bundle)
+xdog-flow scheduling install <workflow.json> [--name NAME] [--dry-run]
+xdog-flow scheduling uninstall <NAME> [--dry-run]
+xdog-flow scheduling list
 ```
 
-`<workflow.json>` is required for an install, and **omitted** for `--list` /
-`--delete` (they act on already-installed names, not a source file). `--list` and
-`--delete` are mutually exclusive with each other and with an install.
+`install` requires a workflow source. `uninstall` and `list` operate on the local
+install registry and do not take a workflow file.
 
 **Install** steps (Linux v1):
 1. **Build.** `build_bundle(wf, <prefix>/<name>)` — a `--portable` bundle is the
@@ -96,23 +93,21 @@ xdog-flow install --delete <NAME>             Uninstall one (units + bundle)
 3. **Enable** the unit (`systemctl --user enable --now <name>.timer` /
    `.service`), unless `--dry-run` (which prints the unit files without installing).
 
-`--prefix` defaults to `~/.local/share/xdog-flow/<name>/` (the bundle lives here;
-units reference it by absolute path). `--name` defaults to the workflow name.
+Bundles default to `~/.local/share/xdog-flow/bundles/<name>/`; units reference
+them by absolute path. `--name` defaults to the workflow name.
 
-**`--list`** shows each installed workflow, its mode (timer/hook), and — for a
+**`scheduling list`** shows each installed workflow, its mode (timer/hook), and — for a
 timer — its next-fire time (from `systemctl --user list-timers`); for a hook, the
 listener's active/failed state and bound transport. It reads an install registry
 (a small JSON manifest under `~/.local/share/xdog-flow/`, written on install) so
 it knows *which* units are flow's, independent of systemd's global list.
 
-**`--delete <NAME>`** is the inverse of install: `systemctl --user disable --now`
-the timer/service(s), remove the generated unit files, remove the bundle dir under
-`--prefix`, and drop the name from the registry. Idempotent — deleting an unknown
-name is a clear error, not a crash; a partially-installed name still cleans up
-whatever exists.
+**`scheduling uninstall <NAME>`** is the inverse of install: it disables the
+unit, removes generated unit files and bundle, and drops the registry entry. An
+unknown name is a clear error.
 
-Nothing here touches the engine; `install` is a new CLI command + a
-`flow.scheduler` module that renders unit files.
+Nothing here touches the engine; the `scheduling` command group delegates to
+`flow.scheduler`, which renders and installs the OS units.
 
 ---
 
@@ -241,7 +236,7 @@ each transport:
   is the honest limitation of a systemd-less host.
 
 So "who starts the listener" is **systemd** (resident service, or socket-activated
-pair), installed and enabled by `xdog-flow install`; the only case where the user
+pair), installed and enabled by `xdog-flow scheduling install`; the only case where the user
 starts it by hand is a host without systemd.
 
 **Why a thin listener, not a framework:** flow doesn't own the event source. The
@@ -264,7 +259,7 @@ source's concern or a later transport.
   follow-ups; the unit-rendering is behind an interface so a second backend drops
   in.
 - The scheduler layer is **optional** — it lives in `flow.scheduler` and is only
-  imported by `xdog-flow install`; `run`/`generate`/the engine never touch it.
+  imported by `xdog-flow scheduling install`; `run`/`generate`/the engine never touch it.
 
 ---
 
@@ -305,11 +300,11 @@ execution.
 ## 9. v1 scope & non-goals
 
 **v1 delivers:** the `schedule` block (model + loader + serialize); `xdog-flow
-install`/`install --list`/`install --delete`; timer mode via systemd user timer
+install`/`scheduling list`/`scheduling uninstall`; timer mode via systemd user timer
 (interval + cron) with a crontab fallback; hook mode via a single listener
 supervised by systemd — **http and file as resident services, socket via
 socket-activation** — plus a no-systemd `nohup` fallback; a small install registry
-(JSON manifest) backing `--list`/`--delete`; `--dry-run` unit preview; docs + one
+(JSON manifest) backing `scheduling list`/`scheduling uninstall`; `--dry-run` unit preview; docs + one
 scheduled example.
 
 **Non-goals (v1):**
@@ -334,7 +329,7 @@ scheduled example.
    cron expression can't be faithfully translated — never silently mis-schedule.
 2. **Absolute paths / relocation.** Units hard-code the bundle path; moving the
    bundle breaks the timer. *Mitigation:* `install` owns the bundle location
-   (`--prefix`), `install --delete` cleans it, and `install --list` shows the path;
+   (`--prefix`), `scheduling uninstall` cleans it, and `scheduling list` shows the path;
    re-install to relocate.
 3. **Hook listener as an attack surface.** A public port running a workflow is
    dangerous. *Mitigation:* bind localhost by default, require an explicit
@@ -358,18 +353,16 @@ scheduled example.
 2. **Unit rendering.** `flow.scheduler.systemd` renders `.service`/`.timer` (timer)
    and `.service` (hook) from a `schedule` block; a crontab renderer. Pure
    string-render tests (assert the emitted unit text), no OS side effects.
-3. **`xdog-flow install` (+ `--list` / `--delete`).** Wire the command: build_bundle
-   + render + `systemctl --user` calls (guarded so `--dry-run` prints instead), and
-   the install registry that `--list`/`--delete` read/update. Tests stub
-   `systemctl` (a fake on PATH) and assert files written + registry updated +
-   commands run; a delete round-trips (install then delete leaves nothing).
+3. **`xdog-flow scheduling` command group.** Wire `install`, `uninstall`, and
+   `list`; build bundles, render units, call `systemctl --user`, and maintain the
+   registry. Tests stub `systemctl` and assert files, registry entries, and cleanup.
 4. **Shared hook listener.** `flow.scheduler.listener` — ONE listener service
    routing all installed hook workflows (http by `path`, file by watched dir); it
    spawns the right bundle with `FLOW_SIGNALS`/`FLOW_INPUTS`. Tests drive the
    listener in-process against a fake bundle, asserting routing + the right env +
    the signal reaching a human node, with two hook workflows sharing the listener.
 5. **Docs + example.** A scheduled example (a `timer` triage and a `hook` triage)
-   and a README note on `journalctl` and `install --delete`.
+   and a README note on `journalctl` and `scheduling uninstall`.
 
 ---
 
@@ -378,10 +371,10 @@ scheduled example.
 - `uv run ruff check packages/flow/src` · `uv run mypy --strict packages/flow/src`
   · `uv run pytest packages/flow/tests -q` (unit rendering + stubbed systemctl +
   in-process listener — no real timers or ports in CI).
-- End-to-end (manual, Linux): `xdog-flow install examples/cli_triage_timer.json`,
+- End-to-end (manual, Linux): `xdog-flow scheduling install examples/cli_triage_timer.json`,
   confirm `systemctl --user list-timers` shows it, wait a tick, check
-  `journalctl --user -u cli-triage.service` for the run output; `xdog-flow install
-  --list` shows it and `xdog-flow install --delete cli-triage` removes it. For hook:
-  `install` two hook workflows, confirm one shared `xdog-flow-listener.service`,
+  `journalctl --user -u cli-triage.service`, then use `xdog-flow scheduling list`
+  and `xdog-flow scheduling uninstall cli-triage`. For hook, install two workflows
+  and confirm one shared `xdog-flow-listener.service`,
   `curl` each webhook path, see each run fire.
 - `git checkout -- uv.lock` before commit.
