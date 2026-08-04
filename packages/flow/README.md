@@ -1,7 +1,45 @@
-# flow — Multi-Agent Workflow Engine & Code Generator
+# Flow — Typed Workflows for Humans and Coding Agents
 
-`flow` lets you define multi-agent pipelines as JSON, execute them at runtime,
-or compile them to a self-contained Python module.
+**Flow is a local-first, typed workflow format and compiler for developers and
+Coding Agents. Design repeatable agent workflows visually or generate them with
+AI, validate the JSON artifact, then run, compile, or schedule it as standalone
+Python.**
+
+Flow exists for two primary workflows:
+
+1. **Developer authoring.** Developers compose fixed, repeatable workflows through
+   the TUI today and a Web UI in the future, then run them on demand or install a
+   timer/hook schedule.
+2. **Agent authoring.** Claude Code, Codex, or another Agent turns a successful,
+   repeatable process into a constrained `workflow.json`; `xdog-flow validate`
+   supplies precise feedback so the Agent can repair it before human review.
+
+Both paths produce the same Git-friendly artifact:
+
+```text
+Human TUI / Web UI ─┐
+                     ├─> workflow.json -> validate -> run / generate / scheduling
+Coding Agent + Skill ┘
+```
+
+The JSON workflow is the product's canonical intermediate representation. The
+TUI/Web UI and Coding Agents are editors; the frontier executor is its interpreter;
+codegen is its standalone Python backend; scheduling is an optional deployment
+adapter. Flow is deliberately not a hosted low-code platform or a general-purpose
+distributed workflow service.
+
+## Product principles
+
+- **Human/Agent symmetry:** people and Agents edit the same format.
+- **Git-native:** workflows are readable files, not opaque database records.
+- **Validate before execute:** ports, schemas, conditions, loops, and subflows fail
+  early with actionable errors.
+- **Interpret equals compile:** local execution and generated Python share one
+  frontier transition kernel.
+- **Local-first deployment:** no control plane is required; a workflow can become
+  one Python artifact and an optional systemd schedule.
+- **Fixed workflows, not open-ended autonomy:** Flow crystallizes processes that
+  have become stable enough to repeat, inspect, and maintain.
 
 ---
 
@@ -30,9 +68,9 @@ block seeds the output ports of a reserved source node `$in`.
       "type": "agent",            // "agent" (LLM) or "script" (Python fn)
       "model": "...",             // optional; overrides defaults.model
       "system_prompt": "...",     // system prompt for the agent
-      "inputs": ["topic"],        // input ports (bare name, or {name,type})
+      "inputs": ["topic"],        // bare string port, or {name,schema,required}
       "prompt": "Research {{topic}}",  // {{x}} reads THIS node's input port x
-      "outputs": ["research_notes"]    // output ports (bare name, or {name,type})
+      "outputs": ["research_notes"]    // output ports use the same canonical forms
     }
   ],
   "edges": [
