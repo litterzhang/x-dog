@@ -173,6 +173,60 @@ runs, and a third never satisfies the reviewer so the loop stops at its `loop.ma
 bound. Writing that third case is what surfaced a real bug in the example — an
 unconditional `compose → revise` edge that let the quality gate be bypassed.
 
+## Depins Enrichment (an Agent with commit access)
+
+`depins_enrich/` is the one example that is not a teaching device. It runs on a
+small server every four hours, points a coding Agent at a live Flask site, and
+lets it commit and push its own work — but only if a chain of deterministic
+checks admits it.
+
+```text
+precheck ─(refused)──────────────────────────► skipped ──► $output
+    │
+    └─(proceed)─► build ─► scope ─► guards ─► gate ─► validate ─► decide
+                                               ▲                    │
+                                               │                    ├─(approved)──► commit
+                                               │                    │
+                                               │                    ├─(unfixable)─► revert
+                                               │                    │
+                                               └───── fix ◄─────────┘
+                                             while note != "", max 3
+```
+
+Three Agents (`build`, `validate`, `fix`) and eight script nodes. Everything
+between `build` and `commit` is deterministic code whose job is to *not believe*
+the Agent: `guards` imports the live registries out of the repository the Agent
+just edited and diffs them against a ledger, so a no-op cycle, a runaway cycle
+and a duplicate are all set-differences rather than heuristics; `gate` runs ruff
+against a pre-captured baseline, then pybabel, then a sweep of every route the
+app exposes.
+
+Four things it is worth reading the JSON for:
+
+- **`precheck` is both the gate and the input hydrator.** Every downstream node's
+  inputs flow out of it, so a refusal leaves nothing with an enabled incoming
+  edge and the chain is skipped structurally — no `if proceed:` anywhere.
+- **A node never raises to mean "stop the cycle."** It returns a verdict and the
+  edges decide. A raise means something is actually broken.
+- **`decide` is a node, not conditions scattered on the write edges.** That gives
+  `commit` and `revert` exactly one gated predecessor each. The version without
+  it had `commit` reachable while `approved` was false.
+- **The repair back-edge is a `while`, not a `loop`.** A fixer that has not
+  converged in three attempts has left a broken tree; the run fails rather than
+  stopping quietly on it.
+
+It is also the only example whose script nodes are `run:` references to sibling
+modules — which is why it is a directory, and why it found three bundling and
+codegen defects that every inline-`code` example had hidden. See
+[Letting an Agent Commit](/blog/letting-an-agent-commit) for that story.
+
+Its six-case suite covers every terminal state and needs no repository,
+virtualenv or network:
+
+```bash
+uv run xdog-flow test packages/flow/examples/depins_enrich/ --allow-script-stub
+```
+
 ## Other shipped patterns
 
 - `trip_planner.json` — structured Agent outputs and JSONPath sub-field mappings.
