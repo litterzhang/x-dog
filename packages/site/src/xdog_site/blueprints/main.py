@@ -48,9 +48,17 @@ def packages() -> str:
 # -- HaveFun: load a workflow, view diagrams, fill inputs, run async ----------
 
 # Curated built-in workflows offered in the HaveFun example picker (also the
-# allowlist for the ``example`` load path).  Kept small: a self-contained agent
-# example that is cheap to run.
-_HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator", "refine_loop")
+# allowlist for the ``example`` load path).  Kept small and cheap to run.
+# ``essay_writer`` reaches ``essay_compose`` through a path-referenced subflow,
+# which resolves because the example load path hands the examples directory to
+# the loader as its base_dir; the child is listed too so it can be viewed and run
+# on its own.
+_HAVEFUN_STEMS: tuple[str, ...] = (
+    "agent_calculator",
+    "refine_loop",
+    "essay_writer",
+    "essay_compose",
+)
 
 # Packages that expose a runnable HaveFun page. Today only flow ships workflows.
 # The nav renders its HaveFun children from this same tuple (see app.template_global),

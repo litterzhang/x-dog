@@ -293,6 +293,25 @@ def test_havefun_page_ok(client: FlaskClient) -> None:
     assert "agent_calculator" in body  # the example option
 
 
+def test_every_curated_example_actually_loads(client: FlaskClient) -> None:
+    """The picker's allowlist and the shipped examples must not drift apart.
+
+    A stem that no longer exists (renamed, moved into a directory) fails only in
+    the browser, at the moment someone picks it. ``essay_writer`` additionally
+    proves the path-referenced subflow resolves, which depends on the load path
+    handing the examples directory to the loader as its base_dir.
+    """
+    from xdog_site.blueprints.main import _HAVEFUN_STEMS
+
+    assert _HAVEFUN_STEMS
+    for stem in _HAVEFUN_STEMS:
+        resp = client.post("/havefun/flow/load", json={"example": stem})
+        assert resp.status_code == 200, stem
+        payload = resp.get_json()
+        assert payload["ok"] is True, f"{stem}: {payload.get('error')}"
+        assert payload["ascii"], stem
+
+
 def test_havefun_nav_is_a_collapsible_section_over_its_packages(client: FlaskClient) -> None:
     """HaveFun nests its runnable packages, matching the Packages section's shape.
 
