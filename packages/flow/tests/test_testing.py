@@ -554,7 +554,7 @@ def test_missing_suite_is_a_clear_error(tmp_path: pathlib.Path) -> None:
 def test_shipped_examples_have_passing_suites() -> None:
     """The flagship examples are covered by their own suites."""
     examples = pathlib.Path(__file__).resolve().parent.parent / "examples"
-    for suite_file in sorted(examples.glob("*.test.json")):
+    for suite_file in sorted(examples.rglob("*.test.json")):
         suite, wf = load_suite(suite_file, allow_script_stub=True)
         assert suite.cases, suite_file
         for case in suite.cases:

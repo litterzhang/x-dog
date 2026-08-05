@@ -444,7 +444,8 @@ so the same registry API applies to compiled workflows too.
 
 ## Current examples
 
-The checked-in examples are executable and mirrored into `skill/examples/`:
+The checked-in examples are executable. The flat ones are mirrored into
+`skill/examples/` as templates for an authoring Agent to imitate.
 
 - `agent_calculator.json` — typed agent output and arithmetic scripting.
 - `refine_loop.json` — conditional review/revision loop with a non-required
@@ -459,6 +460,12 @@ The checked-in examples are executable and mirrored into `skill/examples/`:
 - `release_readiness.test.json` / `release_report.test.json` — their test suites:
   fan-out stubs selected by input value, a loop pinned to its `loop.max` bound, and
   a whole subflow stubbed out.
+- `depins_enrich/` — a **case study**, not a template: the workflow that actually
+  runs unattended every four hours against a live site, writing real commits. It is
+  a directory rather than a single file because it is the only example whose script
+  nodes are `run:` references to sibling modules, and the only one where an Agent's
+  work is admitted by a deterministic gate and repaired in a bounded `while` loop.
+  See `examples/depins_enrich/README.md`.
 
 ```bash
 xdog-flow validate examples/refine_loop.json

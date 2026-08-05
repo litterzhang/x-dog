@@ -1,0 +1,1068 @@
+{
+  "name": "depins-enrich",
+  "provider": "copilot",
+  "defaults": {
+    "model": "claude-sonnet-4.6"
+  },
+  "entry": "precheck",
+  "max_concurrency": 2,
+  "schedule": {
+    "mode": "timer",
+    "cron": "0 */4 * * *",
+    "timeout": "40m",
+    "jitter": "15m"
+  },
+  "in_schema": {
+    "repo": {
+      "type": "string"
+    },
+    "venv_bin": {
+      "type": "string"
+    },
+    "remote": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "min_hours": {
+      "type": "integer"
+    },
+    "stress_rounds": {
+      "type": "integer"
+    },
+    "state_dir": {
+      "type": "string"
+    }
+  },
+  "state": {
+    "repo": "/home/zhang/workspaces/pyspace/depins",
+    "venv_bin": "/home/zhang/workspaces/pyspace/depins/.venv/bin",
+    "remote": "origin",
+    "branch": "main",
+    "min_hours": 3,
+    "stress_rounds": 8,
+    "state_dir": "/home/zhang/depins-autoenrich-flow"
+  },
+  "nodes": [
+    {
+      "id": "precheck",
+      "type": "script",
+      "run": "cycle:precheck",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "venv_bin",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "remote",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "branch",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "state_dir",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "min_hours",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        },
+        {
+          "name": "stress_rounds",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "proceed",
+          "schema": {
+            "type": "boolean"
+          },
+          "required": true
+        },
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "venv_bin",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "remote",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "branch",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "state_dir",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "ruff_baseline",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        },
+        {
+          "name": "known_json",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "builder_prompt",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "validator_prompt",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "stress_rounds",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "type": "agent",
+      "model": "claude-sonnet-4.6",
+      "tools": [
+        "filesystem",
+        "bash"
+      ],
+      "web_search": true,
+      "web_search_model": "gpt-5.5",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "builder_prompt",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are the BUILD agent for depins. Make exactly ONE small, high-quality, self-contained change, then stop. You may READ and EDIT files under the repo with the filesystem tool, and run READ-ONLY shell (ruff on the file you edited). You MUST NOT run git, gh, curl, wget, or rm. Ground your work in reality with the web_search tool before writing.",
+      "prompt": "{{$.builder_prompt}}",
+      "outputs": [
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "scope",
+      "type": "script",
+      "run": "nodes:scope",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "scope",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "guards",
+      "type": "script",
+      "run": "nodes:run_guards",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "venv_bin",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "scope",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "known_json",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "guards",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "script",
+      "run": "nodes:gate",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "venv_bin",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "scope",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "ruff_baseline",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        },
+        {
+          "name": "stress_rounds",
+          "schema": {
+            "type": "integer"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "verdict",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "validate",
+      "type": "agent",
+      "model": "gpt-5.6-sol",
+      "web_search": true,
+      "web_search_model": "gpt-5.5",
+      "inputs": [
+        {
+          "name": "scope",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "validator_prompt",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are the VALIDATE agent — a strict factual/editorial reviewer for depins. A deterministic gate ALREADY confirmed the app boots, every route returns 200 in en+zh, ruff introduced no new violations, and translations compile. Use web_search to verify real-world claims. You may NOT edit or use git.",
+      "prompt": "{{$.validator_prompt}}\n\nCHANGE UNDER REVIEW (manifest + diff):\n{{$.scope}}",
+      "outputs": [
+        {
+          "name": "review",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "decide",
+      "type": "script",
+      "run": "cycle:decide",
+      "inputs": [
+        {
+          "name": "scope",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "guards",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "verdict",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "review",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "remote",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "branch",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "state_dir",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "approved",
+          "schema": {
+            "type": "boolean"
+          },
+          "required": true
+        },
+        {
+          "name": "stage",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "kind",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "id",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "summary",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "remote",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "branch",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "state_dir",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "retry",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "fix",
+      "type": "agent",
+      "model": "claude-sonnet-4.6",
+      "tools": [
+        "filesystem",
+        "bash"
+      ],
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "stage",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "summary",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are the FIX agent for depins. A change has already been made and then rejected for one specific reason. Address exactly that reason and nothing else. You may READ and EDIT files under the repo with the filesystem tool and run READ-ONLY shell (ruff on the file you edited). You MUST NOT run git, gh, curl, wget, or rm, and you MUST NOT add a project or blog article. Do not broaden the change, do not refactor, do not 'improve' anything the rejection did not name.",
+      "prompt": "The change under repair: {{$.summary}}\n\nIt was rejected at the {{$.stage}} stage for this reason:\n{{$.reason}}\n\nThe repo is at {{$.repo}}. Make the smallest edit that resolves that reason, then stop. Reply with one sentence describing what you changed.",
+      "outputs": [
+        {
+          "name": "note",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "commit",
+      "type": "script",
+      "run": "cycle:commit",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "remote",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "branch",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "kind",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "ident",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "summary",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "state_dir",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "outcome",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "detail",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "revert",
+      "type": "script",
+      "run": "cycle:revert",
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "stage",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "outcome",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "detail",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "skipped",
+      "type": "script",
+      "run": "cycle:skipped",
+      "inputs": [
+        {
+          "name": "reason",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "outcome",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "detail",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "head",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "precheck",
+      "map": {
+        "repo": "repo",
+        "venv_bin": "venv_bin",
+        "remote": "remote",
+        "branch": "branch",
+        "min_hours": "min_hours",
+        "stress_rounds": "stress_rounds",
+        "state_dir": "state_dir"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "skipped",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "false"
+        }
+      },
+      "map": {
+        "reason": "reason"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "build",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "builder_prompt": "builder_prompt"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "scope",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "guards",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "venv_bin": "venv_bin",
+        "known_json": "known_json"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "gate",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "venv_bin": "venv_bin",
+        "ruff_baseline": "ruff_baseline",
+        "stress_rounds": "stress_rounds"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "validate",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "validator_prompt": "validator_prompt"
+      }
+    },
+    {
+      "from": "build",
+      "to": "scope",
+      "map": {}
+    },
+    {
+      "from": "scope",
+      "to": "guards",
+      "map": {
+        "scope": "scope"
+      }
+    },
+    {
+      "from": "guards",
+      "to": "gate",
+      "map": {}
+    },
+    {
+      "from": "scope",
+      "to": "gate",
+      "map": {
+        "scope": "scope"
+      }
+    },
+    {
+      "from": "gate",
+      "to": "validate",
+      "map": {}
+    },
+    {
+      "from": "scope",
+      "to": "validate",
+      "map": {
+        "scope": "scope"
+      }
+    },
+    {
+      "from": "scope",
+      "to": "decide",
+      "map": {
+        "scope": "scope"
+      }
+    },
+    {
+      "from": "guards",
+      "to": "decide",
+      "map": {
+        "guards": "guards"
+      }
+    },
+    {
+      "from": "gate",
+      "to": "decide",
+      "map": {
+        "verdict": "verdict"
+      }
+    },
+    {
+      "from": "validate",
+      "to": "decide",
+      "map": {
+        "review": "review"
+      }
+    },
+    {
+      "from": "precheck",
+      "to": "decide",
+      "when": {
+        "equals": {
+          "value": "{{$.proceed}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "remote": "remote",
+        "branch": "branch",
+        "head": "head",
+        "state_dir": "state_dir"
+      }
+    },
+    {
+      "from": "decide",
+      "to": "commit",
+      "when": {
+        "equals": {
+          "value": "{{$.approved}}",
+          "text": "true"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "remote": "remote",
+        "branch": "branch",
+        "head": "head",
+        "kind": "kind",
+        "id": "ident",
+        "summary": "summary",
+        "reason": "reason",
+        "state_dir": "state_dir"
+      }
+    },
+    {
+      "from": "decide",
+      "to": "fix",
+      "when": {
+        "equals": {
+          "value": "{{$.retry}}",
+          "text": "yes"
+        }
+      },
+      "map": {
+        "repo": "repo",
+        "stage": "stage",
+        "reason": "reason",
+        "summary": "summary"
+      }
+    },
+    {
+      "from": "fix",
+      "to": "gate",
+      "while": {
+        "cond": {
+          "not": {
+            "equals": {
+              "value": "{{$.note}}",
+              "text": ""
+            }
+          }
+        },
+        "max": 3
+      },
+      "map": {}
+    },
+    {
+      "from": "decide",
+      "to": "revert",
+      "when": {
+        "and": [
+          {
+            "equals": {
+              "value": "{{$.approved}}",
+              "text": "false"
+            }
+          },
+          {
+            "equals": {
+              "value": "{{$.retry}}",
+              "text": "no"
+            }
+          }
+        ]
+      },
+      "map": {
+        "repo": "repo",
+        "head": "head",
+        "stage": "stage",
+        "reason": "reason"
+      }
+    },
+    {
+      "from": "commit",
+      "to": "$output",
+      "map": {
+        "outcome": "outcome",
+        "detail": "detail",
+        "head": "head"
+      }
+    },
+    {
+      "from": "revert",
+      "to": "$output",
+      "map": {
+        "outcome": "outcome",
+        "detail": "detail",
+        "head": "head"
+      }
+    },
+    {
+      "from": "skipped",
+      "to": "$output",
+      "map": {
+        "outcome": "outcome",
+        "detail": "detail",
+        "head": "head"
+      }
+    }
+  ]
+}

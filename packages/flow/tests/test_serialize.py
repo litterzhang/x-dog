@@ -16,8 +16,10 @@ from flow.loader import load_workflow, parse_workflow
 from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 # Workflow examples only: *.test.json siblings are test suites, not workflows.
+# Recursive: an example that ships sibling ``run:`` modules lives in its own
+# directory, and it should be held to the same round-trip contract as a flat one.
 _EXAMPLES = sorted(
-    p for p in (pathlib.Path(__file__).parent.parent / "examples").glob("*.json")
+    p for p in (pathlib.Path(__file__).parent.parent / "examples").rglob("*.json")
     if not p.name.endswith(".test.json")
 )
 

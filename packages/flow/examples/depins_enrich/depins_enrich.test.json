@@ -1,0 +1,445 @@
+{
+  "cases": [
+    {
+      "name": "approved change is committed and pushed",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": true,
+          "reason": "",
+          "repo": "/fixture/depins",
+          "venv_bin": "/fixture/depins/.venv/bin",
+          "remote": "origin",
+          "branch": "main",
+          "head": "abc1234",
+          "ruff_baseline": 0,
+          "known_json": "{\"projects\":[],\"slugs\":[],\"features\":[]}",
+          "builder_prompt": "add one thing",
+          "validator_prompt": "review it",
+          "stress_rounds": 2,
+          "state_dir": "/fixture/ae"
+        },
+        "scope": {
+          "scope": "{\"changed\":[\"src/depins/x.py\"],\"summary\":\"add /api endpoint\",\"id\":\"api-x\",\"is_feature\":true,\"diff\":\"+x\"}"
+        },
+        "guards": {
+          "guards": "{\"ok\":true,\"kind\":\"feature\",\"id\":\"api-x\"}"
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        },
+        "gate": {
+          "verdict": "PASS: clean"
+        }
+      },
+      "agents": {
+        "build": {
+          "report": "added the endpoint"
+        },
+        "validate": {
+          "review": "Looks right.\n{\"verdict\":\"approve\",\"reasons\":\"claims check out\"}"
+        },
+        "fix": {
+          "note": "should not run"
+        }
+      },
+      "expect": {
+        "output": {
+          "outcome": "pushed",
+          "head": "def5678"
+        },
+        "calls": {
+          "decide": 1,
+          "fix": 0,
+          "commit": 1,
+          "revert": 0
+        }
+      }
+    },
+    {
+      "name": "a guards rejection is reverted, never handed to the fixer",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": true,
+          "reason": "",
+          "repo": "/fixture/depins",
+          "venv_bin": "/fixture/depins/.venv/bin",
+          "remote": "origin",
+          "branch": "main",
+          "head": "abc1234",
+          "ruff_baseline": 0,
+          "known_json": "{\"projects\":[],\"slugs\":[],\"features\":[]}",
+          "builder_prompt": "add one thing",
+          "validator_prompt": "review it",
+          "stress_rounds": 2,
+          "state_dir": "/fixture/ae"
+        },
+        "scope": {
+          "scope": "{\"changed\":[\"src/depins/x.py\"],\"summary\":\"add /api endpoint\",\"id\":\"api-x\",\"is_feature\":true,\"diff\":\"+x\"}"
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        },
+        "guards": {
+          "guards": "{\"ok\":false,\"reasons\":[\"out of scope\"],\"kind\":\"feature\",\"id\":\"api-x\"}"
+        },
+        "gate": {
+          "verdict": "PASS: clean"
+        }
+      },
+      "agents": {
+        "build": {
+          "report": "edited"
+        },
+        "validate": {
+          "review": "Looks right.\n{\"verdict\":\"approve\",\"reasons\":\"claims check out\"}"
+        },
+        "fix": {
+          "note": "should not run"
+        }
+      },
+      "expect": {
+        "output": {
+          "outcome": "rejected"
+        },
+        "calls": {
+          "fix": 0,
+          "revert": 1,
+          "commit": 0
+        }
+      }
+    },
+    {
+      "name": "a gate failure is repaired and then committed",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": true,
+          "reason": "",
+          "repo": "/fixture/depins",
+          "venv_bin": "/fixture/depins/.venv/bin",
+          "remote": "origin",
+          "branch": "main",
+          "head": "abc1234",
+          "ruff_baseline": 0,
+          "known_json": "{\"projects\":[],\"slugs\":[],\"features\":[]}",
+          "builder_prompt": "add one thing",
+          "validator_prompt": "review it",
+          "stress_rounds": 2,
+          "state_dir": "/fixture/ae"
+        },
+        "scope": {
+          "scope": "{\"changed\":[\"src/depins/x.py\"],\"summary\":\"add /api endpoint\",\"id\":\"api-x\",\"is_feature\":true,\"diff\":\"+x\"}"
+        },
+        "guards": {
+          "guards": "{\"ok\":true,\"kind\":\"feature\",\"id\":\"api-x\"}"
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        },
+        "gate": [
+          {
+            "round": 1,
+            "then": {
+              "verdict": "FAIL: ruff introduced 2 new violation(s)"
+            }
+          },
+          {
+            "then": {
+              "verdict": "PASS: clean"
+            }
+          }
+        ]
+      },
+      "agents": {
+        "build": {
+          "report": "edited"
+        },
+        "validate": {
+          "review": "Looks right.\n{\"verdict\":\"approve\",\"reasons\":\"claims check out\"}"
+        },
+        "fix": {
+          "note": "sorted the import block"
+        }
+      },
+      "expect": {
+        "output": {
+          "outcome": "pushed"
+        },
+        "calls": {
+          "gate": 2,
+          "fix": 1,
+          "decide": 2,
+          "commit": 1,
+          "revert": 0
+        }
+      }
+    },
+    {
+      "name": "a validator rejection is repaired and then committed",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": true,
+          "reason": "",
+          "repo": "/fixture/depins",
+          "venv_bin": "/fixture/depins/.venv/bin",
+          "remote": "origin",
+          "branch": "main",
+          "head": "abc1234",
+          "ruff_baseline": 0,
+          "known_json": "{\"projects\":[],\"slugs\":[],\"features\":[]}",
+          "builder_prompt": "add one thing",
+          "validator_prompt": "review it",
+          "stress_rounds": 2,
+          "state_dir": "/fixture/ae"
+        },
+        "scope": {
+          "scope": "{\"changed\":[\"src/depins/x.py\"],\"summary\":\"add /api endpoint\",\"id\":\"api-x\",\"is_feature\":true,\"diff\":\"+x\"}"
+        },
+        "guards": {
+          "guards": "{\"ok\":true,\"kind\":\"feature\",\"id\":\"api-x\"}"
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        },
+        "gate": {
+          "verdict": "PASS: clean"
+        }
+      },
+      "agents": {
+        "build": {
+          "report": "edited"
+        },
+        "validate": [
+          {
+            "round": 1,
+            "then": {
+              "review": "{\"verdict\":\"reject\",\"reasons\":\"duplicate charset in the header\"}"
+            }
+          },
+          {
+            "then": {
+              "review": "{\"verdict\":\"approve\",\"reasons\":\"fixed\"}"
+            }
+          }
+        ],
+        "fix": {
+          "note": "used mimetype without the charset"
+        }
+      },
+      "expect": {
+        "output": {
+          "outcome": "pushed"
+        },
+        "calls": {
+          "validate": 2,
+          "fix": 1,
+          "commit": 1,
+          "revert": 0
+        }
+      }
+    },
+    {
+      "name": "a repair that never converges fails the run",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": true,
+          "reason": "",
+          "repo": "/fixture/depins",
+          "venv_bin": "/fixture/depins/.venv/bin",
+          "remote": "origin",
+          "branch": "main",
+          "head": "abc1234",
+          "ruff_baseline": 0,
+          "known_json": "{\"projects\":[],\"slugs\":[],\"features\":[]}",
+          "builder_prompt": "add one thing",
+          "validator_prompt": "review it",
+          "stress_rounds": 2,
+          "state_dir": "/fixture/ae"
+        },
+        "scope": {
+          "scope": "{\"changed\":[\"src/depins/x.py\"],\"summary\":\"add /api endpoint\",\"id\":\"api-x\",\"is_feature\":true,\"diff\":\"+x\"}"
+        },
+        "guards": {
+          "guards": "{\"ok\":true,\"kind\":\"feature\",\"id\":\"api-x\"}"
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        },
+        "gate": {
+          "verdict": "FAIL: ruff introduced 2 new violation(s)"
+        }
+      },
+      "agents": {
+        "build": {
+          "report": "edited"
+        },
+        "validate": {
+          "review": "Looks right.\n{\"verdict\":\"approve\",\"reasons\":\"claims check out\"}"
+        },
+        "fix": {
+          "note": "tried again"
+        }
+      },
+      "expect": {
+        "error": "did not converge",
+        "calls": {
+          "fix": 4,
+          "commit": 0,
+          "revert": 0
+        }
+      }
+    },
+    {
+      "name": "precheck refusal skips the whole pipeline",
+      "inputs": {
+        "repo": "/fixture/depins",
+        "venv_bin": "/fixture/depins/.venv/bin",
+        "remote": "origin",
+        "branch": "main",
+        "min_hours": 3,
+        "stress_rounds": 2,
+        "state_dir": "/fixture/ae"
+      },
+      "scripts": {
+        "precheck": {
+          "proceed": false,
+          "reason": "rate limited: 0.40h < 3h",
+          "repo": "",
+          "venv_bin": "",
+          "remote": "",
+          "branch": "",
+          "head": "",
+          "ruff_baseline": 0,
+          "known_json": "{}",
+          "builder_prompt": "",
+          "validator_prompt": "",
+          "stress_rounds": 0,
+          "state_dir": ""
+        },
+        "scope": {
+          "scope": "{}"
+        },
+        "guards": {
+          "guards": "{}"
+        },
+        "gate": {
+          "verdict": ""
+        },
+        "commit": {
+          "outcome": "pushed",
+          "detail": "feature 'api-x' -> def5678",
+          "head": "def5678"
+        },
+        "revert": {
+          "outcome": "rejected",
+          "detail": "reverted",
+          "head": "abc1234"
+        }
+      },
+      "agents": {
+        "build": {
+          "report": "not run"
+        },
+        "validate": {
+          "review": "not run"
+        },
+        "fix": {
+          "note": "not run"
+        }
+      },
+      "expect": {
+        "output": {
+          "outcome": "skipped",
+          "detail": "rate limited: 0.40h < 3h"
+        },
+        "calls": {
+          "skipped": 1,
+          "build": 0,
+          "decide": 0,
+          "fix": 0,
+          "commit": 0,
+          "revert": 0
+        }
+      }
+    }
+  ]
+}
