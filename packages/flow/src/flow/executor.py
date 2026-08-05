@@ -41,10 +41,10 @@ from flow.models import (
     EdgeDef,
     NodeDef,
     WorkflowDef,
-    agent_is_structured,
+    agent_submits_object,
     edge_identities,
 )
-from flow.runners import AgentRunner, CliRunner, SdkRunner, cli_adapter_for
+from flow.runners import AgentRunner, CliRunner, NodeStubs, SdkRunner, StubRunner, cli_adapter_for
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
 
@@ -147,6 +147,26 @@ def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
     return fn
 
 
+def _script_stub_value(node: NodeDef, ports: dict[str, object]) -> object:
+    """Reshape a test stub's port dict into what the script itself would return.
+
+    Stubs are always authored as ``{port: value}``; a script with 0/1 output ports
+    returns a bare value.  Reshaping here (rather than storing the dict directly)
+    keeps the stub on the production coercion path — ``_coerce_script_output`` still
+    applies ``to_state`` and still rejects a shape the node did not declare.
+    """
+    declared = [p.name for p in node.output_ports]
+    unknown = sorted(set(ports) - set(declared))
+    if unknown:
+        raise WorkflowExecutionError(
+            f"Node {node.id!r}: stub sets undeclared output port(s) {', '.join(unknown)}; "
+            f"declared: {', '.join(declared) or '(none)'}"
+        )
+    if len(declared) <= 1:
+        return ports.get(declared[0]) if declared else None
+    return ports
+
+
 @dataclass(frozen=True)
 class ExecResult:
     """Result of executing a workflow.
@@ -181,6 +201,7 @@ async def execute(
     max_concurrency: int | None = None,
     signals: set[str] | None = None,
     max_tokens: int | None = None,
+    stubs: NodeStubs | None = None,
 ) -> ExecResult:
     """Execute a workflow definition with parallel fan-out/fan-in.
 
@@ -218,6 +239,11 @@ async def execute(
         Optional factory ``(model_id) -> async (query) -> str`` used to back the
         built-in ``web_search`` tool for agent nodes that set ``web_search``.
         Defaults to one built from the real ai provider.  Injectable for tests.
+    stubs:
+        Test-mode overrides for the workflow's non-deterministic boundaries (see
+        :class:`~flow.runners.NodeStubs`).  When supplied, *every* agent node is
+        answered by the stubs and no provider or CLI is constructed; subflow and
+        script nodes may be stubbed too, and anything not stubbed runs for real.
     """
     from flow.tools import default_registry as _default_registry
     from flow.tools import register_workflow_tools
@@ -228,7 +254,8 @@ async def execute(
         register_workflow_tools(wf, tool_registry, base_dir)
     # Build SDK wiring only when the workflow actually has an SDK agent node — a
     # pure-CLI (or script-only) workflow needs no provider and must not touch ai.
-    _needs_sdk = any(n.type == "agent" and n.backend is None for n in wf.nodes)
+    # Test mode never builds it: the stub runner answers every agent node.
+    _needs_sdk = stubs is None and any(n.type == "agent" and n.backend is None for n in wf.nodes)
     if stream_fn_factory is None and _needs_sdk:
         import ai
         from agent.helpers import stream_fn_from_provider
@@ -462,7 +489,7 @@ async def execute(
             pass
 
     async def _fan_instance(
-        node: NodeDef, node_id: str, ins: dict[str, object], step: int
+        node: NodeDef, node_id: str, ins: dict[str, object], step: int, fan_index: int
     ) -> tuple[dict[str, object], int]:
         """Run ONE fan-out instance's core work; return (output-port dict, tokens).
 
@@ -471,14 +498,14 @@ async def execute(
         whether or not it is fanned.
         """
         if node.type == "script":
-            out = await _node_script(node, node_id, ins, step)
+            out = await _node_script(node, node_id, ins, step, fan_index)
             return out, 0
-        value, tokens = await _node_agent(node, node_id, ins)
+        value, tokens = await _node_agent(node, node_id, ins, step, fan_index)
         # Project the agent's returned value into its output-port dict (same rule
         # as _store_agent_output, but pure — returns instead of mutating outputs).
         projected: dict[str, object] = {}
         if node.output_ports:
-            if agent_is_structured(node) and len(node.output_ports) > 1:
+            if agent_submits_object(node):
                 if not isinstance(value, dict):
                     raise WorkflowExecutionError(
                         f"Node {node_id!r}: multi-output agent must submit an object, "
@@ -536,9 +563,9 @@ async def execute(
         async def _one(i: int) -> tuple[dict[str, object], int]:
             ins_i = {**shared, worker_port: items[i]}
             if _fan_sem is None:
-                return await _fan_instance(node, node_id, ins_i, step)
+                return await _fan_instance(node, node_id, ins_i, step, i)
             async with _fan_sem:
-                return await _fan_instance(node, node_id, ins_i, step)
+                return await _fan_instance(node, node_id, ins_i, step, i)
 
         results = await asyncio.gather(*[_one(i) for i in range(len(items))])
 
@@ -551,7 +578,12 @@ async def execute(
         await _record_frame(node_id, {worker_port: items} if worker_port else {}, step)
         async with _state_lock:
             tokens_used += total_tokens
-        _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=total_tokens))
+        _emit(NodeFinished(
+            node_id=node_id, step=step,
+            duration_s=time.monotonic() - _t0,
+            tokens=total_tokens,
+            instances=len(items),
+        ))
 
     async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> None:
         """Run a ``type="subflow"`` node (G5) as ONE opaque nested workflow.
@@ -567,6 +599,19 @@ async def execute(
         assert node.child is not None
         _emit(NodeStarted(node_id=node_id, step=step))
         _t0 = time.monotonic()
+
+        # Test mode: a stubbed subflow is answered whole — the child never runs.
+        # This is the intended decomposition, since a child workflow carries its own
+        # .test.json; nodes *inside* a child are deliberately not stubbable.
+        if stubs is not None:
+            stubbed = stubs.subflow(node, inputs=ins, step=step)
+            if stubbed is not None:
+                projected_stub = {p.name: stubbed[p.name] for p in node.output_ports if p.name in stubbed}
+                async with _state_lock:
+                    outputs[node_id] = projected_stub
+                await _record_frame(node_id, ins, step)
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
+                return
 
         # Parent ins -> child $in (by the derived input-port names).
         child_inputs = {p.name: ins[p.name] for p in node.input_ports if p.name in ins}
@@ -589,6 +634,10 @@ async def execute(
             checkpoint=checkpoint,
             run_id=child_run_id,
             max_tokens=child_budget,
+            # Inherited so an UNSTUBBED child can never construct a real provider:
+            # the stubs object knows only the parent's node ids, so any agent node
+            # in here raises "no stub" instead of reaching the network.
+            stubs=stubs,
         )
         child_out = child_result.runtime.get("out", {})
         child_tokens = child_result.runtime.get("tokens_used", 0)
@@ -700,7 +749,7 @@ async def execute(
 
         for agent_attempt in range(agent_max_attempts):
             try:
-                output_value, total_tokens = await _node_agent(node, node_id, ins)
+                output_value, total_tokens = await _node_agent(node, node_id, ins, agent_step)
                 agent_last_exc = None
                 break
             except Exception as exc:  # not BaseException: never retry Cancelled/KeyboardInterrupt
@@ -746,7 +795,13 @@ async def execute(
             )
         return {p.name: to_state(value[p.name], p.type) for p in ports}
 
-    async def _node_script(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> dict[str, object]:
+    async def _node_script(
+        node: NodeDef,
+        node_id: str,
+        ins: dict[str, object],
+        step: int,
+        fan_index: int | None = None,
+    ) -> dict[str, object]:
         """Run a script node's core work once; return its output-port dict.
 
         Pure with respect to the run store: it resolves the function, builds the
@@ -754,6 +809,10 @@ async def execute(
         into the output-port dict.  Storing, retry, memo, and events are the
         driver's job (the caller).
         """
+        if stubs is not None:
+            stubbed = stubs.script(node, inputs=ins, step=step, fan_index=fan_index)
+            if stubbed is not None:
+                return _coerce_script_output(node, node_id, _script_stub_value(node, stubbed))
         if node.code is not None:
             fn = _resolve_script_fn(node, base_dir)
         elif script_resolver is not None:
@@ -770,8 +829,14 @@ async def execute(
     _cli_runner_cache: dict[str, CliRunner] = {}
 
     def _runner_for(node: NodeDef) -> AgentRunner:
-        """Select the agent backend for *node*: a CLI runner when ``node.backend``
-        is set, else the SDK runner (built once from the SDK wiring)."""
+        """Select the agent backend for *node*.
+
+        In test mode (``stubs`` supplied) the stub runner answers for **every** agent
+        node, whatever its ``backend`` — so no provider or CLI is ever constructed
+        and a test cannot reach the network.
+        """
+        if stubs is not None:
+            return StubRunner(stubs)
         if node.backend is not None:
             runner = _cli_runner_cache.get(node.backend)
             if runner is None:
@@ -790,7 +855,13 @@ async def execute(
             )
         return _sdk_runner_cache[0]
 
-    async def _node_agent(node: NodeDef, node_id: str, ins: dict[str, object]) -> tuple[object, int]:
+    async def _node_agent(
+        node: NodeDef,
+        node_id: str,
+        ins: dict[str, object],
+        step: int,
+        fan_index: int | None = None,
+    ) -> tuple[object, int]:
         """Run an agent node's core work once; return (output_value, tokens).
 
         Node-generic part: interpolate the prompts and resolve the model, then
@@ -808,13 +879,16 @@ async def execute(
             user_prompt=user_prompt,
             model=model,
             timeout=timeout,
+            inputs=ins,
+            step=step,
+            fan_index=fan_index,
         )
 
     def _store_agent_output(node: NodeDef, node_id: str, output_value: object) -> None:
         """Store an agent's output value into its port(s) (caller holds _state_lock)."""
         if not node.output_ports:
             return
-        if agent_is_structured(node) and len(node.output_ports) > 1:
+        if agent_submits_object(node):
             if not isinstance(output_value, dict):
                 raise WorkflowExecutionError(
                     f"Node {node.id!r}: multi-output agent must submit an object, "

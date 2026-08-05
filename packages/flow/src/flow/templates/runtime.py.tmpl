@@ -618,7 +618,11 @@ async def _drive_fan(
     _TOKENS_USED += _tokens
     _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
     _EVENT_LOG.info(
-        "NodeFinished node=%s step=%d duration_s=%f", node_id, len(_STACK) - 1, time.monotonic() - _t0
+        "NodeFinished node=%s step=%d duration_s=%f instances=%d",
+        node_id,
+        len(_STACK) - 1,
+        time.monotonic() - _t0,
+        len(_items),
     )
 
 

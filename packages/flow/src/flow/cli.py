@@ -229,6 +229,56 @@ def _cmd_build(config_path: str) -> None:
     run_builder(config_path)
 
 
+def _cmd_test(
+    target: str,
+    *,
+    case_name: str | None,
+    allow_script_stub: bool,
+    verbose: bool,
+) -> None:
+    """Run the companion ``*.test.json`` suite(s) for *target*.
+
+    *target* may be a workflow (``foo.json`` finds ``foo.test.json``), a suite file,
+    or a directory to sweep.  Exits 1 if any case fails, so this drops straight into
+    a pre-commit hook or CI step.
+    """
+    from flow.testing import discover, load_suite, run_case
+    from flow.testing.report import render_suite, render_total
+
+    try:
+        suite_files = discover(Path(target))
+    except WorkflowValidationError as exc:
+        print(str(exc))
+        raise SystemExit(1)
+    if not suite_files:
+        print(f"no *.test.json suites under {target}")
+        raise SystemExit(1)
+
+    results = []
+    for suite_file in suite_files:
+        try:
+            suite, wf = load_suite(suite_file, allow_script_stub=allow_script_stub)
+        except (WorkflowValidationError, FileNotFoundError) as exc:
+            print(f"{suite_file}: {exc}")
+            raise SystemExit(1)
+
+        selected = [c for c in suite.cases if case_name is None or c.name == case_name]
+        if case_name is not None and not selected:
+            known = ", ".join(repr(c.name) for c in suite.cases)
+            print(f"{suite_file}: no case named {case_name!r}; cases are: {known}")
+            raise SystemExit(1)
+
+        suite_results = [run_case(wf, c, base_dir=suite.workflow_path.parent) for c in selected]
+        results.extend(suite_results)
+        for line in render_suite(str(suite_file), suite_results, verbose=verbose):
+            print(line)
+
+    print("")
+    print(render_total(results))
+    if any(not r.ok for r in results):
+        raise SystemExit(1)
+
+
 def _scheduling_installer() -> Any:
     from flow.scheduler.install import Installer, default_data_dir, default_unit_dir
 
@@ -337,6 +387,20 @@ def main(argv: list[str] | None = None) -> None:
     build_p = sub.add_parser("build", help="Interactively build/edit a workflow (TUI)")
     build_p.add_argument("config", help="Path to workflow JSON file (created if missing)")
 
+    # -- test ----------------------------------------------------------------
+    test_p = sub.add_parser("test", help="Run a workflow's companion *.test.json suite")
+    test_p.add_argument(
+        "target",
+        help="Workflow .json (finds the sibling .test.json), a .test.json, or a directory",
+    )
+    test_p.add_argument("--case", help="Run only the case with this name")
+    test_p.add_argument(
+        "--allow-script-stub",
+        action="store_true",
+        help="Permit 'scripts' stubs (script nodes run for real by default)",
+    )
+    test_p.add_argument("-v", "--verbose", action="store_true", help="Show the node trace for passing cases too")
+
     # -- scheduling ---------------------------------------------------------
     scheduling_p = sub.add_parser("scheduling", help="Manage scheduled workflows")
     scheduling_sub = scheduling_p.add_subparsers(dest="scheduling_command", required=True)
@@ -381,6 +445,13 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_graph(args.config, mermaid=args.mermaid, svg=args.svg)
     elif args.command == "build":
         _cmd_build(args.config)
+    elif args.command == "test":
+        _cmd_test(
+            args.target,
+            case_name=args.case,
+            allow_script_stub=args.allow_script_stub,
+            verbose=args.verbose,
+        )
     elif args.command == "scheduling":
         if args.scheduling_command == "install":
             _cmd_scheduling_install(args.config, name=args.name, dry_run=args.dry_run)

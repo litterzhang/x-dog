@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -41,6 +41,10 @@ class AgentRunner(Protocol):
 
     The value is the structured object (when the node has structured output ports)
     or the joined assistant text; ``tokens`` is the turn's total token count.
+
+    ``inputs``/``step``/``fan_index`` describe *which* activation this turn belongs
+    to.  The SDK and CLI backends ignore them; :class:`StubRunner` uses them to pick
+    a test stub deterministically (see :class:`NodeStubs`).
     """
 
     async def run(
@@ -51,7 +55,89 @@ class AgentRunner(Protocol):
         user_prompt: str,
         model: str,
         timeout: float,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
     ) -> tuple[object, int]: ...
+
+
+class NodeStubs(Protocol):
+    """Test-time overrides for a workflow's non-deterministic boundaries.
+
+    Implemented by :mod:`flow.testing`; consulted by the executor at exactly three
+    points so that everything else — edges, conditions, loops, fan-out, mappings,
+    coercion, ``$output`` collection — runs for real.
+
+    ``step`` identifies one scheduler activation (a fan-out node's instances all
+    share it, so it is the loop-iteration ordinal); ``fan_index`` is an instance's
+    position in the fanned array, or ``None`` outside a fan.  Both are stable under
+    concurrency, unlike completion order.
+    """
+
+    def agent(
+        self,
+        node: NodeDef,
+        *,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
+    ) -> tuple[object, int]:
+        """Answer an agent turn.  Raises when the node has no matching stub."""
+        ...
+
+    def subflow(
+        self,
+        node: NodeDef,
+        *,
+        inputs: Mapping[str, object],
+        step: int,
+    ) -> dict[str, object] | None:
+        """Output ports for a stubbed subflow, or ``None`` to run the child for real."""
+        ...
+
+    def script(
+        self,
+        node: NodeDef,
+        *,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
+    ) -> dict[str, object] | None:
+        """Output ports for a stubbed script, or ``None`` to run it for real."""
+        ...
+
+
+class StubRunner:
+    """The test backend: answers every agent turn from :class:`NodeStubs`.
+
+    Installed for *all* agent nodes in test mode — including ``backend="claude-cli"``
+    ones — so no provider or CLI is ever constructed and a test cannot reach the
+    network by accident.
+
+    It sits exactly where the real backends sit: prompt interpolation has already
+    run, and the value it returns still goes through the node's required-field
+    checks and ``to_state`` coercion.  So a stub is validated against the node's
+    declared output contract by the production code path, for free.
+    """
+
+    def __init__(self, stubs: NodeStubs) -> None:
+        self._stubs = stubs
+
+    async def run(
+        self,
+        node: NodeDef,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        timeout: float,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
+    ) -> tuple[object, int]:
+        _ = (system_prompt, user_prompt, model, timeout)
+        return self._stubs.agent(node, inputs=inputs, step=step, fan_index=fan_index)
+
 
 
 class SdkRunner:
@@ -81,7 +167,11 @@ class SdkRunner:
         user_prompt: str,
         model: str,
         timeout: float,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
     ) -> tuple[object, int]:
+        _ = (inputs, step, fan_index)  # activation identity: only StubRunner needs it
         from agent.agent import Agent
         from agent.core import AgentConfig, AgentTool
         from agent.events import TurnEndEvent
@@ -422,7 +512,11 @@ class CliRunner:
         user_prompt: str,
         model: str,
         timeout: float,
+        inputs: Mapping[str, object],
+        step: int,
+        fan_index: int | None,
     ) -> tuple[object, int]:
+        _ = (inputs, step, fan_index)  # activation identity: only StubRunner needs it
         structured = agent_is_structured(node)
         schema = agent_output_schema(node) if structured else None
         scratch = Path(tempfile.mkdtemp(prefix="flow-cli-"))

@@ -29,7 +29,10 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["agent.*", "ai.*", "ai", "pydot", "jsonpath_ng", "jsonpath_ng.*", "fastjsonschema"]
+# Untyped third-party imports. Keep this list to modules flow actually imports —
+# warn_unused_configs reports dead entries, and a stale one hides a real gap.
+# (fastjsonschema is agent's runtime dep, not flow's; flow never imports it.)
+module = ["agent.*", "ai.*", "ai", "pydot", "jsonpath_ng"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

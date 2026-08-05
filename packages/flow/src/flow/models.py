@@ -290,6 +290,23 @@ def agent_is_structured(node: NodeDef) -> bool:
     return True
 
 
+def agent_submits_object(node: NodeDef) -> bool:
+    """Whether an agent's returned value is a *port-keyed object* rather than one value.
+
+    The distinction between "submits an object" and "is structured" is easy to blur
+    but they are not the same: a single structured port (say one ``{"type":
+    "object"}`` output) is structured, yet the whole submitted value still goes
+    verbatim into that one port.  Only a multi-port agent returns a dict that has to
+    be split across ports.
+
+    This is the single definition of that rule.  The executor uses it to store and
+    to project fan instances, and :mod:`flow.testing` uses it to shape a stub into
+    the same value a provider would have returned — so a stub cannot drift from
+    production behaviour.
+    """
+    return agent_is_structured(node) and len(node.output_ports) > 1
+
+
 def agent_output_schema(node: NodeDef) -> dict[str, object]:
     """The JSON Schema an agent's ``submit_result`` object is validated against.
 

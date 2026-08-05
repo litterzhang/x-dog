@@ -15,7 +15,11 @@ from flow.builder.serialize import dump_workflow, workflow_to_dict
 from flow.loader import load_workflow, parse_workflow
 from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
-_EXAMPLES = sorted((pathlib.Path(__file__).parent.parent / "examples").glob("*.json"))
+# Workflow examples only: *.test.json siblings are test suites, not workflows.
+_EXAMPLES = sorted(
+    p for p in (pathlib.Path(__file__).parent.parent / "examples").glob("*.json")
+    if not p.name.endswith(".test.json")
+)
 
 
 @pytest.mark.parametrize("example", _EXAMPLES, ids=lambda p: p.name)
