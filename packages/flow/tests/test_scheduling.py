@@ -8,6 +8,7 @@ flow.scheduler renders the systemd units / crontab lines.
 from __future__ import annotations
 
 import json as _json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from flow.builder.serialize import workflow_to_dict
 from flow.errors import WorkflowValidationError
 from flow.loader import parse_workflow, validate_workflow
 from flow.models import ScheduleDef
+import flow.scheduler.install as install_mod
 from flow.scheduler.install import Installer
 from flow.scheduler.systemd import (
     cron_to_oncalendar,
@@ -507,3 +509,52 @@ def test_install_python_is_selectable(monkeypatch: pytest.MonkeyPatch, capsys: p
         ["scheduling", "install", wf_path, "--dry-run", "--no-venv", "--python", "/opt/venv/bin/python"]
     )
     assert "/opt/venv/bin/python" in capsys.readouterr().out
+
+
+# --- uv provisioning ---------------------------------------------------------
+
+
+def test_install_provisions_the_bundle_with_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """install detects uv, then has uv build the bundle's environment.
+
+    The bundle ships a pyproject, so one `uv sync` picks the interpreter (fetching
+    a CPython when the host has none), makes .venv, and installs the deps. The unit
+    then runs that interpreter instead of /usr/bin/python3, which on a typical host
+    has none of them.
+    """
+    ran: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **kw: object) -> object:
+        ran.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(install_mod.subprocess, "run", _fake_run)
+    inst = Installer(
+        unit_dir=tmp_path / "units",
+        data_dir=tmp_path / "data",
+        systemctl=("true",),
+        uv="/fake/uv",
+    )
+    wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *"}))
+    inst.install(wf, name="demo")
+
+    sync = next(c for c in ran if c[:2] == ["/fake/uv", "sync"])
+    assert "--project" in sync
+    service = (tmp_path / "units" / "demo.service").read_text(encoding="utf-8")
+    assert str(tmp_path / "data" / "demo" / ".venv" / "bin" / "python") in service
+
+
+def test_install_falls_back_to_a_named_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """venv=False keeps the old behaviour for an environment you already maintain."""
+    monkeypatch.setattr(
+        install_mod.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", "")
+    )
+    inst = Installer(
+        unit_dir=tmp_path / "units",
+        data_dir=tmp_path / "data",
+        systemctl=("true",),
+        python="/opt/env/bin/python",
+    )
+    wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *"}))
+    inst.install(wf, name="demo", venv=False)
+    assert "/opt/env/bin/python" in (tmp_path / "units" / "demo.service").read_text(encoding="utf-8")

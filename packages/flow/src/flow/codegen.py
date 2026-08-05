@@ -308,10 +308,18 @@ def _wrap_string_expr(expr: str, indent: int = 4) -> str:
     return expr + "  # noqa: E501"
 
 
-def _script_is_async(node: NodeDef) -> bool:
-    """Whether a script node's function is ``async`` (AST for inline; assume yes for run-ref)."""
+def _script_is_async(node: NodeDef) -> bool | None:
+    """Whether a script node's function is ``async``; None when it cannot be known.
+
+    Inline ``code`` is settled from its AST.  A ``run: "module:func"`` reference is
+    resolved at run time, so the answer is None and the generated call decides at
+    run time — mirroring the interpreter, which awaits only what
+    ``inspect.isawaitable`` says is awaitable.  Assuming ``async`` here used to
+    break every synchronous run-ref function on the compiled side while it worked
+    fine interpreted.
+    """
     if node.code is None:
-        return True
+        return None
     tree = ast.parse(node.code)
     return any(isinstance(s, ast.AsyncFunctionDef) for s in tree.body)
 
@@ -516,9 +524,15 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     for p in node.input_ports:
         lines.append(f'    _in_{p.name} = to_python({p.name}, "{p.type}")')
         call_args.append(f"{p.name}=_in_{p.name}")
-    await_kw = "await " if _script_is_async(node) else ""
+    is_async = _script_is_async(node)
+    await_kw = "await " if is_async else ""
     core = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
     lines.append(core if len(core) <= 120 else core + "  # noqa: E501")
+    if is_async is None:
+        # A run-ref may be sync or async; decide at run time exactly as the
+        # interpreter's _node_script does.
+        lines.append("    if inspect.isawaitable(_val):")
+        lines.append("        _val = await _val")
     lines.append("    _out: dict[str, object] = {}")
     if len(node.output_ports) <= 1:
         if node.output_ports:
@@ -1013,6 +1027,15 @@ def generate(wf: WorkflowDef) -> str:
     # _drive always references hashlib in its (deterministic-only) memo branch.
     hashlib_import = "import hashlib\n"
 
+    # Only a `run:` script node needs the run-time awaitable check (its function is
+    # resolved at import time, so async-ness cannot be settled while compiling).
+    # Emitting the import unconditionally would leave every other module ruff-dirty.
+    inspect_import = (
+        "import inspect\n"
+        if any(n.type == "script" and _script_is_async(n) is None for n in wf.nodes)
+        else ""
+    )
+
     # The SDK block (agent/ai imports + inlined tool registry + _run_agent + the
     # _REGISTRY line) is emitted ONLY when the workflow has an SDK agent node (or a
     # tool manifest, which only an SDK agent uses).  A pure-CLI/script module then
@@ -1059,5 +1082,6 @@ def generate(wf: WorkflowDef) -> str:
         signals_boilerplate=signals_boilerplate,
         signals_main_init=signals_main_init,
         hashlib_import=hashlib_import,
+        inspect_import=inspect_import,
     )
     return result

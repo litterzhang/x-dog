@@ -285,7 +285,10 @@ def test_generate_script() -> None:
     )
     src = generate(wf)
     assert "prep as _script_" in src
-    assert "await _script_" in src  # run-ref functions are awaited
+    # A run-ref may be sync or async — resolved at import time — so the generated
+    # call decides at run time, exactly as the interpreter does.
+    assert "_val = _script_" in src
+    assert "if inspect.isawaitable(_val):" in src
     ok, msg = _ruff_clean(src)
     assert ok, f"ruff failed:\n{msg}"
 
@@ -1688,3 +1691,56 @@ async def test_generate_numeric_condition_parity() -> None:
     # 0 -> 1 -> 2 -> 3 (loop stops when count reaches 3, no longer < 3)
     assert gen_state["done"]["result"] == "final:3"
     assert gen_state == _interp_out(run_result)
+
+
+def test_sync_run_ref_script_works_in_both_engines(tmp_path: Path) -> None:
+    """A ``run:`` function may be sync or async; only run time can tell.
+
+    The interpreter awaits whatever ``inspect.isawaitable`` says is awaitable, so a
+    plain ``def`` works. Codegen used to assume every run-ref was ``async`` and
+    emit a bare ``await``, so the same workflow raised
+    ``TypeError: object dict can't be used in 'await' expression`` once compiled —
+    an interpret/compile divergence that only a run-ref workflow could hit.
+    """
+    (tmp_path / "sync_mod.py").write_text(
+        "def bump(ctx, n):\n    return int(n) + 1\n"
+        "\n"
+        "async def abump(ctx, n):\n    return int(n) + 100\n",
+        encoding="utf-8",
+    )
+
+    def _wf(func: str) -> dict[str, object]:
+        return {
+            "name": "runref",
+            "entry": "step",
+            "in_schema": {"n": {"type": "integer"}},
+            "state": {"n": 1},
+            "nodes": [{
+                "id": "step",
+                "type": "script",
+                "run": f"sync_mod:{func}",
+                "inputs": [{"name": "n", "schema": {"type": "integer"}, "required": True}],
+                "outputs": [{"name": "out", "schema": {"type": "integer"}, "required": True}],
+            }],
+            "edges": [
+                {"from": "$in", "to": "step", "map": {"n": "n"}},
+                {"from": "step", "to": "$output", "map": {"out": "out"}},
+            ],
+        }
+
+    from flow.executor import execute
+    from flow.loader import parse_workflow
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        for func, expected in (("bump", 2), ("abump", 101)):
+            wf = parse_workflow(_wf(func))
+            interpreted = asyncio.run(execute(wf, base_dir=tmp_path))
+            assert interpreted.runtime["out"] == {"out": expected}
+
+            module = types.ModuleType(f"gen_{func}")
+            exec(compile(generate(wf), f"<runref_{func}>", "exec"), module.__dict__)  # noqa: S102
+            asyncio.run(module.main())
+            assert module._OUTPUT == {"out": expected}, func
+    finally:
+        sys.path.remove(str(tmp_path))
