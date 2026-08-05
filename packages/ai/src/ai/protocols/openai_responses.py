@@ -42,6 +42,7 @@ from ai.types import (
     TextDeltaEvent,
     TextDoneEvent,
     TextStartEvent,
+    ThinkingContent,
     ThinkingDeltaEvent,
     ThinkingDoneEvent,
     ThinkingStartEvent,
@@ -169,7 +170,16 @@ def _convert_assistant_message(
 
     items: list[dict[str, Any]] = []
     for block in msg.content:
-        if isinstance(block, TextContent):
+        if isinstance(block, ThinkingContent):
+            if not block.thinking_signature:
+                continue
+            try:
+                reasoning_item = json.loads(block.thinking_signature)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(reasoning_item, dict) and reasoning_item.get("type") == "reasoning":
+                items.append(reasoning_item)
+        elif isinstance(block, TextContent):
             items.append({
                 "type": "message",
                 "role": "assistant",
@@ -319,6 +329,7 @@ async def _stream_impl(
             "effort": options.thinking,
             "summary": "auto",
         }
+        body["include"] = ["reasoning.encrypted_content"]
 
     # Build URL and headers
     base_url = model.base_url or "https://api.githubcopilot.com"

@@ -14,7 +14,7 @@ proxy:
    least assert the proxy preserves the signature on parse.)
 """
 
-from ai.proxy import _parse_message
+from ai.proxy import _parse_message, _parse_upstream_error
 from ai.types import (
     AssistantMessage,
     ThinkingContent,
@@ -87,3 +87,34 @@ def test_parse_message_empty_user_content():
     assert len(parsed) == 1
     assert isinstance(parsed[0], UserMessage)
     assert parsed[0].content == ""
+
+
+def test_parse_upstream_context_overflow_error():
+    error = _parse_upstream_error(
+        'HTTP 400: {"error":{"code":"model_max_prompt_tokens_exceeded",'
+        '"message":"prompt is too long","type":"invalid_request_error"},'
+        '"request_id":"req_123","type":"error"}'
+    )
+
+    assert error == (
+        400,
+        {
+            "type": "error",
+            "error": {
+                "code": "model_max_prompt_tokens_exceeded",
+                "message": "prompt is too long",
+                "type": "invalid_request_error",
+            },
+            "request_id": "req_123",
+        },
+    )
+
+
+def test_parse_upstream_error_falls_back_to_api_error():
+    status, error = _parse_upstream_error("network failed")
+
+    assert status == 500
+    assert error == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "network failed"},
+    }

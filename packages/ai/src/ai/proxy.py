@@ -244,6 +244,32 @@ def _sse_line(event: str, data: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
+def _parse_upstream_error(error_message: str) -> tuple[int, dict[str, Any]]:
+    """Recover an upstream Anthropic error envelope from an internal error."""
+    status = 500
+    payload_text = error_message
+    if error_message.startswith("HTTP "):
+        status_text, separator, payload_text = error_message[5:].partition(": ")
+        if separator:
+            try:
+                status = int(status_text)
+            except ValueError:
+                status = 500
+
+    try:
+        payload = json.loads(payload_text)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        return status, payload
+
+    return status, {
+        "type": "error",
+        "error": {"type": "api_error", "message": error_message},
+    }
+
+
 def _map_stop_reason_to_anthropic(reason: str) -> str:
     """Map internal stop reasons to Anthropic API format."""
     return {
@@ -253,6 +279,34 @@ def _map_stop_reason_to_anthropic(reason: str) -> str:
         "error": "end_turn",
         "aborted": "end_turn",
     }.get(reason, reason)
+
+
+def _event_usage(event: Any) -> Any:
+    """Return the Usage carried by a streaming event, if any."""
+    message = getattr(event, "partial", None) or getattr(event, "message", None)
+    return getattr(message, "usage", None)
+
+
+def _message_start_line(msg_id: str, model_id: str, usage: Any) -> bytes:
+    """Build the Anthropic ``message_start`` SSE line with real token usage."""
+    return _sse_line("message_start", {
+        "type": "message_start",
+        "message": {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": model_id,
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": usage.input if usage else 0,
+                "output_tokens": usage.output if usage else 0,
+                "cache_read_input_tokens": usage.cache_read if usage else 0,
+                "cache_creation_input_tokens": usage.cache_write if usage else 0,
+            },
+        },
+    })
 
 
 async def stream_to_sse(
@@ -266,27 +320,22 @@ async def stream_to_sse(
     """
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     block_index = -1
+    pending_message_start = False
 
     async for event in event_stream:
         etype = event.type
 
         if etype == "start":
-            # message_start
-            yield _sse_line("message_start", {
-                "type": "message_start",
-                "message": {
-                    "id": msg_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [],
-                    "model": model_id,
-                    "stop_reason": None,
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
-                },
-            })
+            # Defer message_start until upstream usage is known — clients rely
+            # on its input/cache token counts to track context growth.
+            pending_message_start = True
+            continue
 
-        elif etype == "text_start":
+        if pending_message_start:
+            pending_message_start = False
+            yield _message_start_line(msg_id, model_id, _event_usage(event))
+
+        if etype == "text_start":
             block_index = event.index
             yield _sse_line("content_block_start", {
                 "type": "content_block_start",
@@ -380,8 +429,8 @@ async def stream_to_sse(
             })
 
         elif etype == "usage":
-            # Anthropic sends input_tokens in message_start, not message_delta,
-            # so the usage event carries nothing this proxy needs to forward here.
+            # Cumulative usage is forwarded in message_delta below, which the
+            # OpenAI-backed protocols only know once the stream completes.
             pass
 
         elif etype == "done":
@@ -390,7 +439,7 @@ async def stream_to_sse(
             stop_reason = _map_stop_reason_to_anthropic(
                 msg.stop_reason if msg else "end_turn"
             )
-            output_tokens = msg.usage.output if msg and msg.usage else 0
+            usage = msg.usage if msg else None
 
             yield _sse_line("message_delta", {
                 "type": "message_delta",
@@ -399,20 +448,18 @@ async def stream_to_sse(
                     "stop_sequence": None,
                 },
                 "usage": {
-                    "output_tokens": output_tokens,
+                    "input_tokens": usage.input if usage else 0,
+                    "output_tokens": usage.output if usage else 0,
+                    "cache_read_input_tokens": usage.cache_read if usage else 0,
+                    "cache_creation_input_tokens": usage.cache_write if usage else 0,
                 },
             })
             yield _sse_line("message_stop", {"type": "message_stop"})
 
         elif etype == "error":
             assert isinstance(event, ErrorEvent)
-            yield _sse_line("error", {
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": event.error,
-                },
-            })
+            _, error = _parse_upstream_error(event.error)
+            yield _sse_line("error", error)
 
 
 def format_non_streaming_response(
@@ -764,8 +811,13 @@ async def _handle_messages(
 
     else:
         msg = await provider.complete(model_id, context, options)
-        resp = json.dumps(format_non_streaming_response(msg, model_id)).encode()
-        writer.write(_http_response(200, "OK", resp))
+        if msg.stop_reason == "error" and msg.error_message:
+            status, error = _parse_upstream_error(msg.error_message)
+            resp = json.dumps(error).encode()
+            writer.write(_http_response(status, "Bad Request" if status == 400 else "Upstream Error", resp))
+        else:
+            resp = json.dumps(format_non_streaming_response(msg, model_id)).encode()
+            writer.write(_http_response(200, "OK", resp))
         await writer.drain()
         writer.close()
 

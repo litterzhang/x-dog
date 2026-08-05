@@ -120,5 +120,8 @@ def test_list_models_returns_stale_cache_over_fallback(tmp_path: Path):
 
 
 def test_get_synced_model():
-    assert get_synced_model("copilot/claude-sonnet-4.5") is not None
+    # Look up a model the live catalogue actually offers; hard-coding a single
+    # model ID here breaks whenever the upstream catalogue rotates.
+    known = next(m.id for m in list_models())
+    assert get_synced_model(known) is not None
     assert get_synced_model("copilot/nonexistent") is None

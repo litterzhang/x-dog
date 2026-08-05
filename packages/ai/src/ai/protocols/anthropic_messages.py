@@ -130,6 +130,11 @@ def context_to_anthropic(
     return system, messages, tools
 
 
+def _anthropic_tool_call_id(tool_call_id: str) -> str:
+    """Return the provider-neutral portion of a composite tool call ID."""
+    return tool_call_id.split("|", 1)[0]
+
+
 def _convert_message(msg: Message) -> dict[str, Any] | None:
     """Convert a single Message to Anthropic format."""
     if isinstance(msg, AssistantMessage):
@@ -146,18 +151,18 @@ def _convert_message(msg: Message) -> dict[str, Any] | None:
                         "type": "redacted_thinking",
                         "data": part.thinking or "",
                     })
-                elif part.thinking:
-                    block: dict[str, Any] = {
+                elif part.thinking_signature:
+                    content_parts.append({
                         "type": "thinking",
                         "thinking": part.thinking,
-                    }
-                    if part.thinking_signature:
-                        block["signature"] = part.thinking_signature
-                    content_parts.append(block)
+                        "signature": part.thinking_signature,
+                    })
+                elif part.thinking:
+                    content_parts.append({"type": "text", "text": part.thinking})
             elif isinstance(part, ToolCall):
                 content_parts.append({
                     "type": "tool_use",
-                    "id": part.id,
+                    "id": _anthropic_tool_call_id(part.id),
                     "name": part.name,
                     "input": part.arguments or {},
                 })
@@ -176,7 +181,7 @@ def _convert_message(msg: Message) -> dict[str, Any] | None:
             "role": "user",
             "content": [{
                 "type": "tool_result",
-                "tool_use_id": msg.tool_call_id,
+                "tool_use_id": _anthropic_tool_call_id(msg.tool_call_id),
                 "content": sanitize_unicode(text),
             }],
         }
@@ -409,6 +414,26 @@ async def _stream_impl(
     )
 
 
+def _anthropic_usage(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int,
+    cache_write: int,
+) -> Usage:
+    """Build a Usage with ``total_tokens`` populated.
+
+    Anthropic reports cached tokens separately from ``input_tokens``, so the
+    total is the sum of all four buckets.
+    """
+    return Usage(
+        input=input_tokens,
+        output=output_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
+        total_tokens=input_tokens + output_tokens + cache_read + cache_write,
+    )
+
+
 def _handle_sse_event(
     event_type: str,
     data: dict[str, Any],
@@ -425,9 +450,9 @@ def _handle_sse_event(
         output.response_id = msg.get("id")
         usage_data = msg.get("usage", {})
         if usage_data:
-            output.usage = Usage(
-                input=usage_data.get("input_tokens", 0),
-                output=usage_data.get("output_tokens", 0),
+            output.usage = _anthropic_usage(
+                input_tokens=usage_data.get("input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
                 cache_read=usage_data.get("cache_read_input_tokens", 0),
                 cache_write=usage_data.get("cache_creation_input_tokens", 0),
             )
@@ -575,9 +600,9 @@ def _handle_sse_event(
         if usage_data:
             output_tokens = usage_data.get("output_tokens", 0)
             if output_tokens:
-                output.usage = Usage(
-                    input=output.usage.input,
-                    output=output_tokens,
+                output.usage = _anthropic_usage(
+                    input_tokens=output.usage.input,
+                    output_tokens=output_tokens,
                     cache_read=output.usage.cache_read,
                     cache_write=output.usage.cache_write,
                 )

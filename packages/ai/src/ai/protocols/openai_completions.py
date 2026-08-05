@@ -147,22 +147,20 @@ def _parse_chunk_usage(raw_usage: Any) -> Usage:
     if prompt_details is not None:
         cached_tokens = getattr(prompt_details, "cached_tokens", 0) or 0
 
-    # reasoning tokens
-    reasoning_tokens = 0
-    completion_details = getattr(raw_usage, "completion_tokens_details", None)
-    if completion_details is not None:
-        reasoning_tokens = getattr(completion_details, "reasoning_tokens", 0) or 0
-
-    # OpenAI includes cached tokens in prompt_tokens
+    # OpenAI reports cached tokens inside prompt_tokens and reasoning tokens
+    # inside completion_tokens, so neither is added on top again.
     input_tokens = prompt_tokens - cached_tokens
-    output_tokens = completion_tokens + reasoning_tokens
+    output_tokens = completion_tokens
+    total_tokens = (
+        getattr(raw_usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+    )
 
     usage = Usage(
         input=input_tokens,
         output=output_tokens,
         cache_read=cached_tokens,
         cache_write=0,
-        total_tokens=input_tokens + output_tokens + cached_tokens,
+        total_tokens=total_tokens,
     )
     return usage
 
