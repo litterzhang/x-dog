@@ -138,6 +138,14 @@ Environment=FLOW_CHECKPOINT_DIR=%S/xdog-flow/cli-triage/ckpt
 ExecStart=/usr/bin/python3 /home/user/.local/share/xdog-flow/cli-triage
 ```
 
+`ExecStart` defaults to `/usr/bin/python3`, which on most hosts has none of the
+bundle's `requirements.txt` — the unit would fail on its first firing with only a
+systemd status to explain why. Pass `--python` to name an interpreter that does:
+
+```bash
+xdog-flow scheduling install wf.json --python ~/proj/.venv/bin/python
+```
+
 The bundle carries the workflow's own directory with it: a `run: "module:func"`
 script node compiles to a real import, which the interpreter satisfies by putting
 the workflow's directory on `sys.path`. A unit runs from somewhere else entirely,

@@ -281,10 +281,13 @@ def _cmd_test(
         raise SystemExit(1)
 
 
-def _scheduling_installer() -> Any:
+def _scheduling_installer(python: str | None = None) -> Any:
     from flow.scheduler.install import Installer, default_data_dir, default_unit_dir
 
-    return Installer(unit_dir=default_unit_dir(), data_dir=default_data_dir())
+    kwargs: dict[str, Any] = {"unit_dir": default_unit_dir(), "data_dir": default_data_dir()}
+    if python:
+        kwargs["python"] = python
+    return Installer(**kwargs)
 
 
 def _cmd_scheduling_install(
@@ -292,6 +295,7 @@ def _cmd_scheduling_install(
     *,
     name: str | None,
     dry_run: bool,
+    python: str | None = None,
 ) -> None:
     """Install one scheduled workflow."""
     try:
@@ -300,7 +304,7 @@ def _cmd_scheduling_install(
         print(str(exc))
         raise SystemExit(1)
     try:
-        installed = _scheduling_installer().install(
+        installed = _scheduling_installer(python).install(
             wf, name=name, dry_run=dry_run, base_dir=Path(config_path).resolve().parent
         )
     except ValueError as exc:
@@ -413,6 +417,13 @@ def main(argv: list[str] | None = None) -> None:
     scheduling_install.add_argument("config", help="Path to workflow .json/.svg")
     scheduling_install.add_argument("--name", help="Install name (default: the workflow name)")
     scheduling_install.add_argument(
+        "--python",
+        help=(
+            "Interpreter for the unit's ExecStart (default: /usr/bin/python3). "
+            "Point this at an environment that has the bundle's requirements.txt installed"
+        ),
+    )
+    scheduling_install.add_argument(
         "--dry-run", action="store_true", help="Print units/actions without touching the OS"
     )
 
@@ -458,7 +469,9 @@ def main(argv: list[str] | None = None) -> None:
         )
     elif args.command == "scheduling":
         if args.scheduling_command == "install":
-            _cmd_scheduling_install(args.config, name=args.name, dry_run=args.dry_run)
+            _cmd_scheduling_install(
+                args.config, name=args.name, dry_run=args.dry_run, python=args.python
+            )
         elif args.scheduling_command == "uninstall":
             _cmd_scheduling_uninstall(args.name, dry_run=args.dry_run)
         elif args.scheduling_command == "list":

@@ -195,7 +195,7 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
             return [{"name": "demo", "mode": "timer", "bundle": "/tmp/demo"}]
 
     workflow = object()
-    monkeypatch.setattr(cli, "_scheduling_installer", lambda: FakeInstaller())
+    monkeypatch.setattr(cli, "_scheduling_installer", lambda python=None: FakeInstaller())
     monkeypatch.setattr(cli, "load_any", lambda path: workflow)
 
     cli.main(["scheduling", "install", "workflow.json", "--name", "custom", "--dry-run"])
@@ -484,3 +484,18 @@ def test_schedule_durations_round_trip_through_the_serializer() -> None:
 def test_bad_duration_is_rejected_at_load(bad: str) -> None:
     with pytest.raises(WorkflowValidationError, match="schedule.timeout"):
         parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *", "timeout": bad}))
+
+
+def test_install_python_is_selectable(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The unit's ExecStart must be able to name an interpreter that has the deps.
+
+    A bundle needs jsonpath-ng (and httpx/pydantic/fastjsonschema for SDK agents).
+    /usr/bin/python3 rarely has them, so a unit hard-wired to it fails on its very
+    first firing — with nothing but a systemd status to explain why.
+    """
+    from flow import cli
+
+    wf_path = "wf.json"
+    monkeypatch.setattr(cli, "load_any", lambda _p: parse_workflow(_wf({"mode": "timer", "every": "15m"})))
+    cli.main(["scheduling", "install", wf_path, "--dry-run", "--python", "/opt/venv/bin/python"])
+    assert "/opt/venv/bin/python" in capsys.readouterr().out
