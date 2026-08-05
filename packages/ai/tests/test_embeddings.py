@@ -99,6 +99,30 @@ async def test_embed_request_and_response():
 
 
 @pytest.mark.asyncio
+async def test_embed_usage_carries_cost():
+    """Embedding usage goes through usage_with_cost like every other protocol."""
+    from dataclasses import replace
+
+    from ai.protocols.openai_completions import OpenAICompletionsProtocol
+
+    async def mock_post(self, url, *, json, headers, **kwargs):
+        return httpx.Response(200, json=_make_api_response(),
+                              request=httpx.Request("POST", url))
+
+    proto = OpenAICompletionsProtocol()
+    priced = replace(_make_embedding_model(), cost=ModelCost(input=0.33))
+
+    with patch.object(httpx.AsyncClient, "post", mock_post):
+        result = await proto.embed(
+            priced,
+            EmbeddingRequest(input="Hello"),
+            AuthResult(api_key="test-key"),
+        )
+
+    assert result.usage.cost.total == 0.33
+
+
+@pytest.mark.asyncio
 async def test_embed_string_shorthand():
     """embed(provider, model, 'text') wraps string into EmbeddingRequest."""
     from ai.providers.copilot import CopilotProvider

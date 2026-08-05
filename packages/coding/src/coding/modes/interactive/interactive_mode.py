@@ -65,6 +65,22 @@ WAITING_PHRASES = [
 ]
 
 
+def _context_tokens_from_messages(messages: list[Any]) -> int:
+    """Tokens occupying the context window, per the latest assistant turn.
+
+    Cached prefix tokens still occupy the window, so ``input`` alone would
+    under-report; cache buckets are included.
+    """
+    for msg in reversed(messages):
+        usage = getattr(msg, "usage", None)
+        if usage is None:
+            continue
+        total = usage.input + usage.cache_read + usage.cache_write
+        if total > 0:
+            return total
+    return 0
+
+
 class InteractiveMode:
     """Main interactive TUI application for the coding agent.
 
@@ -174,7 +190,8 @@ class InteractiveMode:
         )
 
     def _update_footer(self) -> None:
-        model_name = self._session.model.id if self._session.model else "unknown"
+        model = self._session.model
+        model_name = model.id if model else "unknown"
         thinking = self._session.agent.state.thinking_level or "off"
         self._footer.update(
             model=model_name,
@@ -182,6 +199,8 @@ class InteractiveMode:
             message_count=len(self._session.messages),
             thinking=str(thinking),
             working_dir=str(self._session.working_dir),
+            context_tokens=_context_tokens_from_messages(self._session.messages),
+            max_context=getattr(model, "context_window", 0) or 200_000,
         )
 
     # -- Status management --

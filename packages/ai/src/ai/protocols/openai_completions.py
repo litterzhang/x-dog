@@ -36,7 +36,6 @@ from ai.types import (
     AssistantMessage,
     AssistantMessageEvent,
     Context,
-    CostBreakdown,
     DoneEvent,
     EmbeddingObject,
     EmbeddingRequest,
@@ -467,7 +466,8 @@ def stream(
             usage = usage_with_cost(model, output.usage)
             output.usage = usage
             output.mark_dirty()
-            yield UsageEvent(usage=usage)
+            if usage.input > 0 or usage.output > 0:
+                yield UsageEvent(usage=usage)
 
             # Build final message and emit done
             final_msg = output.snapshot()
@@ -560,10 +560,9 @@ class OpenAICompletionsProtocol(BaseProtocol):
         return EmbeddingResponse(
             data=objects,
             model=data.get("model", ""),
-            usage=Usage(
+            usage=usage_with_cost(model, Usage(
                 input=usage_raw.get("prompt_tokens", 0),
                 output=0,
                 total_tokens=usage_raw.get("total_tokens", usage_raw.get("prompt_tokens", 0)),
-                cost=CostBreakdown(),
-            ),
+            )),
         )

@@ -94,6 +94,27 @@ def _italic(text: str) -> str:
     return f"\x1b[3m{text}{_RST}"
 
 
+def _context_usage_tokens(
+    last_turn: dict[str, int],
+    session_total: dict[str, int],
+) -> int:
+    """Tokens currently occupying the model's context window.
+
+    Cached prefix tokens still occupy the window, so the most recent turn's
+    ``input + cache_read + cache_write`` is the real occupancy. Session totals
+    are cumulative across turns and would over-count, so they are only used as
+    a fallback before the first turn of a (re)connected session completes.
+    """
+    turn_total = (
+        last_turn.get("input", 0)
+        + last_turn.get("cache_read", 0)
+        + last_turn.get("cache_write", 0)
+    )
+    if turn_total > 0:
+        return turn_total
+    return session_total.get("input", 0)
+
+
 def _format_tokens(count: int) -> str:
     """Format token count like OpenClaw's formatTokens().
 
@@ -744,6 +765,7 @@ class ChatApp:
 
         # Token usage tracking (matching OpenClaw's footer)
         self._usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        self._last_turn_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         self._context_window = 0
         self._streaming_output_chars = 0  # tracks chars during streaming for live status
         self._turn_input_chars = 0  # chars of input context sent this turn
@@ -1116,8 +1138,12 @@ class ChatApp:
 
         # Context usage (matching OpenClaw: percent%/context_window)
         if self._context_window > 0:
-            total_input = u["input"]
-            pct = min(100.0, total_input / self._context_window * 100) if total_input > 0 else 0
+            context_tokens = _context_usage_tokens(self._last_turn_usage, u)
+            pct = (
+                min(100.0, context_tokens / self._context_window * 100)
+                if context_tokens > 0
+                else 0
+            )
             ctx_str = f"{pct:.0f}%/{_format_tokens(self._context_window)}"
             stats.append(ctx_str)
 
@@ -1361,6 +1387,12 @@ class ChatApp:
             # Accumulate per-turn usage into session totals
             turn_usage = msg.get("usage")
             if turn_usage:
+                self._last_turn_usage = {
+                    "input": turn_usage.get("input", 0),
+                    "output": turn_usage.get("output", 0),
+                    "cache_read": turn_usage.get("cache_read", 0),
+                    "cache_write": turn_usage.get("cache_write", 0),
+                }
                 self._usage["input"] += turn_usage.get("input", 0)
                 self._usage["output"] += turn_usage.get("output", 0)
                 self._usage["cache_read"] += turn_usage.get("cache_read", 0)
@@ -1404,6 +1436,7 @@ class ChatApp:
                 self._state["session_id"] = str(uuid.uuid4())
             self._chat_log.clear_all()
             self._usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+            self._last_turn_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
             sid = self._state["session_id"][:12]
             self._chat_log.add_system(f"new session: {sid}")
             self._update_header()
