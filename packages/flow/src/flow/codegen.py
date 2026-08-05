@@ -29,6 +29,7 @@ from flow.models import (
     agent_output_schema,
     edge_identities,
 )
+from flow.preview import render_preview_runtime
 from flow.result import render_run_result
 
 # A ContainerExpr is a Python expression string evaluating to the state dict
@@ -576,7 +577,10 @@ def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     lines += _entry_guards(node.id)
     lines.append(f"    ins = _inputs_{safe}(enabled_edges)")
     lines.append(f"    if {node.signal!r} in _SIGNALS:")
-    lines.append(f"        _EVENT_LOG.info('NodeStarted node=%s step=%d', {node.id!r}, step)")
+    lines.append(
+        f"        _EVENT_LOG.info('NodeStarted node=%s step=%d | %s', "
+        f"{node.id!r}, step, preview_ports(ins) or '-')  # noqa: E501"
+    )
     lines.append("        _t0 = time.monotonic()")
     lines.append(f"        _OUT[{node.id!r}] = {{}}")
     if node.output_ports:
@@ -585,8 +589,9 @@ def _render_human_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     for tl in _render_node_tail(node, wf, step_expr="step"):
         lines.append("    " + tl)
     _finished_log = (
-        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f', "
-        f"{node.id!r}, step, time.monotonic() - _t0)  # noqa: E501"
+        f"        _EVENT_LOG.info('NodeFinished node=%s step=%d duration_s=%f | %s', "
+        f"{node.id!r}, step, time.monotonic() - _t0, "
+        f"preview_ports(_OUT.get({node.id!r}, {{}})) or '-')  # noqa: E501"
     )
     lines.append(_finished_log)
     lines.append("    else:")
@@ -766,6 +771,33 @@ def _render_node_function(node_id: str, wf: WorkflowDef, safe_ids: dict[str, str
     return "\n\n\n".join(blocks)
 
 
+def _sort_import_lines(lines: list[str]) -> list[str]:
+    """Order import lines the way ruff's isort wants them within one section.
+
+    Straight ``import x`` first, then ``from x import y``, each alphabetical.
+    Generated modules are ruff-checked by whoever vendors them, so getting this
+    wrong is a lint failure in someone else's repository, not ours.
+    """
+    straight = sorted(ln for ln in lines if ln.startswith("import "))
+    from_imports = sorted(ln for ln in lines if not ln.startswith("import "))
+    return straight + from_imports
+
+
+def _render_third_party_imports(wf: WorkflowDef, safe_ids: dict[str, str], *, sdk: bool) -> str:
+    """The generated module's whole third-party import block, correctly ordered.
+
+    Script and tool refs used to be appended after the fixed block, which put a
+    module named earlier in the alphabet after ``jsonpath_ng`` and made every
+    run-ref workflow's output fail ``ruff check`` on I001. No shipped example had
+    a run ref, so nothing caught it.
+    """
+    lines = ["from jsonpath_ng import parse as _jsonpath_parse"]
+    if sdk:
+        lines += [ln for ln in _SDK_IMPORTS.splitlines() if ln]
+    lines += [ln for ln in _render_script_imports(wf, safe_ids).splitlines() if ln]
+    return "\n".join(_sort_import_lines(lines)) + "\n"
+
+
 def _render_script_imports(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
     """Emit imports for custom-tool manifest refs and run-ref scripts.
 
@@ -846,6 +878,57 @@ def _has_human_nodes(wf: WorkflowDef) -> bool:
     return any(n.type == "human" for n in wf.nodes)
 
 
+def _split_top_level_bool(expr: str) -> list[str]:
+    """Split ``"(A) and (B)"`` into operand segments, ignoring nested parens.
+
+    _condition_to_expr parenthesises every operand, so a depth-0 ``and``/``or``
+    is always a real join and never part of a value.
+    """
+    segments: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(expr):
+        char = expr[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0:
+            for op in (" and ", " or "):
+                if expr.startswith(op, i):
+                    segments.append(expr[start:i])
+                    start = i + 1  # keep the operator leading the next segment
+                    i += len(op) - 1
+                    break
+        i += 1
+    segments.append(expr[start:])
+    return segments
+
+
+def _render_assignment(indent: str, target: str, expr: str, limit: int = 120) -> list[str]:
+    """``target = expr``, parenthesised across lines when it would be too long.
+
+    Generated modules are expected to pass ``ruff check`` wherever they land, and
+    a compound edge condition is the one expression a workflow author can make
+    arbitrarily wide without writing any code.
+    """
+    single = f"{indent}{target} = {expr}"
+    if len(single) <= limit:
+        return [single]
+    segments = _split_top_level_bool(expr)
+    if len(segments) == 1:
+        # Nothing to break on — a single very wide comparison.
+        return [f"{single}  # noqa: E501"]
+    body = indent + "    "
+    lines = [f"{indent}{target} = ("]
+    for segment in segments:
+        line = body + segment.strip()
+        lines.append(line if len(line) <= limit else f"{line}  # noqa: E501")
+    lines.append(f"{indent})")
+    return lines
+
+
 def _render_edge_resolver(wf: WorkflowDef) -> str:
     """Emit source-local outgoing condition evaluation keyed by internal edge id."""
     lines = ["def _resolve_outgoing(node_id: str) -> dict[str, bool]:", "    resolved: dict[str, bool] = {}"]
@@ -858,7 +941,7 @@ def _render_edge_resolver(wf: WorkflowDef) -> str:
             else "True"
         )
         lines.append(f"    if node_id == {edge.src!r}:")
-        lines.append(f"        resolved[{edge_id!r}] = {condition}")
+        lines += _render_assignment("        ", f"resolved[{edge_id!r}]", condition)
     lines.append("    return resolved")
     return "\n".join(lines)
 
@@ -1047,12 +1130,10 @@ def generate(wf: WorkflowDef) -> str:
     _has_sdk_agent = any(n.type == "agent" and n.backend is None for n in wf.nodes)
     _needs_sdk = _has_sdk_agent or bool(wf.tool_refs)
     if _needs_sdk:
-        sdk_imports = _SDK_IMPORTS
         sdk_registry = _SDK_REGISTRY
         sdk_run_agent = _SDK_RUN_AGENT
         registry_line = f"_REGISTRY = default_registry(){_render_tool_registration(wf)}"
     else:
-        sdk_imports = ""
         sdk_registry = "# (no SDK agent node — agent/ai tool registry omitted)"
         sdk_run_agent = "# (no SDK agent node — SDK turn helper omitted)"
         registry_line = ""
@@ -1075,13 +1156,13 @@ def generate(wf: WorkflowDef) -> str:
         frontier_runtime=render_frontier_runtime(),
         checkpoint_runtime=render_checkpoint_interceptor(),
         result_runtime=render_run_result(),
+        preview_runtime=render_preview_runtime(),
         provider_init=provider_init,
-        sdk_imports=sdk_imports,
+        third_party_imports=_render_third_party_imports(wf, safe_ids, sdk=_needs_sdk),
         sdk_registry=sdk_registry,
         sdk_run_agent=sdk_run_agent,
         registry_line=registry_line,
         main_body=main_body,
-        script_imports=_render_script_imports(wf, safe_ids),
         concurrency_boilerplate=concurrency_boilerplate,
         signals_boilerplate=signals_boilerplate,
         signals_main_init=signals_main_init,

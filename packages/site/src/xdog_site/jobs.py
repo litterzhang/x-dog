@@ -35,15 +35,24 @@ _LOG_CAP = 500  # keep at most this many lines per job
 
 
 def _format_event(ev: FlowEvent) -> str | None:
-    """Render a P3 lifecycle event as one human-readable execution-log line."""
+    """Render a P3 lifecycle event as one human-readable execution-log line.
+
+    The port previews are appended when the node had any, so a viewer watching a
+    run sees what moved between nodes rather than only that they ran.
+    """
     if isinstance(ev, NodeStarted):
-        return f"▶ {ev.node_id}"
+        return f"▶ {ev.node_id}{_suffix(ev.inputs_preview)}"
     if isinstance(ev, NodeFinished):
         tok = f", {ev.tokens} tok" if ev.tokens else ""
-        return f"✓ {ev.node_id} ({ev.duration_s:.1f}s{tok})"
+        return f"✓ {ev.node_id} ({ev.duration_s:.1f}s{tok}){_suffix(ev.output_preview)}"
     if isinstance(ev, NodeFailed):
         return f"✗ {ev.node_id} ({ev.duration_s:.1f}s): {ev.error}"
     return None
+
+
+def _suffix(preview: str) -> str:
+    """``"  a=1 b=2"``, or nothing at all when the node had no ports."""
+    return f"  {preview}" if preview else ""
 
 
 @dataclass

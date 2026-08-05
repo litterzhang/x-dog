@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib.util
+import logging
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,8 @@ import uuid
 from pathlib import Path
 
 from flow.codegen import generate
-from flow.executor import ExecResult
+from flow.events import NodeFinished, NodeStarted
+from flow.executor import ExecResult, execute
 from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 
@@ -57,14 +59,24 @@ def _make_linear_wf() -> WorkflowDef:
 
 
 def _ruff_clean(src: str) -> tuple[bool, str]:
-    """Compile *src* and run ruff; return (ok, message)."""
+    """Compile *src* and run ruff; return (ok, message).
+
+    The rule set mirrors this repository's own (``["E", "F", "I", "W"]``) rather
+    than ruff's default. The default omits E5 and I entirely, so this helper used
+    to pass generated modules that were unsorted (I001) and over-long (E501) —
+    which is exactly what a vendored bundle gets linted for downstream.
+    """
     compile(src, "<generated>", "exec")
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
         f.write(src)
         tmp = Path(f.name)
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--line-length", "120", str(tmp)],
+            [
+                sys.executable, "-m", "ruff", "check",
+                "--isolated", "--line-length", "120", "--select", "E,F,I,W",
+                str(tmp),
+            ],
             capture_output=True,
             text=True,
         )
@@ -1744,3 +1756,134 @@ def test_sync_run_ref_script_works_in_both_engines(tmp_path: Path) -> None:
             assert module._OUTPUT == {"out": expected}, func
     finally:
         sys.path.remove(str(tmp_path))
+
+
+async def test_port_previews_match_across_engines() -> None:
+    """Both engines describe a node's inputs and outputs with the same text.
+
+    The previews are what a scheduled run leaves behind in the journal, so they
+    are the only surviving account of what moved between nodes. If the two
+    engines phrased them differently, that account would depend on which one
+    happened to run.
+    """
+    wf = WorkflowDef(
+        name="preview-parity",
+        provider="",
+        entry="a",
+        initial_state=(("seed", "  ragged\n\ntext  "),),
+        nodes=(
+            NodeDef(
+                id="a",
+                type="script",
+                code="def a(ctx, seed):\n    return {'text': seed, 'items': [1, 2, 3]}",
+                input_ports=(Port("seed"),),
+                output_ports=(Port("text"), Port("items", schema={"type": "array"})),
+            ),
+            NodeDef(
+                id="b",
+                type="script",
+                code="def b(ctx, text, items):\n    return f'{text}/{len(items)}'",
+                input_ports=(Port("text"), Port("items", schema={"type": "array"})),
+                output_ports=(Port("done"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="a", mapping=(("seed", "seed"),)),
+            EdgeDef(src="a", dst="b", mapping=(("text", "text"), ("items", "items"))),
+        ),
+    )
+
+    interpreted: dict[str, str] = {}
+
+    def _on_event(ev: object) -> None:
+        if isinstance(ev, NodeStarted):
+            interpreted[f"{ev.node_id}.in"] = ev.inputs_preview
+        elif isinstance(ev, NodeFinished):
+            interpreted[f"{ev.node_id}.out"] = ev.output_preview
+
+    await execute(wf, on_event=_on_event)
+
+    module = types.ModuleType("_preview_parity_module")
+    exec(compile(generate(wf), "<preview_parity>", "exec"), module.__dict__)  # noqa: S102
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Capture()
+    event_log = logging.getLogger("flow.generated.events")
+    event_log.addHandler(handler)
+    event_log.setLevel(logging.INFO)
+    try:
+        await module.main()  # type: ignore[attr-defined]
+    finally:
+        event_log.removeHandler(handler)
+
+    compiled: dict[str, str] = {}
+    for record in records:
+        # every event line is "<kind> node=%s ... | %s": node id first, preview last
+        node_id = record.args[0]  # type: ignore[index]
+        side = "in" if "NodeStarted" in record.msg else "out"
+        compiled[f"{node_id}.{side}"] = record.args[-1]  # type: ignore[assignment,index]
+
+    assert interpreted == {
+        "a.in": "seed=ragged text",  # whitespace collapsed
+        "a.out": "text=ragged text items=[1,2,3]",  # non-strings via compact JSON
+        "b.in": "text=ragged text items=[1,2,3]",
+        # the script concatenated the RAW value, so its trailing space survives
+        # into the preview as a single collapsed space
+        "b.out": "done=ragged text /3",
+    }
+    assert compiled == interpreted
+
+
+def test_generated_run_ref_workflow_with_compound_condition_is_ruff_clean() -> None:
+    """The shape no shipped example had, and which therefore shipped broken twice.
+
+    A `run:` reference puts a module name into the third-party import block (it
+    landed after the fixed imports, unsorted — I001), and a compound `when`
+    renders one wide boolean expression (E501). Both only bite the person who
+    vendors the bundle, in their repository, not ours.
+    """
+    wf = WorkflowDef(
+        name="runref-compound",
+        provider="",
+        entry="alpha",
+        nodes=(
+            NodeDef(
+                id="alpha",
+                type="script",
+                run="alpha_module:produce",
+                output_ports=(Port("verdict"), Port("reason")),
+            ),
+            NodeDef(
+                id="omega",
+                type="script",
+                run="zulu_module:consume",
+                input_ports=(Port("reason"),),
+                output_ports=(Port("done"),),
+            ),
+        ),
+        edges=(
+            EdgeDef(
+                src="alpha",
+                dst="omega",
+                mapping=(("reason", "reason"),),
+                when=Condition(
+                    op="and",
+                    children=(
+                        Condition(op="equals", value="{{$.verdict}}", text="rejected"),
+                        Condition(op="equals", value="{{$.reason}}", text="unrecoverable"),
+                    ),
+                ),
+            ),
+        ),
+    )
+    src = generate(wf)
+    # the run-ref module names bracket jsonpath_ng alphabetically, so a naive
+    # append after the fixed block cannot be ordered correctly by accident
+    assert "from alpha_module import produce as _script_alpha" in src
+    assert "from zulu_module import consume as _script_omega" in src
+    ok, msg = _ruff_clean(src)
+    assert ok, f"ruff failed:\n{msg}"

@@ -159,7 +159,7 @@ def _render_readme(wf: WorkflowDef, requirements: list[str], offline: bool) -> s
         "```sh\n"
         f"{install}\n"
         "python .              # real run (needs provider auth)\n"
-        "python . -v           # also print node lifecycle events\n"
+        "python . -v           # also print node lifecycle events (with port previews)\n"
         "```\n"
         "\n"
         "## Run-time overrides (env vars)\n"

@@ -45,6 +45,7 @@ from flow.models import (
     agent_submits_object,
     edge_identities,
 )
+from flow.preview import preview_ports
 from flow.runners import AgentRunner, CliRunner, NodeStubs, SdkRunner, StubRunner, cli_adapter_for
 from flow.runtime import RuntimeContext
 from flow.tools import ToolRegistry
@@ -489,6 +490,19 @@ async def execute(
         except Exception:
             pass
 
+    def _emit_started(node_id: str, step: int, ins: Mapping[str, object]) -> None:
+        """Announce an activation along with a preview of what it was handed."""
+        _emit(NodeStarted(node_id=node_id, step=step, inputs_preview=preview_ports(ins)))
+
+    def _out_preview(node_id: str) -> str:
+        """Preview the ports a node just stored.
+
+        Read from the store rather than passed in: every NodeFinished is emitted
+        after the node's outputs are committed, so threading the value through
+        fifteen call sites would only create ways for them to disagree.
+        """
+        return preview_ports(outputs.get(node_id, {}))
+
     async def _fan_instance(
         node: NodeDef, node_id: str, ins: dict[str, object], step: int, fan_index: int
     ) -> tuple[dict[str, object], int]:
@@ -551,7 +565,7 @@ async def execute(
                 worker_port = dport
                 break
 
-        _emit(NodeStarted(node_id=node_id, step=step))
+        _emit_started(node_id, step, shared)
         _t0 = time.monotonic()
 
         # Dedicated per-fan limiter: cap how many instances run at once WITHOUT
@@ -584,6 +598,7 @@ async def execute(
             duration_s=time.monotonic() - _t0,
             tokens=total_tokens,
             instances=len(items),
+            output_preview=_out_preview(node_id),
         ))
 
     async def _run_subflow_node(node: NodeDef, node_id: str, ins: dict[str, object], step: int) -> None:
@@ -598,7 +613,7 @@ async def execute(
         """
         nonlocal tokens_used
         assert node.child is not None
-        _emit(NodeStarted(node_id=node_id, step=step))
+        _emit_started(node_id, step, ins)
         _t0 = time.monotonic()
 
         # Test mode: a stubbed subflow is answered whole — the child never runs.
@@ -611,7 +626,8 @@ async def execute(
                 async with _state_lock:
                     outputs[node_id] = projected_stub
                 await _record_frame(node_id, ins, step)
-                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0,
+                                   output_preview=_out_preview(node_id)))
                 return
 
         # Parent ins -> child $in (by the derived input-port names).
@@ -655,6 +671,7 @@ async def execute(
             node_id=node_id, step=step,
             duration_s=time.monotonic() - _t0,
             tokens=child_tokens if isinstance(child_tokens, int) else 0,
+            output_preview=_out_preview(node_id),
         ))
 
     async def _run_node(node_id: str, step: int, enabled_edge_ids: tuple[str, ...]) -> None:
@@ -678,18 +695,19 @@ async def execute(
         if node.deterministic:
             _mk = _memo_key(node_id, ins)
             if _mk in memo:
-                _emit(NodeStarted(node_id=node_id, step=step))
+                _emit_started(node_id, step, ins)
                 _t0_memo = time.monotonic()
                 async with _state_lock:
                     outputs[node_id] = dict(memo[_mk])
                 await _record_frame(node_id, ins, step)
-                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_memo, tokens=0))
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_memo, tokens=0,
+                                   output_preview=_out_preview(node_id)))
                 return
 
         if node.type == "human":
             if node.signal in _signals:
                 # Signal present — instant approval pass
-                _emit(NodeStarted(node_id=node_id, step=step))
+                _emit_started(node_id, step, ins)
                 _t0_human = time.monotonic()
                 approval_val = "approved"
                 async with _state_lock:
@@ -697,7 +715,8 @@ async def execute(
                     if node.output_ports:
                         outputs[node_id][node.output_ports[0].name] = approval_val
                 await _record_frame(node_id, ins, step)
-                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_human, tokens=0))
+                _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0_human, tokens=0,
+                                   output_preview=_out_preview(node_id)))
             else:
                 raise WorkflowPaused(node_id, node.signal)
             return
@@ -709,7 +728,7 @@ async def execute(
         if node.type == "script":
             logger.debug("Running script node %r", node_id)
             _t0 = time.monotonic()
-            _emit(NodeStarted(node_id=node_id, step=step))
+            _emit_started(node_id, step, ins)
 
             max_attempts, backoff = _retry_bounds(node)
             last_exc: BaseException | None = None
@@ -736,7 +755,8 @@ async def execute(
             async with _state_lock:
                 if node.deterministic:
                     memo[_memo_key(node_id, ins)] = dict(outputs.get(node_id, {}))
-            _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0))
+            _emit(NodeFinished(node_id=node_id, step=step, duration_s=time.monotonic() - _t0, tokens=0,
+                                   output_preview=_out_preview(node_id)))
             return
 
         # agent node — driver: retry the pure _node_agent, then store + budget.
@@ -744,7 +764,7 @@ async def execute(
         agent_last_exc: BaseException | None = None
         agent_step = step
         _t0_agent = time.monotonic()
-        _emit(NodeStarted(node_id=node_id, step=agent_step))
+        _emit_started(node_id, agent_step, ins)
         output_value: object = ""
         total_tokens = 0
 
@@ -778,6 +798,7 @@ async def execute(
             node_id=node_id, step=agent_step,
             duration_s=time.monotonic() - _t0_agent,
             tokens=total_tokens,
+            output_preview=_out_preview(node_id),
         ))
         # Budget circuit-breaker: abort once the cumulative total passes the ceiling.
 

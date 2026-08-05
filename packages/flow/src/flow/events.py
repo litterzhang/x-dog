@@ -10,6 +10,10 @@ from dataclasses import dataclass
 class NodeStarted:
     node_id: str
     step: int
+    # A lossy one-line rendering of the inputs this activation was handed, from
+    # flow.preview.preview_ports. "" when the node takes none. For reading, not
+    # parsing — the authoritative values are the run result's stack frames.
+    inputs_preview: str = ""
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,8 @@ class NodeFinished:
     # the only exact way to count a node's invocations — the trace cannot express
     # it, and stub-based counting misses nodes that run for real.
     instances: int = 1
+    # The same lossy rendering, over the output ports the node just stored.
+    output_preview: str = ""
 
 
 @dataclass(frozen=True)

@@ -8,13 +8,12 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-${sdk_imports}from jsonpath_ng import parse as _jsonpath_parse
-$script_imports
+$third_party_imports
 _EVENT_LOG = logging.getLogger("flow.generated.events")
 
 
@@ -246,6 +245,9 @@ $checkpoint_runtime
 
 
 $result_runtime
+
+
+$preview_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -536,16 +538,22 @@ async def _drive(
     if deterministic:
         _mk = f"{node_id}:{hashlib.sha256(json.dumps(ins, sort_keys=True).encode()).hexdigest()}"
         if _mk in _MEMO:
-            _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
+            _EVENT_LOG.info(
+                "NodeStarted node=%s step=%d | %s", node_id, step, preview_ports(ins) or "-"
+            )
             _t0m = time.monotonic()
             _OUT[node_id] = dict(_MEMO[_mk])
             _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT[node_id])})
             _EVENT_LOG.info(
-                "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0m
+                "NodeFinished node=%s step=%d duration_s=%f | %s",
+                node_id, step, time.monotonic() - _t0m,
+                preview_ports(_OUT.get(node_id, {})) or "-",
             )
             return
 
-    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
+    _EVENT_LOG.info(
+        "NodeStarted node=%s step=%d | %s", node_id, step, preview_ports(ins) or "-"
+    )
     _t0 = time.monotonic()
     _last_exc: BaseException | None = None
     _outputs: dict[str, object] = {}
@@ -569,7 +577,9 @@ async def _drive(
         if deterministic:
             _MEMO[_mk] = dict(_OUT.get(node_id, {}))
         _EVENT_LOG.info(
-            "NodeFinished node=%s step=%d duration_s=%f", node_id, step, time.monotonic() - _t0
+            "NodeFinished node=%s step=%d duration_s=%f | %s",
+            node_id, step, time.monotonic() - _t0,
+            preview_ports(_OUT.get(node_id, {})) or "-",
         )
     except BaseException as _ev_exc:
         _EVENT_LOG.info(
@@ -604,7 +614,9 @@ async def _drive_fan(
     ins = inputs_fn(enabled_edges)
     _raw = ins.get(fan_port)
     _items: list[object] = list(_raw) if isinstance(_raw, (list, tuple)) else []
-    _EVENT_LOG.info("NodeStarted node=%s step=%d", node_id, step)
+    _EVENT_LOG.info(
+        "NodeStarted node=%s step=%d | %s", node_id, step, preview_ports(ins) or "-"
+    )
     _t0 = time.monotonic()
     _ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME)
     _fan_sem: asyncio.Semaphore | None = asyncio.Semaphore(fan_cap) if fan_cap > 0 else None
@@ -622,11 +634,12 @@ async def _drive_fan(
     _TOKENS_USED += _tokens
     _STACK.append({"step": step, "node": node_id, "in": dict(ins), "out": dict(_OUT.get(node_id, {}))})
     _EVENT_LOG.info(
-        "NodeFinished node=%s step=%d duration_s=%f instances=%d",
+        "NodeFinished node=%s step=%d duration_s=%f instances=%d | %s",
         node_id,
         len(_STACK) - 1,
         time.monotonic() - _t0,
         len(_items),
+        preview_ports(_OUT.get(node_id, {})) or "-",
     )
 
 

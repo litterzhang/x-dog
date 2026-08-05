@@ -247,6 +247,7 @@ SQLite/history/inspector，而不是继续扩展 checkpoint 内部字段。
 
 - `NodeStarted` / `NodeFinished` / `NodeFailed`；
 - verbose 日志；
+- 每个节点 input/output 缩略（事件字段 + 两个引擎逐字一致的日志行）；
 - runtime stack；
 - token total；
 - 结构化 success/failure result envelope；
@@ -262,17 +263,18 @@ SQLite/history/inspector，而不是继续扩展 checkpoint 内部字段。
 - per-node token/cost breakdown；
 - run history UI；
 - state diff；
-- node input/output inspector；
+- 完整 input/output inspector（现有的是单行缩略，不是可展开的完整值）；
 - tracing exporter。
 
-例如用户目前看到：
+用户目前看到：
 
 ```text
-NodeStarted node=summarize step=0
-NodeFinished node=summarize step=0
+NodeStarted node=summarize step=0 | article=Decentralized physical infrastructure…(+2841)
+NodeFinished node=summarize step=0 duration_s=4.212 | summary=Three themes recur across…(+188)
 ```
 
-无法从日志判断该节点是否调用了 `claude-cli`、实际 binary 和 model 是什么。
+节点之间流动了什么现在能看见了。仍无法从日志判断该节点是否调用了 `claude-cli`、实际 binary
+和 model 是什么。
 
 ### Burr/LangGraph
 

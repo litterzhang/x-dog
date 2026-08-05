@@ -34,7 +34,7 @@ from ai.utils.event_stream import EventStream as AiEventStream
 from flow.builder.io import load_any
 from flow.codegen import generate
 from flow.errors import WorkflowPaused, WorkflowValidationError
-from flow.events import FlowEvent, NodeFinished
+from flow.events import FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid
 from flow.result import build_run_result
@@ -94,6 +94,35 @@ def _parse_inputs(pairs: list[str]) -> dict[str, object]:
     return out
 
 
+_EVENT_LOG = logging.getLogger("flow.events")
+
+
+def _log_event(event: FlowEvent) -> None:
+    """Mirror a lifecycle event into ``-v`` output.
+
+    Deliberately the same wording the generated module logs to
+    ``flow.generated.events``: whichever engine ran it, the operator reading the
+    journal should not have to learn two formats to answer the same question.
+    """
+    if not _EVENT_LOG.isEnabledFor(logging.INFO):
+        return
+    if isinstance(event, NodeStarted):
+        _EVENT_LOG.info(
+            "NodeStarted node=%s step=%d | %s",
+            event.node_id, event.step, event.inputs_preview or "-",
+        )
+    elif isinstance(event, NodeFinished):
+        _EVENT_LOG.info(
+            "NodeFinished node=%s step=%d duration_s=%f | %s",
+            event.node_id, event.step, event.duration_s, event.output_preview or "-",
+        )
+    elif isinstance(event, NodeFailed):
+        _EVENT_LOG.info(
+            "NodeFailed node=%s step=%d duration_s=%f error=%s",
+            event.node_id, event.step, event.duration_s, event.error,
+        )
+
+
 def _stopped_by_for(exc: BaseException) -> dict[str, str] | None:
     """Classify a run-ending exception for the envelope's ``stoppedBy``.
 
@@ -143,6 +172,7 @@ async def _cmd_run(
         if isinstance(event, NodeFinished):
             last_node = event.node_id
             tokens_seen += event.tokens
+        _log_event(event)
 
     try:
         wf = load_any(config_path)
