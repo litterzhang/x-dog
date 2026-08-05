@@ -592,6 +592,66 @@ async def test_false_forward_edge_does_not_leak_mapped_input() -> None:
     assert result.runtime["state"]["a"]["result"] == 10
 
 
+async def test_loop_reentry_keeps_inputs_from_outside_the_loop() -> None:
+    """A loop destination keeps inputs supplied by upstream nodes outside the loop.
+
+    Firing a back-edge invalidates the destination's whole downstream region, which
+    drops its record of which incoming edges were enabled.  ``setup`` sits outside
+    that region and will never run again, so without replaying its still-valid
+    verdict, ``work`` would re-enter the loop with ``base`` missing.  ``$in`` edges
+    hid this for a long time: they are exempt from the enabled-edge check.
+    """
+    wf = WorkflowDef(
+        name="loop-boundary",
+        provider="",
+        entry="setup",
+        initial_state=(("seed", 10),),
+        nodes=(
+            NodeDef(
+                id="setup",
+                type="script",
+                code="def setup(ctx, seed):\n    return seed",
+                input_ports=(Port("seed", schema={"type": "integer"}),),
+                output_ports=(Port("base", schema={"type": "integer"}),),
+            ),
+            NodeDef(
+                id="work",
+                type="script",
+                code="def work(ctx, base, bump=0):\n    return base + bump",
+                input_ports=(
+                    Port("base", schema={"type": "integer"}),
+                    Port("bump", schema={"type": "integer"}, required=False),
+                ),
+                output_ports=(Port("total", schema={"type": "integer"}),),
+            ),
+            NodeDef(
+                id="check",
+                type="script",
+                code="def check(ctx, total):\n    return total + 1",
+                input_ports=(Port("total", schema={"type": "integer"}),),
+                output_ports=(Port("next", schema={"type": "integer"}),),
+            ),
+        ),
+        edges=(
+            EdgeDef(src=IN_NODE_ID, dst="setup", mapping=(("seed", "seed"),)),
+            EdgeDef(src="setup", dst="work", mapping=(("base", "base"),)),
+            EdgeDef(src="work", dst="check", mapping=(("total", "total"),)),
+            EdgeDef(
+                src="check",
+                dst="work",
+                mapping=(("next", "bump"),),
+                when=Condition(op="lt", value="{{ $.next }}", text="12"),
+                loop_max=2,
+            ),
+        ),
+    )
+
+    result = await execute(wf)
+    work_frames = [frame for frame in result.runtime["stack"] if frame["node"] == "work"]
+    assert [frame["in"] for frame in work_frames] == [{"base": 10}, {"base": 10, "bump": 11}]
+    assert result.runtime["state"]["work"]["total"] == 21
+
+
 async def test_multiple_loop_sources_form_and_join() -> None:
     """B/C loop arrivals into A reactivate A once only after both have completed."""
     wf = WorkflowDef(

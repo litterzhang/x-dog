@@ -91,6 +91,24 @@ def build_frontier_spec(wf: WorkflowDef) -> FrontierSpec:
                     queue.append(successor)
         invalidation_regions[destination] = tuple(sorted(visited, key=node_order.__getitem__))
 
+    # Forward edges that cross INTO an invalidation region from outside it. A loop
+    # fire bumps the region's generations and drops its enabled-edge bookkeeping,
+    # so a node re-entering the loop would otherwise lose every input supplied by
+    # an upstream node that sits outside the loop and is not going to re-run.
+    # (``$in`` never needed this — its edges are exempt from the enabled check.)
+    loop_boundary_edges: dict[str, list[str]] = {}
+    for destination, region in invalidation_regions.items():
+        members = set(region)
+        boundary = [
+            edge_id
+            for edge_id, raw_edge in edges.items()
+            if not bool(_dict(raw_edge)["loop"])
+            and str(_dict(raw_edge)["dst"]) in members
+            and str(_dict(raw_edge)["src"]) not in members
+            and str(_dict(raw_edge)["src"]) != IN_NODE_ID
+        ]
+        loop_boundary_edges[destination] = boundary
+
     return {
         "nodes": nodes,
         "entries": entry_frontier(wf),
@@ -102,6 +120,9 @@ def build_frontier_spec(wf: WorkflowDef) -> FrontierSpec:
         },
         "loop_groups": {destination: tuple(ids) for destination, ids in loop_groups.items()},
         "invalidation_regions": invalidation_regions,
+        "loop_boundary_edges": {
+            destination: tuple(ids) for destination, ids in loop_boundary_edges.items()
+        },
     }
 
 
@@ -129,6 +150,10 @@ def new_frontier_state(
         "isolated_nodes": set(),
         "loop_arrivals": {},
         "loop_closed": set(),
+        # Last outgoing-edge verdicts per completed node, so a loop fire can
+        # re-supply the region's inputs from upstream nodes that are not re-running.
+        # Transient: rebuilt on restore by replay_completed.
+        "edge_decisions": {},
         # Bounded (non-strict) back-edges that hit their limit with the condition
         # still true. A plain `loop` stops silently there, which is otherwise
         # indistinguishable from a natural completion — recording it lets the run
@@ -298,6 +323,17 @@ def _evaluate_loop_groups(
         activation = (destination, new_generation)
         _set(state["reached"]).add(activation)
         _dict(state["enabled"])[activation] = member_ids
+
+        # Re-supply inputs that cross into the region from outside it. Those source
+        # nodes stay completed and their verdicts stand, so replaying the ones that
+        # were true restores exactly the edges the invalidation just dropped.
+        decisions = _dict(state["edge_decisions"])
+        boundary = _tuple(_dict(spec["loop_boundary_edges"])[destination])
+        for raw_edge_id in boundary:
+            edge_id = str(raw_edge_id)
+            source = str(_dict(edges[edge_id])["src"])
+            if _dict(decisions.get(source, {})).get(edge_id) is True:
+                _enable_edge(spec, state, edge_id)
     return None
 
 
@@ -351,6 +387,7 @@ def replay_completed(
     completed = _dict(state["completed"])
     epoch = _generation(state, node_id)
     completed[node_id] = epoch
+    _dict(state["edge_decisions"])[node_id] = dict(edge_results)
     outgoing = _dict(spec["outgoing"])
     edges = _dict(spec["edges"])
     arrivals = _dict(state["loop_arrivals"])
@@ -389,6 +426,7 @@ def complete_batch(
         if epoch != _generation(state, node_id):
             continue
         completed[node_id] = epoch
+        _dict(state["edge_decisions"])[node_id] = dict(edge_results)
         valid.append((node_id, epoch, edge_results))
 
     # Resolve all forward transitions before evaluating loop joins. This keeps a
