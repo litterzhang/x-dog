@@ -32,6 +32,11 @@ _DEFAULT_BASE_URL = "https://xdog.942295.xyz"
 
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 
+# IndexNow verification key. Public by design — it proves control of the origin by
+# being retrievable from it, so committing it is the point, not a leak. Rotating
+# it is just changing this constant.
+_INDEXNOW_KEY = "443184433fb36a975f9d590d0b75b2e3"
+
 # Endpoints a crawler must not follow: the HaveFun runner's job-status polling is
 # a GET, unbounded in cardinality, and meaningless without the job it belongs to.
 _DISALLOWED = ("/havefun/*/status/", "/havefun/*/load", "/havefun/*/run")
@@ -68,6 +73,18 @@ def _entries() -> list[tuple[str, datetime | None, str]]:
 
     entries.extend((f"/havefun/{name}", None, "monthly") for name in HAVEFUN_PACKAGES)
     return entries
+
+
+@bp.route(f"/{_INDEXNOW_KEY}.txt")
+def indexnow_key() -> Response:
+    """Serve the IndexNow key at the origin root, which is how ownership is proven.
+
+    IndexNow replaced the sitemap ping endpoints Google (404) and Bing (410) both
+    retired: instead of announcing that a sitemap changed, you tell the engines
+    which URLs changed, and they trust you because this file answers from the same
+    origin. One submission reaches Bing, Yandex, Seznam and Naver.
+    """
+    return Response(_INDEXNOW_KEY, mimetype="text/plain")
 
 
 @bp.route("/robots.txt")
