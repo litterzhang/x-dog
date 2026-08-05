@@ -1,0 +1,161 @@
+{
+  "cases": [
+    {
+      "name": "critical finding blocks the release",
+      "inputs": {
+        "repo": "/fixture/repo",
+        "base_ref": "main"
+      },
+      "scripts": {
+        "collect_repo": {
+          "snapshot": {
+            "repo": "/fixture/repo",
+            "base_ref": "main",
+            "branch": "feature/authz",
+            "head": "abc1234",
+            "changed_files": ["src/auth.py", "docs/auth.md"],
+            "working_tree": [],
+            "recent_commits": ["abc1234 tighten auth"],
+            "languages": ["python"],
+            "changed_test_files": [],
+            "changed_docs": ["docs/auth.md"],
+            "changed_file_count": 2
+          }
+        }
+      },
+      "agents": {
+        "plan_checks": {
+          "checks": [
+            {"name": "security", "focus": "authorization on changed endpoints"},
+            {"name": "tests", "focus": "coverage for src/auth.py"},
+            {"name": "docs", "focus": "docs/auth.md accuracy"}
+          ],
+          "rationale": "auth-sensitive change with no accompanying tests"
+        },
+        "audit": [
+          {
+            "when": {"check": {"name": "security"}},
+            "then": {
+              "finding": {
+                "category": "security",
+                "severity": "critical",
+                "summary": "Endpoint added without an authorization guard",
+                "evidence": "src/auth.py:42",
+                "recommendation": "Require an authenticated principal before the handler runs"
+              }
+            }
+          },
+          {
+            "when": {"check": {"name": "tests"}},
+            "then": {
+              "finding": {
+                "category": "tests",
+                "severity": "medium",
+                "summary": "No test covers the new branch",
+                "evidence": "src/auth.py:42 has no matching test file",
+                "recommendation": "Add a rejection test for the unauthenticated path"
+              }
+            }
+          },
+          {
+            "then": {
+              "finding": {
+                "category": "docs",
+                "severity": "low",
+                "summary": "Docs describe the previous behaviour",
+                "evidence": "docs/auth.md:8",
+                "recommendation": "Document the new authorization requirement"
+              }
+            }
+          }
+        ]
+      },
+      "subflows": {
+        "report": {
+          "final_report": "# Release blocked\n\nAuthorization guard missing on src/auth.py:42.",
+          "quality_score": 9,
+          "report_feedback": "No changes needed."
+        }
+      },
+      "expect": {
+        "output": {
+          "risk": {
+            "score": 50,
+            "status": "blocked",
+            "actionable_count": 3,
+            "release_allowed": false
+          },
+          "quality_score": 9
+        },
+        "calls": {
+          "collect_repo": 1,
+          "plan_checks": 1,
+          "audit": 3,
+          "score_risk": 1,
+          "report": 1
+        }
+      }
+    },
+    {
+      "name": "only low-severity findings ship",
+      "inputs": {
+        "repo": "/fixture/repo",
+        "base_ref": "main"
+      },
+      "scripts": {
+        "collect_repo": {
+          "snapshot": {
+            "repo": "/fixture/repo",
+            "base_ref": "main",
+            "branch": "chore/readme",
+            "head": "def5678",
+            "changed_files": ["README.md"],
+            "working_tree": [],
+            "recent_commits": ["def5678 tidy readme"],
+            "languages": ["markdown"],
+            "changed_test_files": [],
+            "changed_docs": ["README.md"],
+            "changed_file_count": 1
+          }
+        }
+      },
+      "agents": {
+        "plan_checks": {
+          "checks": [
+            {"name": "security", "focus": "no code paths touched"},
+            {"name": "tests", "focus": "no behaviour change"},
+            {"name": "docs", "focus": "README wording"}
+          ],
+          "rationale": "documentation-only change"
+        },
+        "audit": {
+          "finding": {
+            "category": "docs",
+            "severity": "low",
+            "summary": "Wording could be tightened",
+            "evidence": "README.md:12",
+            "recommendation": "Shorten the intro paragraph"
+          }
+        }
+      },
+      "subflows": {
+        "report": {
+          "final_report": "# Ready to release\n\nDocumentation-only change.",
+          "quality_score": 8,
+          "report_feedback": "No changes needed."
+        }
+      },
+      "expect": {
+        "output": {
+          "risk": {
+            "score": 6,
+            "status": "ready",
+            "actionable_count": 3,
+            "release_allowed": true
+          }
+        },
+        "calls": {"audit": 3, "score_risk": 1}
+      }
+    }
+  ]
+}

@@ -169,13 +169,6 @@
       }
     },
     {
-      "from": "compose",
-      "to": "revise",
-      "map": {
-        "draft_report": "draft_report"
-      }
-    },
-    {
       "from": "critique",
       "to": "revise",
       "when": {
@@ -185,6 +178,7 @@
         }
       },
       "map": {
+        "report": "draft_report",
         "feedback": "feedback"
       }
     },

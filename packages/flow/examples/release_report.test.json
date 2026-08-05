@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "name": "one revision round then accepted",
+      "inputs": {
+        "snapshot": {"changed_files": ["src/auth.py"]},
+        "findings": [{"severity": "critical", "summary": "missing authz"}],
+        "risk": {"status": "blocked", "score": 40, "release_allowed": false}
+      },
+      "agents": {
+        "compose": {"draft_report": "# Draft v1\n\nBlocked."},
+        "critique": [
+          {
+            "round": 1,
+            "then": {
+              "report": "# Draft v1\n\nBlocked.",
+              "quality_score": 5,
+              "feedback": "Cite the exact file and line for the blocking finding."
+            }
+          },
+          {
+            "then": {
+              "report": "# Draft v2\n\nBlocked: src/auth.py:42.",
+              "quality_score": 9,
+              "feedback": "No changes needed."
+            }
+          }
+        ],
+        "revise": {
+          "revised_report": "# Draft v2\n\nBlocked: src/auth.py:42.",
+          "continue_review": true
+        }
+      },
+      "expect": {
+        "output": {
+          "final_report": "# Draft v2\n\nBlocked: src/auth.py:42.",
+          "quality_score": 9,
+          "report_feedback": "No changes needed."
+        },
+        "calls": {"compose": 1, "critique": 2, "revise": 1}
+      }
+    },
+    {
+      "name": "accepted on the first pass, revise never runs",
+      "inputs": {
+        "snapshot": {"changed_files": ["README.md"]},
+        "findings": [],
+        "risk": {"status": "ready", "score": 0, "release_allowed": true}
+      },
+      "agents": {
+        "compose": {"draft_report": "# Ready\n\nDocumentation-only change."},
+        "critique": {
+          "report": "# Ready\n\nDocumentation-only change.",
+          "quality_score": 10,
+          "feedback": "No changes needed."
+        },
+        "revise": {"revised_report": "unused", "continue_review": true}
+      },
+      "expect": {
+        "output": {"quality_score": 10},
+        "calls": {"compose": 1, "critique": 1, "revise": 0}
+      }
+    },
+    {
+      "name": "reviewer never satisfied, loop stops at its bound",
+      "inputs": {
+        "snapshot": {"changed_files": ["src/pricing.py"]},
+        "findings": [{"severity": "high", "summary": "rounding drift"}],
+        "risk": {"status": "review", "score": 20, "release_allowed": false}
+      },
+      "agents": {
+        "compose": {"draft_report": "# Draft v1"},
+        "critique": {
+          "report": "# Draft (latest)",
+          "quality_score": 3,
+          "feedback": "Still missing the reproduction steps."
+        },
+        "revise": {"revised_report": "# Draft (latest)", "continue_review": true}
+      },
+      "expect": {
+        "output": {"quality_score": 3, "report_feedback": "Still missing the reproduction steps."},
+        "calls": {"critique": 3, "revise": 3}
+      }
+    }
+  ]
+}
