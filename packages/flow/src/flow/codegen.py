@@ -991,6 +991,10 @@ def _render_frontier_scheduler(wf: WorkflowDef) -> str:
         "            raise WorkflowBudgetExceeded(_TOKENS_USED, _MAX_TOKENS)",
         "        if deferred_failure is not None:",
         "            raise deferred_failure",
+        "    global _STOPPED_BY",
+        "    _label = exhausted_edge_label(_FRONTIER_SPEC, state)",
+        "    if _label is not None:",
+        "        _STOPPED_BY = {'reason': 'loop_exhausted', 'edge': _label}",
     ]
     return "\n".join(lines)
 

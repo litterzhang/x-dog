@@ -235,6 +235,10 @@ _PROVIDER: object = None
 $signals_boilerplate
 # The runtime container, populated by main() (see ExecResult.runtime).
 _RUNTIME: dict[str, object] = {}
+# Why the run ended, when it was not simply 'everything finished'. A bounded
+# loop that hits its limit stops silently and would otherwise be
+# indistinguishable from a clean finish.
+_STOPPED_BY: dict[str, str] | None = None
 $registry_line
 $concurrency_boilerplate
 
@@ -663,6 +667,7 @@ $main_body
             "failed": _FAILED,
             "memo": _MEMO,
             "tokens_used": _TOKENS_USED,
+            "stopped_by": _STOPPED_BY,
         }
     )
     result = build_run_result(
@@ -675,6 +680,7 @@ $main_body
         end_time=time.time(),
         tokens_used=_TOKENS_USED,
         last_node=str(_last["node"]),
+        stopped_by=_STOPPED_BY,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -701,6 +707,12 @@ if __name__ == "__main__":
             end_time=time.time(),
             tokens_used=_TOKENS_USED,
             last_node=_last_node,
+            stopped_by=(
+                {'reason': 'loop_not_converged'}
+                if 'did not converge within' in str(_exc)
+                else ({'reason': 'paused', 'node': _exc.node_id, 'signal': _exc.signal}
+                      if isinstance(_exc, WorkflowPaused) else None)
+            ),
         )
         print(json.dumps(_failure, indent=2, ensure_ascii=False))
         raise SystemExit(1) from None

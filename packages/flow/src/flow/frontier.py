@@ -129,6 +129,11 @@ def new_frontier_state(
         "isolated_nodes": set(),
         "loop_arrivals": {},
         "loop_closed": set(),
+        # Bounded (non-strict) back-edges that hit their limit with the condition
+        # still true. A plain `loop` stops silently there, which is otherwise
+        # indistinguishable from a natural completion — recording it lets the run
+        # result say *why* it ended. Transient: derived, never checkpointed.
+        "loop_exhausted": [],
     }
 
 
@@ -266,7 +271,17 @@ def _evaluate_loop_groups(
         if exhausted_strict:
             return exhausted_strict[0]
 
-        if any(loop_counts.get(member, 0) >= _int(_dict(edges[member])["max"]) for member in member_ids):
+        spent = [
+            member
+            for member in member_ids
+            if loop_counts.get(member, 0) >= _int(_dict(edges[member])["max"])
+        ]
+        if spent:
+            exhausted = state["loop_exhausted"]
+            if isinstance(exhausted, list):
+                for member in spent:
+                    if member not in exhausted:
+                        exhausted.append(member)
             closed.add(group_key)
             continue
 
@@ -284,6 +299,19 @@ def _evaluate_loop_groups(
         _set(state["reached"]).add(activation)
         _dict(state["enabled"])[activation] = member_ids
     return None
+
+
+def exhausted_edge_label(spec: FrontierSpec, state: FrontierState) -> str | None:
+    """``"src->dst"`` of the first bounded back-edge that ran out, else None.
+
+    The label, not the raw edge id: an edge id is a content hash, which is stable
+    for the scheduler but meaningless to whoever reads the run result.
+    """
+    exhausted = state.get("loop_exhausted")
+    if not isinstance(exhausted, list) or not exhausted:
+        return None
+    edge = _dict(_dict(spec["edges"])[exhausted[0]])
+    return f"{edge['src']}->{edge['dst']}"
 
 
 def restore_loop_activations(
@@ -408,6 +436,7 @@ _INLINE_FUNCTIONS = (
     restore_loop_activations,
     replay_completed,
     complete_batch,
+    exhausted_edge_label,
 )
 
 

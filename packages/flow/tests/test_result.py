@@ -43,3 +43,25 @@ def test_rendered_result_builder_is_standalone() -> None:
     namespace: dict[str, object] = {"datetime": datetime, "UTC": UTC, "Callable": Callable, "Any": Any}
     exec(compile(source, "<result-builder>", "exec"), namespace)  # noqa: S102
     assert callable(namespace["build_run_result"])
+
+
+def test_stopped_by_is_omitted_when_a_run_simply_finishes() -> None:
+    """The field explains an early stop; a clean finish has nothing to explain."""
+    result = build_run_result(
+        success=True, message="ok", output={}, workflow="w", run_id=None,
+        start_time=0.0, end_time=1.0, tokens_used=0, last_node="n",
+    )
+    context = result["context"]
+    assert isinstance(context, dict)
+    assert "stoppedBy" not in context
+
+
+def test_stopped_by_names_the_reason_and_edge() -> None:
+    result = build_run_result(
+        success=True, message="ok", output={}, workflow="w", run_id=None,
+        start_time=0.0, end_time=1.0, tokens_used=0, last_node="fix",
+        stopped_by={"reason": "loop_exhausted", "edge": "fix->gate"},
+    )
+    context = result["context"]
+    assert isinstance(context, dict)
+    assert context["stoppedBy"] == {"reason": "loop_exhausted", "edge": "fix->gate"}

@@ -82,7 +82,7 @@ block seeds the output ports of a reserved source node `$in`.
     {
       "from": "review",
       "to": "write",
-      "when": {"contains": {"text": "{{review_result}}", "value": "REVISE"}},
+      "when": {"contains": {"value": "{{review_result}}", "text": "REVISE"}},
       "loop": {"max": 2}          // required for back-edges; limits iterations
     }
   ]
@@ -111,6 +111,13 @@ machine:
    complete; only condition-enabled edges contribute mapped input values.
 5. When no activation is ready or running, graph execution is complete.
 
+A bounded back-edge is written `loop` or `while`; they differ only at the bound.
+`loop` stops (`success: true`) and reports `context.stoppedBy` naming the edge
+that ran out; `while` raises non-convergence (`success: false`, exit 1). Use
+`while` when failing to converge is a failure, `loop` when the bound is a budget.
+`context.lastNode` is descriptive (last node to complete, unstable under
+concurrency); `stoppedBy` is the authoritative reason a run ended.
+
 Bounded back-edges with the same destination form a conditional **AND loop
 join**. All member source nodes must complete in the current generation and all
 member conditions must hold before the destination runs again, exactly once.
@@ -124,7 +131,7 @@ it does not translate loops into a separate Python `for` control-flow model.
 
 | Operator | Shape | Meaning |
 |----------|-------|---------|
-| `contains` | `{"contains": {"text": "...", "value": "..."}}` | `value` is a substring of `text` |
+| `contains` | `{"contains": {"value": "<haystack>", "text": "<needle>"}}` | `text` is a substring of `value` |
 | `equals` | `{"equals": {"text": "...", "value": "..."}}` | `text == value` |
 | `gt` / `gte` | `{"gte": {"value": "{{ $.score }}", "text": "0.8"}}` | numeric comparison |
 | `lt` / `lte` | `{"lt": {"value": "{{ $.score }}", "text": "0.8"}}` | numeric comparison |

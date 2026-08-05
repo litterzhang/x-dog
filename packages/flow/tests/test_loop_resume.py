@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import sys
 import types
 from typing import Any
 
@@ -16,6 +17,7 @@ import pytest
 from flow.builder.serialize import workflow_to_dict
 from flow.checkpoint import JSONFileCheckpointStore
 from flow.codegen import generate
+from flow.errors import WorkflowExecutionError
 from flow.executor import execute
 from flow.loader import parse_workflow
 from flow.models import _resolve_edge_ids, edge_identities
@@ -282,3 +284,131 @@ def test_nested_loops_use_distinct_vars() -> None:
     src = generate(parse_workflow(_nested_loop_wf()))
     assert "for _loop_i in range" not in src  # never the un-indexed shared name
     compile(src, "<n>", "exec")
+
+
+# --- how a bounded loop ends, and how the run reports it ---------------------
+
+
+def _repair_loop(strict: bool) -> dict[str, Any]:
+    """gate --(FAIL)--> fix --(loop)--> gate ; gate --(PASS)--> done.
+
+    The shape a repair loop takes: a check that can fail, a fixer, and a bounded
+    number of retries. Nothing joins after the split — each branch has a single
+    predecessor — so the only question is what happens when the retries run out.
+    """
+    back: dict[str, Any] = (
+        {"while": {"cond": {"equals": {"value": "{{$.again}}", "text": "yes"}}, "max": 2}}
+        if strict
+        else {"loop": {"max": 2}}
+    )
+    return {
+        "name": "repair",
+        "entry": "gate",
+        "in_schema": {"pass_on": {"type": "integer"}},
+        "state": {"pass_on": 99},
+        "nodes": [
+            {
+                "id": "gate", "type": "script", "run": "repairmod:gate",
+                "inputs": [{"name": "pass_on", "schema": {"type": "integer"}, "required": True}],
+                "outputs": [
+                    {"name": "verdict", "schema": {"type": "string"}, "required": True},
+                    {"name": "pass_on", "schema": {"type": "integer"}, "required": True},
+                ],
+            },
+            {
+                "id": "fix", "type": "script", "run": "repairmod:fix",
+                "inputs": [{"name": "verdict", "schema": {"type": "string"}, "required": True}],
+                "outputs": [{"name": "again", "schema": {"type": "string"}, "required": True}],
+            },
+            {
+                "id": "done", "type": "script", "run": "repairmod:done",
+                "inputs": [{"name": "verdict", "schema": {"type": "string"}, "required": True}],
+                "outputs": [{"name": "final", "schema": {"type": "string"}, "required": True}],
+            },
+        ],
+        "edges": [
+            {"from": "$in", "to": "gate", "map": {"pass_on": "pass_on"}},
+            # `contains` is interpolate(text) in interpolate(value): text is the needle.
+            {"from": "gate", "to": "fix",
+             "when": {"contains": {"value": "{{$.verdict}}", "text": "FAIL"}},
+             "map": {"verdict": "verdict"}},
+            {"from": "fix", "to": "gate", "map": {}, **back},
+            {"from": "gate", "to": "done",
+             "when": {"contains": {"value": "{{$.verdict}}", "text": "PASS"}},
+             "map": {"verdict": "verdict"}},
+            {"from": "done", "to": "$output", "map": {"final": "final"}},
+        ],
+    }
+
+
+def _write_repair_module(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "repairmod.py").write_text(
+        "from pathlib import Path\n"
+        "_C = Path(__file__).parent / 'attempts'\n"
+        "def gate(ctx, pass_on):\n"
+        "    n = int(_C.read_text()) + 1 if _C.exists() else 1\n"
+        "    _C.write_text(str(n))\n"
+        "    v = 'PASS: clean' if n >= int(pass_on) else f'FAIL: attempt {n}'\n"
+        "    return {'verdict': v, 'pass_on': pass_on}\n"
+        "def fix(ctx, verdict):\n"
+        "    return 'yes'\n"
+        "def done(ctx, verdict):\n"
+        "    return 'shipped'\n",
+        encoding="utf-8",
+    )
+
+
+def test_repair_loop_exits_forward_as_soon_as_the_check_passes(tmp_path: pathlib.Path) -> None:
+    _write_repair_module(tmp_path)
+    wf = parse_workflow(_repair_loop(strict=False))
+    result = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 2}))
+    assert result.runtime["out"] == {"final": "shipped"}
+    # Nothing stopped it early — it ran out of work the ordinary way.
+    assert result.runtime["stopped_by"] is None
+
+
+def test_plain_loop_exhaustion_is_reported_rather_than_silent(tmp_path: pathlib.Path) -> None:
+    """A bounded `loop` that runs out stops with success and (here) no output.
+
+    That is indistinguishable from a clean finish unless the run says so, which is
+    what `stopped_by` is for — it names the edge that ran out.
+    """
+    _write_repair_module(tmp_path)
+    wf = parse_workflow(_repair_loop(strict=False))
+    result = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+    assert result.runtime["out"] == {}
+    assert result.runtime["stopped_by"] == {"reason": "loop_exhausted", "edge": "fix->gate"}
+
+
+def test_strict_while_exhaustion_fails_instead(tmp_path: pathlib.Path) -> None:
+    """`while` is the same loop with one difference: running out is an error."""
+    _write_repair_module(tmp_path)
+    wf = parse_workflow(_repair_loop(strict=True))
+    with pytest.raises(WorkflowExecutionError, match="did not converge"):
+        asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+
+
+def test_both_engines_report_the_same_stop_reason(tmp_path: pathlib.Path) -> None:
+    """interpret == compile for the run result, including why the run ended.
+
+    The failure path used to break this: the CLI hardcoded lastNode="" and
+    tokensUsed=0 because a raising execute() returns no ExecResult, while the
+    generated module reported the truth from its own trace.
+    """
+    _write_repair_module(tmp_path)
+    wf = parse_workflow(_repair_loop(strict=False))
+
+    (tmp_path / "attempts").unlink(missing_ok=True)
+    interpreted = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+
+    module = types.ModuleType("gen_repair")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        (tmp_path / "attempts").unlink(missing_ok=True)
+        exec(compile(generate(wf), "<repair>", "exec"), module.__dict__)  # noqa: S102
+        asyncio.run(module.main())
+    finally:
+        sys.path.remove(str(tmp_path))
+
+    assert module._STOPPED_BY == interpreted.runtime["stopped_by"]
+    assert module._OUTPUT == interpreted.runtime["out"]

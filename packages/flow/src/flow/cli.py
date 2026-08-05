@@ -33,7 +33,8 @@ from ai.utils.event_stream import EventStream as AiEventStream
 
 from flow.builder.io import load_any
 from flow.codegen import generate
-from flow.errors import WorkflowValidationError
+from flow.errors import WorkflowPaused, WorkflowValidationError
+from flow.events import FlowEvent, NodeFinished
 from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid
 from flow.result import build_run_result
@@ -93,6 +94,21 @@ def _parse_inputs(pairs: list[str]) -> dict[str, object]:
     return out
 
 
+def _stopped_by_for(exc: BaseException) -> dict[str, str] | None:
+    """Classify a run-ending exception for the envelope's ``stoppedBy``.
+
+    A strict ``while`` that never converged is a distinct, expected outcome —
+    not an ordinary crash — so give it a machine-readable reason rather than
+    leaving callers to pattern-match on the message text.
+    """
+    text = str(exc)
+    if "did not converge within" in text:
+        return {"reason": "loop_not_converged"}
+    if isinstance(exc, WorkflowPaused):
+        return {"reason": "paused", "node": exc.node_id, "signal": exc.signal}
+    return None
+
+
 def _cmd_validate(config_path: str) -> None:
     """Load and validate a workflow; print OK or error."""
     try:
@@ -114,6 +130,20 @@ async def _cmd_run(
     """Execute a workflow and print a stable structured result envelope."""
     start_time = time.time()
     workflow_name = Path(config_path).stem
+    # A failing run never returns an ExecResult, so the trace it would have carried
+    # is gone by the time we build the envelope. Track the two fields that matter
+    # off the event stream instead: without this the failure path reported
+    # lastNode="" and tokensUsed=0 while the generated module reported the truth —
+    # a divergence in a documented contract, in exactly the case you need it.
+    last_node = ""
+    tokens_seen = 0
+
+    def _track(event: FlowEvent) -> None:
+        nonlocal last_node, tokens_seen
+        if isinstance(event, NodeFinished):
+            last_node = event.node_id
+            tokens_seen += event.tokens
+
     try:
         wf = load_any(config_path)
         workflow_name = wf.name
@@ -128,6 +158,7 @@ async def _cmd_run(
                 timeout=timeout,
                 base_dir=base_dir,
                 inputs=inputs,
+                on_event=_track,
             )
         elif provider is not None:
             import ai
@@ -139,10 +170,17 @@ async def _cmd_run(
                 return base_stream_fn
 
             result = await execute(
-                wf, stream_fn_factory=_factory, timeout=timeout, base_dir=base_dir, inputs=inputs
+                wf,
+                stream_fn_factory=_factory,
+                timeout=timeout,
+                base_dir=base_dir,
+                inputs=inputs,
+                on_event=_track,
             )
         else:
-            result = await execute(wf, timeout=timeout, base_dir=base_dir, inputs=inputs)
+            result = await execute(
+                wf, timeout=timeout, base_dir=base_dir, inputs=inputs, on_event=_track
+            )
     except Exception as exc:
         envelope = build_run_result(
             success=False,
@@ -152,14 +190,16 @@ async def _cmd_run(
             run_id=None,
             start_time=start_time,
             end_time=time.time(),
-            tokens_used=0,
-            last_node="",
+            tokens_used=tokens_seen,
+            last_node=last_node,
+            stopped_by=_stopped_by_for(exc),
         )
         print(json.dumps(envelope, indent=2, ensure_ascii=False))
         raise SystemExit(1)
 
     runtime = result.runtime
     context = runtime["ctx"]
+    stopped_by = runtime.get("stopped_by")
     envelope = build_run_result(
         success=True,
         message="Workflow completed",
@@ -170,6 +210,7 @@ async def _cmd_run(
         end_time=time.time(),
         tokens_used=int(runtime["tokens_used"]),
         last_node=str(context["node_id"]),
+        stopped_by=stopped_by if isinstance(stopped_by, dict) else None,
     )
     print(json.dumps(envelope, indent=2, ensure_ascii=False))
 

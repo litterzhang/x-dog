@@ -28,6 +28,7 @@ from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, Node
 from flow.frontier import (
     build_frontier_spec,
     complete_batch,
+    exhausted_edge_label,
     isolate_nodes,
     new_frontier_state,
     replay_completed,
@@ -923,6 +924,16 @@ async def execute(
     frontier_spec = build_frontier_spec(wf)
     frontier_state = new_frontier_state(frontier_spec, completed)
 
+    def _stopped_by() -> dict[str, str] | None:
+        """Why the run ended, or None when it simply ran out of work.
+
+        A plain ``loop`` that hits its bound stops silently, which otherwise
+        looks exactly like a natural completion — same ``success: true``, same
+        empty ``$output``. Naming the edge makes the two distinguishable.
+        """
+        label = exhausted_edge_label(frontier_spec, frontier_state)
+        return {"reason": "loop_exhausted", "edge": label} if label else None
+
     # Isolation tracking: nodes whose failure was captured rather than propagated,
     # plus a dict mapping node_id -> error string for all isolated failures.
     isolated: set[str] = set()
@@ -1051,5 +1062,7 @@ async def execute(
         "failed": failed,
         "memo": memo,
         "tokens_used": tokens_used,
+        # Why the run ended, when it was not simply "everything finished".
+        "stopped_by": _stopped_by(),
     }
     return ExecResult(runtime=runtime)

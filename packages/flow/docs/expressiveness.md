@@ -278,6 +278,34 @@ must hold before the destination is activated once. Members retain independent
 bounds and may mix plain loops with strict `while`; an exhausted strict member
 fails, while an exhausted plain member stops the group normally.
 
+#### Choosing between `loop` and `while`
+
+They are the same bounded back-edge and differ in exactly one situation — the
+bound is reached with the condition still true:
+
+| | at the bound, condition still true |
+|---|---|
+| `loop` | stops. `success: true`, exit 0, and `context.stoppedBy` names the edge |
+| `while` | raises non-convergence. `success: false`, exit 1, `stoppedBy.reason` is `loop_not_converged` |
+
+Pick `while` when *not converging is a failure* — a repair loop that never gets
+the check to pass has not done its job, and a caller that treats it as success
+will act on a half-finished state. Pick `loop` when the bound is a budget rather
+than a contract: "try up to N times, then move on with whatever you have."
+
+The distinction matters most when the loop sits upstream of side effects. If a
+plain `loop` runs out, nothing downstream of the loop head runs — the forward
+edge out of it was never enabled — so any node that would have cleaned up does
+not execute either. `stoppedBy` is what makes that state legible instead of
+looking like a clean finish that happened to produce no output.
+
+#### Reading the result
+
+`context.lastNode` is the node that completed last. It is descriptive: under
+concurrency a settled batch has no defined ordering, so which of several peers
+reports last is not stable. `context.stoppedBy` is the authoritative account of
+why the run ended, and is absent when it simply ran out of work.
+
 Both engines run this through the same frontier transition kernel. Checkpoints
 retain the existing fields and per-edge counters; a partially arrived multi-source
 group is reconstructed best-effort rather than persisted as new join state.

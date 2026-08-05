@@ -21,21 +21,35 @@ def build_run_result(
     end_time: float,
     tokens_used: int,
     last_node: str,
+    stopped_by: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Build the stable JSON envelope printed at workflow process boundaries."""
+    """Build the stable JSON envelope printed at workflow process boundaries.
+
+    ``lastNode`` is the node that completed last. It is descriptive, not
+    authoritative: under concurrency a settled batch has no defined ordering, so
+    which of several peers reports last is not stable.
+
+    ``stoppedBy`` is the authoritative account of *why* the run ended, and is
+    omitted when it simply ran out of work. It exists because a bounded ``loop``
+    that hits its limit stops silently — same ``success: true``, possibly the same
+    empty ``output`` — and is otherwise indistinguishable from a clean finish.
+    """
+    context: dict[str, object] = {
+        "workflow": workflow,
+        "runId": run_id,
+        "startTime": _iso_time(start_time),
+        "endTime": _iso_time(end_time),
+        "durationMs": max(0, round((end_time - start_time) * 1000)),
+        "tokensUsed": tokens_used,
+        "lastNode": last_node,
+    }
+    if stopped_by:
+        context["stoppedBy"] = stopped_by
     return {
         "success": success,
         "message": message,
         "output": output,
-        "context": {
-            "workflow": workflow,
-            "runId": run_id,
-            "startTime": _iso_time(start_time),
-            "endTime": _iso_time(end_time),
-            "durationMs": max(0, round((end_time - start_time) * 1000)),
-            "tokensUsed": tokens_used,
-            "lastNode": last_node,
-        },
+        "context": context,
     }
 
 
