@@ -8,6 +8,7 @@ from the path suffix so the rest of the builder stays format-agnostic.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from flow.builder.serialize import dump_workflow
@@ -32,6 +33,19 @@ def load_any(path: str | Path) -> WorkflowDef:
         validate_workflow(wf)
         return wf
     return load_workflow(path)
+
+
+def parse_any(path: str | Path) -> WorkflowDef:
+    """Load and parse *path* without validating it.
+
+    ``load_any`` stops at the first validation failure, which is the right
+    behaviour for anything about to execute.  Reporting *all* the failures needs
+    a parsed graph first, so this splits the read from the verdict.
+    """
+    if _is_svg(path):
+        return parse_workflow(read_workflow_from_svg(Path(path)))
+    with Path(path).open(encoding="utf-8") as fh:
+        return parse_workflow(json.load(fh))
 
 
 def dump_any(wf: WorkflowDef, path: str | Path) -> None:

@@ -179,3 +179,51 @@ def test_run_without_input_uses_defaults(capsys: pytest.CaptureFixture[str]) -> 
     out = json.loads(capsys.readouterr().out)
     assert "result" in out["output"]
     assert out["output"]["result"].startswith("DRYRUN:")
+
+
+def test_validate_json_reports_every_problem_at_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One round trip per mistake is the cost an authoring Agent cannot afford."""
+    wf = json.loads((Path(__file__).parent.parent / "examples" / "refine_loop.json").read_text())
+    wf["edges"][1]["map"] = {"nonexistent_port": "answer"}
+    wf["nodes"][0]["inputs"] = ["topic", "never_fed"]
+    wf["nodes"][1]["tools"] = ["no_such_tool"]
+    broken = tmp_path / "broken.json"
+    broken.write_text(json.dumps(wf), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["validate", str(broken), "--json"])
+    assert excinfo.value.code == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["workflow"] == "refine-loop"
+    assert len(payload["errors"]) >= 4, payload["errors"]
+    # every error says where it belongs, so a repair can be applied without parsing prose
+    assert all("node" in e or "edge" in e for e in payload["errors"]), payload["errors"]
+    located = {e.get("node") for e in payload["errors"]} | {
+        (e["edge"]["from"], e["edge"]["to"]) for e in payload["errors"] if "edge" in e
+    }
+    assert {"draft", "critic", ("draft", "critic")} <= located
+
+
+def test_validate_json_on_a_good_workflow_is_quiet_and_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(["validate", str(Path(__file__).parent.parent / "examples" / "refine_loop.json"), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"ok": True, "path": payload["path"], "workflow": "refine-loop", "errors": []}
+
+
+def test_validate_json_reports_an_unreadable_file_as_one_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No graph yet means nothing more to say than the read failure itself."""
+    bad = tmp_path / "nope.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main(["validate", str(bad), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert len(payload["errors"]) == 1

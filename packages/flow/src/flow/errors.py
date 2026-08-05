@@ -8,7 +8,38 @@ class WorkflowError(Exception):
 
 
 class WorkflowValidationError(WorkflowError):
-    """Raised when a workflow definition fails validation."""
+    """Raised when a workflow definition fails validation.
+
+    ``node`` / ``edge`` say *where* the problem is when the check knew, and
+    ``hint`` suggests a repair.  All three are optional and ``str(exc)`` is
+    unchanged, so nothing that only reads the message is affected — they exist
+    so ``xdog-flow validate --json`` can hand a machine something better than
+    prose to act on.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        node: str | None = None,
+        edge: tuple[str, str] | None = None,
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.node = node
+        self.edge = edge
+        self.hint = hint
+
+    def as_dict(self) -> dict[str, object]:
+        """A JSON-ready rendering; absent fields are omitted rather than null."""
+        payload: dict[str, object] = {"message": str(self)}
+        if self.node is not None:
+            payload["node"] = self.node
+        if self.edge is not None:
+            payload["edge"] = {"from": self.edge[0], "to": self.edge[1]}
+        if self.hint is not None:
+            payload["hint"] = self.hint
+        return payload
 
 
 class FlowWarning(UserWarning):

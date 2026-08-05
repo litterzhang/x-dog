@@ -154,6 +154,29 @@ xdog-flow validate examples/refine_loop.json
 # OK: refine_loop
 ```
 
+`--json` reports the **whole** per-node and per-edge pass in one envelope, each
+error carrying the node or edge it belongs to. The prose form stops at the first
+failure, which costs an authoring Agent one round trip per mistake:
+
+```bash
+xdog-flow validate broken.json --json
+```
+```json
+{
+  "ok": false,
+  "path": "broken.json",
+  "workflow": "refine-loop",
+  "errors": [
+    {"message": "Node 'critic' references unknown tool 'no_such_tool'. …", "node": "critic"},
+    {"message": "Edge 'draft'->'critic': source has no output port 'x'",
+     "edge": {"from": "draft", "to": "critic"}}
+  ]
+}
+```
+
+Exit status is 1 when `ok` is false, either way. A read or parse failure is still
+a single error — there is no graph yet to say more about.
+
 ### run
 
 Execute a workflow and print a stable result envelope containing `success`, `message`,

@@ -31,12 +31,13 @@ from agent.core import StreamFn
 from ai.types import AssistantMessage, DoneEvent, TextContent
 from ai.utils.event_stream import EventStream as AiEventStream
 
-from flow.builder.io import load_any
+from flow.builder.io import load_any, parse_any
 from flow.codegen import generate
 from flow.errors import WorkflowPaused, WorkflowValidationError
 from flow.events import FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from flow.executor import execute
 from flow.graph import to_ascii, to_mermaid
+from flow.loader import validation_errors
 from flow.result import build_run_result
 
 # ---------------------------------------------------------------------------
@@ -138,13 +139,44 @@ def _stopped_by_for(exc: BaseException) -> dict[str, str] | None:
     return None
 
 
-def _cmd_validate(config_path: str) -> None:
+def _cmd_validate(config_path: str, *, as_json: bool = False) -> None:
     """Load and validate a workflow; print OK or error."""
+    if as_json:
+        _cmd_validate_json(config_path)
+        return
     try:
         wf = load_any(config_path)
         print(f"OK: {wf.name}")
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
+        raise SystemExit(1) from None
+
+
+def _cmd_validate_json(config_path: str) -> None:
+    """Emit every validation problem as one JSON envelope; exit 1 if any.
+
+    The prose form stops at the first failure, so an authoring Agent needs one
+    round trip per mistake.  This reports the whole per-node and per-edge pass at
+    once, each error carrying the node or edge it belongs to.
+
+    A read or parse failure is still a single error — there is no graph yet to
+    say anything more about.
+    """
+    envelope: dict[str, object] = {"ok": False, "path": config_path, "workflow": "", "errors": []}
+    try:
+        wf = parse_any(config_path)
+    except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        detail = exc.as_dict() if isinstance(exc, WorkflowValidationError) else {"message": str(exc)}
+        envelope["errors"] = [detail]
+        print(json.dumps(envelope, indent=2, ensure_ascii=False))
+        raise SystemExit(1) from None
+
+    errors = validation_errors(wf)
+    envelope["workflow"] = wf.name
+    envelope["ok"] = not errors
+    envelope["errors"] = [exc.as_dict() for exc in errors]
+    print(json.dumps(envelope, indent=2, ensure_ascii=False))
+    if errors:
         raise SystemExit(1)
 
 
@@ -426,6 +458,12 @@ def main(argv: list[str] | None = None) -> None:
     # -- validate ------------------------------------------------------------
     val_p = sub.add_parser("validate", help="Validate a workflow definition")
     val_p.add_argument("config", help="Path to workflow .json or .svg file")
+    val_p.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Report every problem as one JSON envelope (for tools and Agents)",
+    )
 
     # -- run -----------------------------------------------------------------
     run_p = sub.add_parser("run", help="Execute a workflow")
@@ -519,7 +557,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "validate":
-        _cmd_validate(args.config)
+        _cmd_validate(args.config, as_json=args.as_json)
     elif args.command == "run":
         if args.verbose:
             logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")

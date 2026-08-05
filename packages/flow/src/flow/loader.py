@@ -13,11 +13,13 @@ in ``wf.nodes``.  Edges may target the reserved sink :data:`flow.models.OUT_NODE
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import logging
 import re
 import warnings
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -959,8 +961,62 @@ def _validate_subflow_node(node: NodeDef) -> None:
     # the derived ports already ARE the strict signature.
 
 
+class _ErrorCollector:
+    """Gathers per-item validation errors instead of stopping at the first.
+
+    An authoring agent handed one error per run needs one round trip per error,
+    which is the cost the repair-loop literature says to avoid.  The per-node and
+    per-edge loops are the seams where continuing is sound: each iteration is
+    independent, so a failure in one says nothing about the next.  Checks outside
+    those loops still abort, because everything after them reads state they were
+    supposed to establish.
+    """
+
+    def __init__(self) -> None:
+        self.errors: list[WorkflowValidationError] = []
+
+    @contextlib.contextmanager
+    def item(
+        self,
+        *,
+        node: str | None = None,
+        edge: tuple[str, str] | None = None,
+    ) -> Iterator[None]:
+        """Absorb a failure for one node or edge and carry on to the next."""
+        try:
+            yield
+        except WorkflowValidationError as exc:
+            if exc.node is None:
+                exc.node = node
+            if exc.edge is None:
+                exc.edge = edge
+            self.errors.append(exc)
+
+
+def validation_errors(wf: WorkflowDef) -> list[WorkflowValidationError]:
+    """Every validation problem found, in declaration order; empty when valid.
+
+    A fatal structural failure (a duplicate node id, an unbounded cycle) stops
+    the pass and is returned alone: the checks after it read state it was meant
+    to establish, so continuing would report failures that are artefacts.
+    """
+    collector = _ErrorCollector()
+    try:
+        _validate_workflow_into(wf, collector)
+    except WorkflowValidationError as exc:
+        collector.errors.append(exc)
+    return collector.errors
+
+
 def validate_workflow(wf: WorkflowDef) -> None:
     """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
+    errors = validation_errors(wf)
+    if errors:
+        raise errors[0]
+
+
+def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> None:
+    """Run every check, routing per-item failures into *collector*."""
     node_ids = [n.id for n in wf.nodes]
 
     for nid in node_ids:
@@ -1031,63 +1087,64 @@ def validate_workflow(wf: WorkflowDef) -> None:
     known_tools = default_registry().names() | manifest_names
 
     for node in wf.nodes:
-        # Every declared port type must be one of the known JSON types, so a typo
-        # like "int" fails at load time instead of surfacing later in to_python.
-        for _port in (*node.input_ports, *node.output_ports):
-            if _port.type not in VALID_TYPES:
-                raise WorkflowValidationError(
-                    f"Node {node.id!r}: port {_port.name!r} has unknown type {_port.type!r}; "
-                    f"expected one of {', '.join(VALID_TYPES)}"
-                )
-        for tool in node.tools:
-            if not tool:
-                raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
-            if tool not in known_tools:
-                known = ", ".join(sorted(known_tools)) or "<none>"
-                raise WorkflowValidationError(
-                    f"Node {node.id!r} references unknown tool {tool!r}. Known tools: {known}"
-                )
-        if node.type == "script":
-            _validate_script_node(node, _run_re)
-        elif node.type == "agent":
-            if node.run is not None:
-                raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
-            if node.code is not None:
-                raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
-            if node.backend is not None and node.backend not in _KNOWN_CLI_BACKENDS:
-                known = ", ".join(sorted(_KNOWN_CLI_BACKENDS))
-                raise WorkflowValidationError(
-                    f"Agent node {node.id!r}: unknown backend {node.backend!r}; expected one of {known}"
-                )
-            if node.backend is None and (node.allowed_tools or node.mcp_servers):
-                raise WorkflowValidationError(
-                    f"Agent node {node.id!r}: 'allowed_tools'/'mcp_servers' require a CLI 'backend'"
-                )
-            # Strict interpolation: every {{ $.x }} in a prompt must root at a
-            # declared input port (a typo would otherwise silently interpolate to "").
-            _in_names = set(node.input_names)
-            for _tmpl in (node.system_prompt, node.prompt):
-                for _root in _placeholder_roots(_tmpl):
-                    if _root not in _in_names:
-                        raise WorkflowValidationError(
-                            f"Agent node {node.id!r}: prompt references {{{{ ${_root} }}}} but "
-                            f"{_root!r} is not a declared input port"
-                        )
-        elif node.type == "human":
-            if not node.signal:
-                raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
-            if node.code is not None:
-                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'code'")
-            if node.run is not None:
-                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'run'")
-            if node.prompt:
-                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'prompt'")
-            if node.tools:
-                raise WorkflowValidationError(f"Human node {node.id!r} must not set 'tools'")
-            if len(node.output_ports) > 1:
-                raise WorkflowValidationError(f"Human node {node.id!r} may declare at most one output port")
-        elif node.type == "subflow":
-            _validate_subflow_node(node)
+        with collector.item(node=node.id):
+            # Every declared port type must be one of the known JSON types, so a typo
+            # like "int" fails at load time instead of surfacing later in to_python.
+            for _port in (*node.input_ports, *node.output_ports):
+                if _port.type not in VALID_TYPES:
+                    raise WorkflowValidationError(
+                        f"Node {node.id!r}: port {_port.name!r} has unknown type {_port.type!r}; "
+                        f"expected one of {', '.join(VALID_TYPES)}"
+                    )
+            for tool in node.tools:
+                if not tool:
+                    raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
+                if tool not in known_tools:
+                    known = ", ".join(sorted(known_tools)) or "<none>"
+                    raise WorkflowValidationError(
+                        f"Node {node.id!r} references unknown tool {tool!r}. Known tools: {known}"
+                    )
+            if node.type == "script":
+                _validate_script_node(node, _run_re)
+            elif node.type == "agent":
+                if node.run is not None:
+                    raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
+                if node.code is not None:
+                    raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+                if node.backend is not None and node.backend not in _KNOWN_CLI_BACKENDS:
+                    known = ", ".join(sorted(_KNOWN_CLI_BACKENDS))
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r}: unknown backend {node.backend!r}; expected one of {known}"
+                    )
+                if node.backend is None and (node.allowed_tools or node.mcp_servers):
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r}: 'allowed_tools'/'mcp_servers' require a CLI 'backend'"
+                    )
+                # Strict interpolation: every {{ $.x }} in a prompt must root at a
+                # declared input port (a typo would otherwise silently interpolate to "").
+                _in_names = set(node.input_names)
+                for _tmpl in (node.system_prompt, node.prompt):
+                    for _root in _placeholder_roots(_tmpl):
+                        if _root not in _in_names:
+                            raise WorkflowValidationError(
+                                f"Agent node {node.id!r}: prompt references {{{{ ${_root} }}}} but "
+                                f"{_root!r} is not a declared input port"
+                            )
+            elif node.type == "human":
+                if not node.signal:
+                    raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
+                if node.code is not None:
+                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'code'")
+                if node.run is not None:
+                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'run'")
+                if node.prompt:
+                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'prompt'")
+                if node.tools:
+                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'tools'")
+                if len(node.output_ports) > 1:
+                    raise WorkflowValidationError(f"Human node {node.id!r} may declare at most one output port")
+            elif node.type == "subflow":
+                _validate_subflow_node(node)
 
     # Edges: endpoints exist, ports exist, mappings are well-formed, loops bounded.
     # fed[(dst_node, dst_port)] counts feeding data edges — every input port needs
@@ -1116,121 +1173,122 @@ def validate_workflow(wf: WorkflowDef) -> None:
                 f"Subflow node {_n.id!r} may not be a fan-out worker (v1)"
             )
     for edge in wf.edges:
-        if edge.src == OUT_NODE_ID:
-            raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")
-        if edge.src != IN_NODE_ID and edge.src not in node_by_id:
-            raise WorkflowValidationError(f"Edge src {edge.src!r} not found in nodes")
-        if edge.dst != OUT_NODE_ID and edge.dst not in node_by_id:
-            raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
-        if edge.dst == IN_NODE_ID:
-            raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
-        # Strict ``while`` is a public-model invariant too (not only loader sugar):
-        # it must have both a positive bound and a condition to converge against.
-        if edge.loop_strict and (edge.loop_max is None or edge.loop_max < 1 or edge.when is None):
-            raise WorkflowValidationError(
-                f"Edge {edge.src!r} -> {edge.dst!r}: loop_strict requires loop_max >= 1 and a 'when' condition"
-            )
+        with collector.item(edge=(edge.src, edge.dst)):
+            if edge.src == OUT_NODE_ID:
+                raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")
+            if edge.src != IN_NODE_ID and edge.src not in node_by_id:
+                raise WorkflowValidationError(f"Edge src {edge.src!r} not found in nodes")
+            if edge.dst != OUT_NODE_ID and edge.dst not in node_by_id:
+                raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
+            if edge.dst == IN_NODE_ID:
+                raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
+            # Strict ``while`` is a public-model invariant too (not only loader sugar):
+            # it must have both a positive bound and a condition to converge against.
+            if edge.loop_strict and (edge.loop_max is None or edge.loop_max < 1 or edge.when is None):
+                raise WorkflowValidationError(
+                    f"Edge {edge.src!r} -> {edge.dst!r}: loop_strict requires loop_max >= 1 and a 'when' condition"
+                )
 
-        src_outputs = _output_port_names(wf, edge.src, in_ports)
-        # Strict interpolation for a condition: every {{ $.x }} operand must root at
-        # an output port of the edge's source node (or a $in seed key).
-        if edge.when is not None:
-            for _root in _condition_operand_roots(edge.when):
-                if _root not in src_outputs:
-                    raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{edge.dst!r}: condition references {{{{ ${_root} }}}} but "
-                        f"{_root!r} is not an output port of {edge.src!r}"
-                    )
+            src_outputs = _output_port_names(wf, edge.src, in_ports)
+            # Strict interpolation for a condition: every {{ $.x }} operand must root at
+            # an output port of the edge's source node (or a $in seed key).
+            if edge.when is not None:
+                for _root in _condition_operand_roots(edge.when):
+                    if _root not in src_outputs:
+                        raise WorkflowValidationError(
+                            f"Edge {edge.src!r}->{edge.dst!r}: condition references {{{{ ${_root} }}}} but "
+                            f"{_root!r} is not an output port of {edge.src!r}"
+                        )
 
-        # Dynamic fan-out (G1) edge-shape validation.
-        if edge.fan_out is not None:
-            _validate_fan_out_edge(wf, edge, src_outputs, loop_touched)
-        if edge.fan_in is not None:
-            _validate_fan_in_edge(edge, fan_out_workers)
-        # $output is a free-form sink: its destination "ports" are arbitrary output
-        # keys, so only the source port must exist (no declared input ports to check,
-        # and it never needs to be "fed").
-        if edge.dst == OUT_NODE_ID:
-            for sport, _dport in edge.mapping:
+            # Dynamic fan-out (G1) edge-shape validation.
+            if edge.fan_out is not None:
+                _validate_fan_out_edge(wf, edge, src_outputs, loop_touched)
+            if edge.fan_in is not None:
+                _validate_fan_in_edge(edge, fan_out_workers)
+            # $output is a free-form sink: its destination "ports" are arbitrary output
+            # keys, so only the source port must exist (no declared input ports to check,
+            # and it never needs to be "fed").
+            if edge.dst == OUT_NODE_ID:
+                for sport, _dport in edge.mapping:
+                    head, subpath = _jsonpath_root(sport)
+                    # A sub-field key (``$.verdict.within_budget``) into $output resolves
+                    # a nested field of a structured source port at run time (both engines
+                    # use jsonpath_get); its root must still be a real output port.
+                    if head not in src_outputs:
+                        raise WorkflowValidationError(
+                            f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
+                        )
+                    _validate_concat_source(wf, edge, sport, head, subpath)
+                continue
+
+            dst_inputs = set(node_by_id[edge.dst].input_names)
+            src_types = _output_port_types(wf, edge.src)  # empty for $in (untyped seed)
+            src_schemas = _output_port_schemas(wf, edge.src)  # for sub-field type checks
+            dst_types = {p.name: p.type for p in node_by_id[edge.dst].input_ports}
+            for sport, dport in edge.mapping:
+                # A JSONPath source key (``$.plan.owner``) reads a nested field of a
+                # structured port; its root must be a real output port.
                 head, subpath = _jsonpath_root(sport)
-                # A sub-field key (``$.verdict.within_budget``) into $output resolves
-                # a nested field of a structured source port at run time (both engines
-                # use jsonpath_get); its root must still be a real output port.
                 if head not in src_outputs:
                     raise WorkflowValidationError(
                         f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
                     )
-                _validate_concat_source(wf, edge, sport, head, subpath)
-            continue
-
-        dst_inputs = set(node_by_id[edge.dst].input_names)
-        src_types = _output_port_types(wf, edge.src)  # empty for $in (untyped seed)
-        src_schemas = _output_port_schemas(wf, edge.src)  # for sub-field type checks
-        dst_types = {p.name: p.type for p in node_by_id[edge.dst].input_ports}
-        for sport, dport in edge.mapping:
-            # A JSONPath source key (``$.plan.owner``) reads a nested field of a
-            # structured port; its root must be a real output port.
-            head, subpath = _jsonpath_root(sport)
-            if head not in src_outputs:
-                raise WorkflowValidationError(
-                    f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
-                )
-            if dport not in dst_inputs:
-                raise WorkflowValidationError(
-                    f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
-                )
-            # concat flattens one whole array emitted by each worker instance.
-            _validate_concat_source(wf, edge, sport, head, subpath)
-
-            # Edge type consistency: the resolved source type must match the
-            # destination input type.  $in seeds are untyped (absent from
-            # src_types/src_schemas) so edges out of $in are exempt.
-            if dport in dst_types and (head in src_types or head in src_schemas):
-                src_type: str | None
-                if edge.fan_in is not None:
-                    # fan_in (G1): both reducers feed an array to the collector.
-                    src_type = "array"
-                elif edge.fan_out is not None and head == edge.fan_out and not subpath:
-                    # fan_out (G1): the worker consumes ONE array element, so the
-                    # element (items) type must match — not the array itself.
-                    src_type = _schema_subtype(src_schemas[head], ["[]"]) if head in src_schemas else None
-                elif not subpath:
-                    src_type = src_types.get(head)
-                else:
-                    # 2b-2: descend the source port's schema along the JSONPath tail
-                    # to find the sub-field type.  An un-typable path (wildcard,
-                    # filter, scalar interior, missing field) yields None -> lenient.
-                    steps = _jsonpath_tail_steps(sport)
-                    src_type = (
-                        _schema_subtype(src_schemas[head], steps)
-                        if steps is not None and head in src_schemas
-                        else None
-                    )
-                if src_type is not None and src_type != dst_types[dport]:
+                if dport not in dst_inputs:
                     raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source {sport!r} is "
-                        f"{src_type!r} but destination port {dport!r} is {dst_types[dport]!r}"
+                        f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
                     )
-            fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
-            if edge.when is None and edge.loop_max is None:
-                unconditional_fed[(edge.dst, dport)] = unconditional_fed.get((edge.dst, dport), 0) + 1
+                # concat flattens one whole array emitted by each worker instance.
+                _validate_concat_source(wf, edge, sport, head, subpath)
 
-        # back-edge (dst not strictly after src) must be a bounded loop
-        if node_index[edge.dst] <= node_index[edge.src]:
-            if not (edge.loop_max is not None and edge.loop_max >= 1):
-                raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
+                # Edge type consistency: the resolved source type must match the
+                # destination input type.  $in seeds are untyped (absent from
+                # src_types/src_schemas) so edges out of $in are exempt.
+                if dport in dst_types and (head in src_types or head in src_schemas):
+                    src_type: str | None
+                    if edge.fan_in is not None:
+                        # fan_in (G1): both reducers feed an array to the collector.
+                        src_type = "array"
+                    elif edge.fan_out is not None and head == edge.fan_out and not subpath:
+                        # fan_out (G1): the worker consumes ONE array element, so the
+                        # element (items) type must match — not the array itself.
+                        src_type = _schema_subtype(src_schemas[head], ["[]"]) if head in src_schemas else None
+                    elif not subpath:
+                        src_type = src_types.get(head)
+                    else:
+                        # 2b-2: descend the source port's schema along the JSONPath tail
+                        # to find the sub-field type.  An un-typable path (wildcard,
+                        # filter, scalar interior, missing field) yields None -> lenient.
+                        steps = _jsonpath_tail_steps(sport)
+                        src_type = (
+                            _schema_subtype(src_schemas[head], steps)
+                            if steps is not None and head in src_schemas
+                            else None
+                        )
+                    if src_type is not None and src_type != dst_types[dport]:
+                        raise WorkflowValidationError(
+                            f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source {sport!r} is "
+                            f"{src_type!r} but destination port {dport!r} is {dst_types[dport]!r}"
+                        )
+                fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
+                if edge.when is None and edge.loop_max is None:
+                    unconditional_fed[(edge.dst, dport)] = unconditional_fed.get((edge.dst, dport), 0) + 1
 
-        # G6: a bounded loop with no `when` guard runs the full loop_max every time,
-        # which is almost always an authoring mistake (a loop usually exits early on
-        # a condition).  Warn, don't reject — an unconditional N-times loop is legal.
-        if edge.loop_max is not None and edge.when is None:
-            warnings.warn(
-                f"Edge {edge.src!r} -> {edge.dst!r}: loop.max={edge.loop_max} with no 'when' guard "
-                f"runs all {edge.loop_max} iterations unconditionally (usually a mistake — add a "
-                f"'when' to exit early).",
-                FlowWarning,
-                stacklevel=2,
-            )
+            # back-edge (dst not strictly after src) must be a bounded loop
+            if node_index[edge.dst] <= node_index[edge.src]:
+                if not (edge.loop_max is not None and edge.loop_max >= 1):
+                    raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
+
+            # G6: a bounded loop with no `when` guard runs the full loop_max every time,
+            # which is almost always an authoring mistake (a loop usually exits early on
+            # a condition).  Warn, don't reject — an unconditional N-times loop is legal.
+            if edge.loop_max is not None and edge.when is None:
+                warnings.warn(
+                    f"Edge {edge.src!r} -> {edge.dst!r}: loop.max={edge.loop_max} with no 'when' guard "
+                    f"runs all {edge.loop_max} iterations unconditionally (usually a mistake — add a "
+                    f"'when' to exit early).",
+                    FlowWarning,
+                    stacklevel=2,
+                )
 
     _validate_loop_regions(wf)
 
@@ -1245,13 +1303,14 @@ def validate_workflow(wf: WorkflowDef) -> None:
     # Every declared input port must be fed by at least one edge mapping — unless
     # it is not required (e.g. a loop-carried value absent on the first pass).
     for node in wf.nodes:
-        for p in node.input_ports:
-            if not p.required:
-                continue
-            if fed.get((node.id, p.name), 0) == 0:
-                raise WorkflowValidationError(
-                    f"Node {node.id!r}: input port {p.name!r} is not fed by any edge mapping"
-                )
+        with collector.item(node=node.id):
+            for p in node.input_ports:
+                if not p.required:
+                    continue
+                if fed.get((node.id, p.name), 0) == 0:
+                    raise WorkflowValidationError(
+                        f"Node {node.id!r}: input port {p.name!r} is not fed by any edge mapping"
+                    )
 
 
 def load_workflow(path: str | Path) -> WorkflowDef:
