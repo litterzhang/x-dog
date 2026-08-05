@@ -138,12 +138,19 @@ Environment=FLOW_CHECKPOINT_DIR=%S/xdog-flow/cli-triage/ckpt
 ExecStart=/usr/bin/python3 /home/user/.local/share/xdog-flow/cli-triage
 ```
 
-`ExecStart` defaults to `/usr/bin/python3`, which on most hosts has none of the
-bundle's `requirements.txt` — the unit would fail on its first firing with only a
-systemd status to explain why. Pass `--python` to name an interpreter that does:
+`install` provisions the bundle as a **uv project** and points `ExecStart` at the
+resulting `.venv`. The bundle ships a `pyproject.toml`, so one `uv sync` picks a
+matching CPython (downloading one if the host has none), creates `.venv`, and
+installs the dependencies. uv itself is installed if missing.
+
+This is the default because the alternative is a trap: `/usr/bin/python3` has none
+of the bundle's dependencies on a typical host, so a unit pointed at it fails on
+its first firing — hours later, with only a systemd status to explain why.
 
 ```bash
-xdog-flow scheduling install wf.json --python ~/proj/.venv/bin/python
+xdog-flow scheduling install wf.json                    # uv-provisioned (default)
+xdog-flow scheduling install wf.json --no-venv \
+    --python ~/proj/.venv/bin/python                    # reuse an existing env
 ```
 
 The bundle carries the workflow's own directory with it: a `run: "module:func"`

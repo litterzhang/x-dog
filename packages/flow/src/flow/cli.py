@@ -296,6 +296,7 @@ def _cmd_scheduling_install(
     name: str | None,
     dry_run: bool,
     python: str | None = None,
+    no_venv: bool = False,
 ) -> None:
     """Install one scheduled workflow."""
     try:
@@ -305,7 +306,11 @@ def _cmd_scheduling_install(
         raise SystemExit(1)
     try:
         installed = _scheduling_installer(python).install(
-            wf, name=name, dry_run=dry_run, base_dir=Path(config_path).resolve().parent
+            wf,
+            name=name,
+            dry_run=dry_run,
+            base_dir=Path(config_path).resolve().parent,
+            venv=not no_venv,
         )
     except ValueError as exc:
         print(str(exc))
@@ -417,11 +422,16 @@ def main(argv: list[str] | None = None) -> None:
     scheduling_install.add_argument("config", help="Path to workflow .json/.svg")
     scheduling_install.add_argument("--name", help="Install name (default: the workflow name)")
     scheduling_install.add_argument(
-        "--python",
+        "--no-venv",
+        action="store_true",
         help=(
-            "Interpreter for the unit's ExecStart (default: /usr/bin/python3). "
-            "Point this at an environment that has the bundle's requirements.txt installed"
+            "Do not give the bundle its own virtualenv; run it with --python instead "
+            "(that interpreter must already satisfy the bundle's requirements.txt)"
         ),
+    )
+    scheduling_install.add_argument(
+        "--python",
+        help="Interpreter for the unit's ExecStart when --no-venv is used (default: /usr/bin/python3)",
     )
     scheduling_install.add_argument(
         "--dry-run", action="store_true", help="Print units/actions without touching the OS"
@@ -470,7 +480,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "scheduling":
         if args.scheduling_command == "install":
             _cmd_scheduling_install(
-                args.config, name=args.name, dry_run=args.dry_run, python=args.python
+                args.config,
+                name=args.name,
+                dry_run=args.dry_run,
+                python=args.python,
+                no_venv=args.no_venv,
             )
         elif args.scheduling_command == "uninstall":
             _cmd_scheduling_uninstall(args.name, dry_run=args.dry_run)

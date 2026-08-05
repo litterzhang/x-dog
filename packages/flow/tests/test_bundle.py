@@ -214,3 +214,40 @@ def test_inline_script_workflow_copies_nothing(tmp_path: Path) -> None:
 
     out = build_bundle(wf, tmp_path / "bundle", base_dir=src)
     assert not (out / "unrelated.py").exists()
+
+
+def test_bundle_is_a_uv_project(tmp_path: Path) -> None:
+    """The bundle ships a pyproject so `uv sync` alone can provision it.
+
+    That is what the scheduler installer runs: one command that picks the
+    interpreter, builds the venv, and installs the deps — no separate step for an
+    operator to get wrong.
+    """
+    wf = parse_workflow({
+        "name": "My Workflow!",
+        "entry": "step",
+        "in_schema": {"n": {"type": "integer"}},
+        "state": {"n": 1},
+        "nodes": [{
+            "id": "step",
+            "type": "script",
+            "code": "def step(ctx, n):\n    return int(n) + 1\n",
+            "inputs": [{"name": "n", "schema": {"type": "integer"}, "required": True}],
+            "outputs": [{"name": "out", "schema": {"type": "integer"}, "required": True}],
+        }],
+        "edges": [
+            {"from": "$in", "to": "step", "map": {"n": "n"}},
+            {"from": "step", "to": "$output", "map": {"out": "out"}},
+        ],
+    })
+    out = build_bundle(wf, tmp_path / "bundle")
+    text = (out / "pyproject.toml").read_text(encoding="utf-8")
+
+    # A workflow name is free-form; the project name must still be PEP 508-safe.
+    assert 'name = "my-workflow"' in text
+    assert "requires-python" in text
+    # A bundle is a runnable directory, not a distribution — nothing to build.
+    assert "package = false" in text
+    # Every pinned requirement is declared, so pyproject and requirements.txt agree.
+    for line in (out / "requirements.txt").read_text(encoding="utf-8").split():
+        assert f'"{line}"' in text

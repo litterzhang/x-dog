@@ -125,7 +125,7 @@ def test_timer_every_units() -> None:
 
 def test_timer_cron_units() -> None:
     r = render_timer_units("triage", _B, ScheduleDef(mode="timer", cron="*/15 * * * *"))
-    assert "OnCalendar=*-*-* *:*/15:00" in r.files["triage.timer"]
+    assert "OnCalendar=*-*-* *:0/15:00" in r.files["triage.timer"]
 
 
 def test_timer_no_inputs_omits_env() -> None:
@@ -134,7 +134,7 @@ def test_timer_no_inputs_omits_env() -> None:
 
 
 @pytest.mark.parametrize(("cron", "oncal"), [
-    ("*/15 * * * *", "*-*-* *:*/15:00"),
+    ("*/15 * * * *", "*-*-* *:0/15:00"),
     ("0 9 * * 1-5", "Mon..Fri *-*-* 9:0:00"),
     ("30 2 1 * *", "*-*-1 2:30:00"),
     ("0 0 * * 0", "Sun *-*-* 0:0:00"),
@@ -181,7 +181,13 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
 
     class FakeInstaller:
         def install(
-            self, wf: object, *, name: str | None, dry_run: bool, base_dir: Path | None = None
+            self,
+            wf: object,
+            *,
+            name: str | None,
+            dry_run: bool,
+            base_dir: Path | None = None,
+            venv: bool = True,
         ) -> str:
             # base_dir carries the workflow's sibling modules into the bundle.
             calls.append(("install", (wf, name, dry_run, base_dir is not None)))
@@ -497,5 +503,7 @@ def test_install_python_is_selectable(monkeypatch: pytest.MonkeyPatch, capsys: p
 
     wf_path = "wf.json"
     monkeypatch.setattr(cli, "load_any", lambda _p: parse_workflow(_wf({"mode": "timer", "every": "15m"})))
-    cli.main(["scheduling", "install", wf_path, "--dry-run", "--python", "/opt/venv/bin/python"])
+    cli.main(
+        ["scheduling", "install", wf_path, "--dry-run", "--no-venv", "--python", "/opt/venv/bin/python"]
+    )
     assert "/opt/venv/bin/python" in capsys.readouterr().out

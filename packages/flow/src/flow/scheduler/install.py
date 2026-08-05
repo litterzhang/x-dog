@@ -14,7 +14,9 @@ run fully offline against a temp dir + a stub ``systemctl``.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +44,11 @@ class Installer:
     unit_dir: Path
     data_dir: Path
     systemctl: tuple[str, ...] = ("systemctl", "--user")
+    # Interpreter for the unit's ExecStart. Only consulted with venv=False; by
+    # default the bundle gets its own uv-provisioned environment instead.
     python: str = "/usr/bin/python3"
+    # Path to uv; None resolves (and if necessary installs) it. Injectable for tests.
+    uv: str | None = None
 
     # -- registry ----------------------------------------------------------
     @property
@@ -75,30 +81,99 @@ class Installer:
         name: str | None = None,
         dry_run: bool = False,
         base_dir: Path | None = None,
+        venv: bool = True,
     ) -> str:
         """Build the bundle + install the scheduler for *wf*; return its name.
 
         *base_dir* is the workflow file's directory; it travels into the bundle so
         ``run:`` script references still import once the unit runs from elsewhere.
+
+        With *venv* (the default) the bundle is provisioned as a uv project — uv
+        supplies the interpreter, the virtualenv and the dependencies — and the unit
+        runs that environment. An install is then complete on its own rather than
+        depending on whatever ``/usr/bin/python3`` happens to be or have. Pass
+        ``venv=False`` to reuse :attr:`python` instead.
         """
         if wf.schedule is None:
             raise ValueError(f"workflow {wf.name!r} has no 'schedule' block to install")
         name = name or wf.name
         bundle_dir = (self.data_dir / name).resolve()
 
+        python = self.python
         if not dry_run:
             build_bundle(wf, bundle_dir, base_dir=base_dir)
+            if venv:
+                python = str(self._provision_venv(bundle_dir))
         else:
             print(f"  would build bundle at {bundle_dir}")
+            if venv:
+                python = str(bundle_dir / ".venv" / "bin" / "python")
+                print(f"  would run: uv sync --project {bundle_dir}")
 
         if wf.schedule.mode == "timer":
-            self._install_timer(name, bundle_dir, wf.schedule, dry_run=dry_run)
+            self._install_timer(name, bundle_dir, wf.schedule, dry_run=dry_run, python=python)
         else:
             self._install_hook(name, bundle_dir, wf.schedule, dry_run=dry_run)
         return name
 
-    def _install_timer(self, name: str, bundle_dir: Path, schedule: ScheduleDef, *, dry_run: bool) -> None:
-        units = render_timer_units(name, bundle_dir, schedule, python=self.python)
+    def _resolve_uv(self) -> str:
+        """Return a usable ``uv``, installing it if the host has none.
+
+        The whole provisioning path is uv's: it supplies the interpreter, the
+        virtualenv, and the packages, so a scheduled workflow never depends on
+        what ``/usr/bin/python3`` happens to be or have. ``shutil.which`` alone is
+        not enough — a systemd user unit gets a minimal PATH — so the usual
+        install location is checked directly too.
+        """
+        if self.uv:
+            return self.uv
+        found = shutil.which("uv")
+        if found:
+            return found
+        for candidate in (Path.home() / ".local" / "bin" / "uv", Path(sys.executable).parent / "uv"):
+            if candidate.exists():
+                return str(candidate)
+        # Not present: install it beside the running interpreter. Deliberately not
+        # the curl|sh installer — that needs network *and* a shell, and this path
+        # already has a working Python.
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            raise RuntimeError(
+                "uv is required to provision a workflow environment and could not be installed; "
+                "install it from https://astral.sh/uv and retry (or pass --no-venv)"
+            ) from exc
+        installed = shutil.which("uv") or Path(sys.executable).parent / "uv"
+        return str(installed)
+
+    def _provision_venv(self, bundle_dir: Path) -> Path:
+        """Create ``<bundle>/.venv`` with the bundle's requirements; return its python.
+
+        A bundle already declares exactly what it needs in ``requirements.txt``;
+        leaving an operator to satisfy that by hand is where a scheduled install
+        goes wrong, because the failure lands hours later inside a timer with only
+        a systemd status to explain it.
+
+        uv fetches a matching CPython itself when the host has none, so this works
+        on a bare box. Offline bundles carry their wheels under ``_vendor/wheels``
+        and are installed from there.
+        """
+        uv = self._resolve_uv()
+        wheels = bundle_dir / "_vendor" / "wheels"
+        # The bundle ships a pyproject.toml, so it is an ordinary uv project:
+        # `uv sync` reads requires-python, fetches a matching CPython when the host
+        # has none, creates .venv, and installs the declared dependencies — one
+        # command, one source of truth for the deps.
+        cmd = [uv, "sync", "-q", "--project", str(bundle_dir)]
+        if wheels.is_dir():  # offline bundle: install from its own vendored wheels
+            cmd += ["--offline", "--find-links", str(wheels)]
+        subprocess.run(cmd, check=True)
+        return bundle_dir / ".venv" / "bin" / "python"
+
+    def _install_timer(
+        self, name: str, bundle_dir: Path, schedule: ScheduleDef, *, dry_run: bool, python: str | None = None
+    ) -> None:
+        units = render_timer_units(name, bundle_dir, schedule, python=python or self.python)
         for fname, text in units.files.items():
             self._write_unit(fname, text, dry_run=dry_run)
         self._run("daemon-reload", dry_run=dry_run)

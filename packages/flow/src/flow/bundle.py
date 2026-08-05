@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,39 @@ def _pin(dist: str) -> str:
         return dist
 
 
+def _slug(name: str) -> str:
+    """A PEP 508-safe project name derived from the workflow name."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._")
+    return cleaned.lower() or "flow-workflow"
+
+
+def _render_pyproject(wf: WorkflowDef, requirements: list[str]) -> str:
+    """The bundle's ``pyproject.toml`` — the canonical dependency declaration.
+
+    With this the bundle is an ordinary uv project: ``uv sync --project <bundle>``
+    provisions ``.venv`` (fetching a matching CPython if the host has none), which
+    is exactly what the scheduler installer does.  ``requirements.txt`` stays
+    alongside it for anyone driving the bundle with plain pip.
+
+    ``package = false`` because a bundle is a runnable directory, not a
+    distribution — there is nothing to build or install into the environment.
+    """
+    deps = ",\n".join(f'    "{r}"' for r in requirements)
+    return (
+        "[project]\n"
+        f'name = "{_slug(wf.name)}"\n'
+        'version = "0.0.0"\n'
+        f'description = "Generated flow bundle: {wf.name}"\n'
+        f'requires-python = ">={sys.version_info.major}.{sys.version_info.minor}"\n'
+        "dependencies = [\n"
+        f"{deps}\n"
+        "]\n"
+        "\n"
+        "[tool.uv]\n"
+        "package = false\n"
+    )
+
+
 def _render_main() -> str:
     """The bundle's ``__main__.py`` — prepend ``_vendor`` to sys.path, run main()."""
     return (
@@ -103,7 +137,7 @@ def _render_readme(wf: WorkflowDef, requirements: list[str], offline: bool) -> s
             "pip install --no-index --find-links _vendor/wheels -r requirements.txt"
         )
     else:
-        install = "pip install -r requirements.txt"
+        install = "uv sync            # or: pip install -r requirements.txt"
     return (
         f"# {wf.name} — portable workflow bundle\n"
         "\n"
@@ -116,7 +150,8 @@ def _render_readme(wf: WorkflowDef, requirements: list[str], offline: bool) -> s
         "- `workflow.py` — the generated workflow module.\n"
         "- `__main__.py` — entry point (puts `_vendor/` on `sys.path`, runs `main()`).\n"
         "- `_vendor/ai`, `_vendor/agent` — vendored package sources.\n"
-        "- `requirements.txt` — pinned third-party runtime dependencies.\n"
+        "- `pyproject.toml` — the same dependencies as a uv project (`uv sync`).\n"
+        "- `requirements.txt` — pinned third-party runtime dependencies (pip).\n"
         + ("- `_vendor/wheels/` — downloaded wheels for offline install.\n" if offline else "")
         + "\n"
         "## Run\n"
@@ -233,6 +268,7 @@ def build_bundle(
     _third_party = _THIRD_PARTY if _needs_sdk else ("jsonpath-ng",)
     requirements = [_pin(d) for d in _third_party]
     (out_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
+    (out_dir / "pyproject.toml").write_text(_render_pyproject(wf, requirements), encoding="utf-8")
 
     # 5) Optional offline wheels.
     if offline:

@@ -54,13 +54,32 @@ def _every_to_onactivesec(every: str) -> str:
     return f"{n}{_EVERY_UNIT[unit]}"
 
 
+def _step_field(field: str, *, what: str) -> str:
+    """Translate one cron time field to systemd calendar syntax.
+
+    The step forms differ and systemd rejects cron's: cron writes ``*/4`` ("every
+    4th"), systemd writes ``<start>/<step>`` — ``0/4``. Passing ``*/4`` straight
+    through produces a unit that loads as ``bad-setting``, which surfaces only when
+    someone reads ``systemctl status`` days later.
+    """
+    if field.startswith("*/"):
+        step = field[2:]
+        if not step.isdigit():
+            raise ValueError(f"cannot translate cron {what} {field!r} to systemd")
+        return f"0/{step}"
+    if "/" in field and not field.split("/", 1)[0].isdigit():
+        raise ValueError(f"cannot translate cron {what} {field!r} to systemd")
+    return field
+
+
 def cron_to_oncalendar(cron: str) -> str:
     """Translate a 5-field cron expression to a systemd ``OnCalendar`` value.
 
     cron fields: minute hour day-of-month month day-of-week.  systemd calendar is
     ``DOW YYYY-MM-DD HH:MM:SS`` — for the common subset we emit ``DOW *-MM-DD
-    HH:MM:00`` with ``*``/lists/steps passed through (systemd accepts ``*/15`` and
-    ``1,2,3`` and ranges).  Day-of-week numbers (0-6, 0=Sun) map to Mon..Sun names.
+    HH:MM:00`` with ``*``, lists and ranges passed through, and cron's ``*/N``
+    steps rewritten to systemd's ``0/N`` (see :func:`_step_field`).  Day-of-week
+    numbers (0-6, 0=Sun) map to Mon..Sun names.
 
     Raises ``ValueError`` for a construct we cannot faithfully translate, so the
     installer can fall back to a real crontab line instead of mis-scheduling.
@@ -86,7 +105,7 @@ def cron_to_oncalendar(cron: str) -> str:
             raise ValueError(f"cannot translate cron day-of-week {dow!r} to systemd") from exc
 
     date = f"*-{month}-{dom}"
-    time = f"{hour}:{minute}:00"
+    time = f"{_step_field(hour, what='hour')}:{_step_field(minute, what='minute')}:00"
     return f"{dow_out} {date} {time}".strip() if dow_out else f"{date} {time}"
 
 
