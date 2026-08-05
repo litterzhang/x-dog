@@ -1,0 +1,406 @@
+{
+  "name": "flow-release-radar",
+  "provider": "copilot",
+  "defaults": {
+    "model": "gpt-5.6-sol"
+  },
+  "entry": "collect_repo",
+  "state": {
+    "repo": "/data/workspaces/pyspace/x-dog",
+    "base_ref": "origin/main"
+  },
+  "in_schema": {
+    "repo": {
+      "type": "string"
+    },
+    "base_ref": {
+      "type": "string"
+    }
+  },
+  "max_concurrency": 4,
+  "fan_max_concurrency": 4,
+  "schedule": {
+    "mode": "timer",
+    "cron": "0 9 * * 1",
+    "inputs": {
+      "repo": "/data/workspaces/pyspace/x-dog",
+      "base_ref": "origin/main"
+    }
+  },
+  "nodes": [
+    {
+      "id": "collect_repo",
+      "type": "script",
+      "deterministic": true,
+      "inputs": [
+        {
+          "name": "repo",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "base_ref",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "code": "def collect_repo(ctx, repo, base_ref):\n    import pathlib\n    import subprocess\n\n    root = pathlib.Path(repo).expanduser().resolve()\n    if not (root / '.git').exists():\n        raise ValueError(f'not a git repository: {root}')\n\n    def git(*args):\n        proc = subprocess.run(\n            ['git', '-C', str(root), *args],\n            capture_output=True, text=True, timeout=30, check=False,\n        )\n        if proc.returncode != 0:\n            raise RuntimeError(proc.stderr.strip() or f'git {args!r} failed')\n        return proc.stdout.strip()\n\n    changed = [line for line in git('diff', '--name-only', f'{base_ref}...HEAD').splitlines() if line]\n    status = [line for line in git('status', '--short').splitlines() if line]\n    commits = [line for line in git('log', '--oneline', '-8').splitlines() if line]\n    suffixes = sorted({pathlib.Path(path).suffix.lstrip('.') for path in changed if pathlib.Path(path).suffix})\n    tests = [path for path in changed if 'test' in pathlib.Path(path).name.lower() or '/tests/' in f'/{path}']\n    docs = [path for path in changed if path.lower().endswith(('.md', '.rst')) or '/docs/' in f'/{path}']\n    return {\n        'repo': str(root),\n        'base_ref': base_ref,\n        'branch': git('branch', '--show-current'),\n        'head': git('rev-parse', '--short', 'HEAD'),\n        'changed_files': changed,\n        'working_tree': status,\n        'recent_commits': commits,\n        'languages': suffixes,\n        'changed_test_files': tests,\n        'changed_docs': docs,\n        'changed_file_count': len(changed),\n    }",
+      "outputs": [
+        {
+          "name": "snapshot",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "string"
+              },
+              "base_ref": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "head": {
+                "type": "string"
+              },
+              "changed_files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "working_tree": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recent_commits": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "languages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "changed_test_files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "changed_docs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "changed_file_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "repo",
+              "base_ref",
+              "branch",
+              "head",
+              "changed_files",
+              "working_tree",
+              "recent_commits",
+              "languages",
+              "changed_test_files",
+              "changed_docs",
+              "changed_file_count"
+            ]
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "plan_checks",
+      "type": "agent",
+      "tools": [
+        "filesystem",
+        "bash"
+      ],
+      "inputs": [
+        {
+          "name": "snapshot",
+          "schema": {
+            "type": "object"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are a senior release engineer planning a read-only review of a local Git repository. Use filesystem and bash only to inspect the repository. Never modify files, install dependencies, commit, push, or run destructive commands. Choose a small set of high-value review dimensions tailored to the actual changed files.",
+      "prompt": "Repository snapshot:\n{{$.snapshot}}\n\nInspect the local repository when useful. Return structured fields:\n- checks: an array of 3 to 6 objects, each with name and focus strings. Include correctness and tests when relevant; add security, documentation, packaging, API compatibility, performance, or operations only when the changes justify them.\n- rationale: one sentence explaining why these checks cover the release risk.",
+      "outputs": [
+        {
+          "name": "checks",
+          "schema": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "focus": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "focus"
+              ]
+            }
+          },
+          "required": true
+        },
+        {
+          "name": "rationale",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "agent",
+      "tools": [
+        "filesystem",
+        "bash"
+      ],
+      "inputs": [
+        {
+          "name": "snapshot",
+          "schema": {
+            "type": "object"
+          },
+          "required": true
+        },
+        {
+          "name": "check",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "focus": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "focus"
+            ]
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are a read-only code auditor. Use filesystem and bash to inspect the local repository and Git diff. Never edit files, install packages, commit, push, or run destructive commands. Report one highest-value finding for the assigned dimension; use severity 'none' when no concrete issue survives verification.",
+      "prompt": "Repository snapshot:\n{{$.snapshot}}\n\nAssigned audit check:\n{{$.check}}\n\nReturn one finding object with fields:\n- category: the assigned check name\n- severity: one of none, low, medium, high, critical\n- summary: concise statement\n- evidence: concrete file:line references or command evidence; empty only for severity none\n- recommendation: actionable correction; empty only for severity none",
+      "outputs": [
+        {
+          "name": "finding",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "recommendation": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "category",
+              "severity",
+              "summary",
+              "evidence",
+              "recommendation"
+            ]
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "score_risk",
+      "type": "script",
+      "deterministic": true,
+      "inputs": [
+        {
+          "name": "findings",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "required": true
+        }
+      ],
+      "code": "def score_risk(ctx, findings):\n    weights = {'none': 0, 'low': 2, 'medium': 8, 'high': 20, 'critical': 40}\n    counts = {key: 0 for key in weights}\n    score = 0\n    actionable = []\n    for finding in findings:\n        severity = str(finding.get('severity', 'none')).lower()\n        severity = severity if severity in weights else 'medium'\n        counts[severity] += 1\n        score += weights[severity]\n        if severity != 'none':\n            actionable.append(finding)\n    status = 'blocked' if counts['critical'] or score >= 40 else ('review' if score >= 15 else 'ready')\n    return {\n        'score': score,\n        'status': status,\n        'counts': counts,\n        'actionable_count': len(actionable),\n        'release_allowed': status == 'ready',\n    }",
+      "outputs": [
+        {
+          "name": "risk",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "score": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "review",
+                  "blocked"
+                ]
+              },
+              "counts": {
+                "type": "object"
+              },
+              "actionable_count": {
+                "type": "integer"
+              },
+              "release_allowed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "score",
+              "status",
+              "counts",
+              "actionable_count",
+              "release_allowed"
+            ]
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "type": "subflow",
+      "subflow": "./release_report.json"
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "collect_repo",
+      "map": {
+        "repo": "repo",
+        "base_ref": "base_ref"
+      }
+    },
+    {
+      "from": "collect_repo",
+      "to": "plan_checks",
+      "map": {
+        "snapshot": "snapshot"
+      }
+    },
+    {
+      "from": "plan_checks",
+      "to": "audit",
+      "fan_out": "checks",
+      "map": {
+        "checks": "check"
+      }
+    },
+    {
+      "from": "collect_repo",
+      "to": "audit",
+      "map": {
+        "snapshot": "snapshot"
+      }
+    },
+    {
+      "from": "audit",
+      "to": "score_risk",
+      "fan_in": "list",
+      "map": {
+        "finding": "findings"
+      }
+    },
+    {
+      "from": "collect_repo",
+      "to": "report",
+      "map": {
+        "snapshot": "snapshot"
+      }
+    },
+    {
+      "from": "audit",
+      "to": "report",
+      "fan_in": "list",
+      "map": {
+        "finding": "findings"
+      }
+    },
+    {
+      "from": "score_risk",
+      "to": "report",
+      "map": {
+        "risk": "risk"
+      }
+    },
+    {
+      "from": "audit",
+      "to": "$output",
+      "fan_in": "list",
+      "map": {
+        "finding": "findings"
+      }
+    },
+    {
+      "from": "score_risk",
+      "to": "$output",
+      "map": {
+        "risk": "risk"
+      }
+    },
+    {
+      "from": "report",
+      "to": "$output",
+      "map": {
+        "final_report": "report",
+        "quality_score": "quality_score",
+        "report_feedback": "report_feedback"
+      }
+    }
+  ]
+}

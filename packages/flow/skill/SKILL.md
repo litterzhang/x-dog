@@ -155,5 +155,9 @@ In `examples/`:
   a path reference; structured output across the boundary.
 - `trip_planner.json` — typed multi-agent pipeline with JSONPath sub-field mapping.
 - `agent_calculator.json` — an agent node with a tool; `refine_loop.json` — a loop.
+- `release_readiness.json` + `release_report.json` — a substantial local-repository
+  demo: SDK agents with filesystem/bash tools, dynamic fan-out audits,
+  deterministic risk scoring, a report subflow, bounded review loop, and weekly
+  scheduling.
 
 Read the closest example, copy its shape, and adapt.

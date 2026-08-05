@@ -1,0 +1,217 @@
+{
+  "name": "release-readiness-report",
+  "provider": "copilot",
+  "defaults": {
+    "model": "gpt-5.6-sol"
+  },
+  "entry": "compose",
+  "state": {
+    "snapshot": {},
+    "findings": [],
+    "risk": {}
+  },
+  "in_schema": {
+    "snapshot": {
+      "type": "object"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "risk": {
+      "type": "object"
+    }
+  },
+  "nodes": [
+    {
+      "id": "compose",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "snapshot",
+          "schema": {
+            "type": "object"
+          },
+          "required": true
+        },
+        {
+          "name": "findings",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "required": true
+        },
+        {
+          "name": "risk",
+          "schema": {
+            "type": "object"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are a release manager. Produce a concise, evidence-based Markdown release-readiness report for developers. Do not invent findings. Prioritize actionable blockers and preserve exact file references from the findings.",
+      "prompt": "Repository snapshot:\n{{$.snapshot}}\n\nDeterministic risk assessment:\n{{$.risk}}\n\nAuditor findings:\n{{$.findings}}\n\nWrite a Markdown report with these sections: Decision, Executive Summary, Blocking Findings, Other Findings, Required Actions, and Evidence. Keep it under 900 words. Reply with ONLY the report.",
+      "outputs": [
+        "draft_report"
+      ]
+    },
+    {
+      "id": "critique",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "risk",
+          "schema": {
+            "type": "object"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You are a strict release-report reviewer. Judge whether a report is faithful to the supplied risk object, cites concrete evidence, makes a clear release decision, and provides actionable next steps.",
+      "prompt": "Risk assessment:\n{{$.risk}}\n\nReport to review:\n{{$.report}}\n\nReturn structured fields:\n- report: copy the reviewed report exactly\n- quality_score: number from 0 to 10\n- feedback: one concise paragraph naming the most important corrections. Use 'No changes needed.' when quality_score is at least 8.",
+      "outputs": [
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "quality_score",
+          "schema": {
+            "type": "number"
+          },
+          "required": true
+        },
+        {
+          "name": "feedback",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "revise",
+      "type": "agent",
+      "inputs": [
+        {
+          "name": "draft_report",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "feedback",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        }
+      ],
+      "system_prompt": "You revise release-readiness reports. Apply only the requested corrections, preserve verified evidence, and keep the report concise.",
+      "prompt": "Original report:\n{{$.draft_report}}\n\nReviewer feedback:\n{{$.feedback}}\n\nReturn structured fields:\n- revised_report: the complete corrected Markdown report\n- continue_review: true",
+      "outputs": [
+        {
+          "name": "revised_report",
+          "schema": {
+            "type": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "continue_review",
+          "schema": {
+            "type": "boolean"
+          },
+          "required": true
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "compose",
+      "map": {
+        "snapshot": "snapshot",
+        "findings": "findings",
+        "risk": "risk"
+      }
+    },
+    {
+      "from": "$in",
+      "to": "critique",
+      "map": {
+        "risk": "risk"
+      }
+    },
+    {
+      "from": "compose",
+      "to": "critique",
+      "map": {
+        "draft_report": "report"
+      }
+    },
+    {
+      "from": "compose",
+      "to": "revise",
+      "map": {
+        "draft_report": "draft_report"
+      }
+    },
+    {
+      "from": "critique",
+      "to": "revise",
+      "when": {
+        "lt": {
+          "value": "{{$.quality_score}}",
+          "text": "8"
+        }
+      },
+      "map": {
+        "feedback": "feedback"
+      }
+    },
+    {
+      "from": "revise",
+      "to": "critique",
+      "when": {
+        "equals": {
+          "value": "{{$.continue_review}}",
+          "text": "true"
+        }
+      },
+      "loop": {
+        "max": 2
+      },
+      "map": {
+        "revised_report": "report"
+      }
+    },
+    {
+      "from": "critique",
+      "to": "$output",
+      "map": {
+        "report": "final_report",
+        "quality_score": "quality_score",
+        "feedback": "report_feedback"
+      }
+    }
+  ]
+}

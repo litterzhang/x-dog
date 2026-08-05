@@ -428,6 +428,9 @@ The checked-in examples are executable and mirrored into `skill/examples/`:
 - `essay_writer.json` / `essay_compose.json` — opaque subflow composition.
 - `cli_triage.json` — coding-agent CLI backend.
 - `digest_timer.json` / `triage_hook.json` — timer and hook scheduling.
+- `release_readiness.json` / `release_report.json` — SDK-agent release radar for
+  this local repository, with filesystem/bash tools, dynamic fan-out, deterministic
+  scoring, a report subflow, review loop, and weekly scheduling.
 
 ```bash
 xdog-flow validate examples/refine_loop.json

@@ -62,6 +62,12 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["run"] = node.run
     if node.code is not None:
         data["code"] = node.code
+    if node.retry is not None:
+        data["retry"] = {"max": node.retry.max, "backoff": node.retry.backoff}
+    if node.on_error != "fail":
+        data["on_error"] = node.on_error
+    if node.deterministic:
+        data["deterministic"] = True
     if node.type == "subflow":
         # A subflow node carries its INLINE child; its ports are DERIVED on re-parse,
         # so they are NOT emitted (re-declaring them would fail validation).

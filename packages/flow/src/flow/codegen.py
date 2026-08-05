@@ -539,7 +539,8 @@ def _rename_inline_fn(code: str, alias: str) -> str:
         if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
             stmt.name = alias
             break
-    return ast.unparse(tree)
+    source = ast.unparse(tree)
+    return "\n".join(line if len(line) <= 120 else line + "  # noqa: E501" for line in source.splitlines())
 
 
 def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
@@ -813,12 +814,10 @@ def _render_concurrency_boilerplate(wf: WorkflowDef) -> str:
     cap = wf.max_concurrency
     lines = [
         "",
-        "from collections.abc import Awaitable as _Awaitable",
-        "",
         f"_SEM: asyncio.Semaphore | None = asyncio.Semaphore({cap})",
         "",
         "",
-        "async def _capped(coro: \"_Awaitable[None]\") -> None:",
+        "async def _capped(coro: \"Awaitable[None]\") -> None:",
         "    if _SEM is None:",
         "        await coro",
         "    else:",
