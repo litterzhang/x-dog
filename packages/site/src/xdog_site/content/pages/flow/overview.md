@@ -48,6 +48,7 @@ inspect, schedule, and maintain:
 - Standalone, Ruff-clean Python code generation
 - Interactive TUI builder plus ASCII, Mermaid, Graphviz SVG, and embedded SVG docs
 - Timer and event-hook scheduling through `xdog-flow scheduling`
+- Companion `*.test.json` suites via `xdog-flow test` — stub the model, run the graph
 
 ## Flagship demo — Flow Release Radar
 

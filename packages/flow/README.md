@@ -163,6 +163,24 @@ xdog-flow run examples/refine_loop.json --provider anthropic
 xdog-flow run examples/refine_loop.json --dry-run
 ```
 
+### test
+
+Run a workflow's companion `<name>.test.json` suite. Only the boundaries a test
+cannot reason about are stubbed — agent turns, human signals, whole subflow nodes
+(and script nodes behind `--allow-script-stub`). Edges, conditions, loops, fan-out,
+coercion and `$output` collection all run for real, because those are what the test
+is for.
+
+```bash
+xdog-flow test examples/release_readiness.json --allow-script-stub
+xdog-flow test examples/                      # every *.test.json under a directory
+```
+
+Stubs are injected at the provider call, so prompts are still interpolated for real
+and a stubbed value is validated by the node's own output contract — the same code
+that validates a live model response. No provider is ever constructed, so a suite
+cannot reach the network by accident. See `docs/testing.md`.
+
 ### generate
 
 Compile the workflow to a self-contained Python module.
@@ -431,6 +449,9 @@ The checked-in examples are executable and mirrored into `skill/examples/`:
 - `release_readiness.json` / `release_report.json` — SDK-agent release radar for
   this local repository, with filesystem/bash tools, dynamic fan-out, deterministic
   scoring, a report subflow, review loop, and weekly scheduling.
+- `release_readiness.test.json` / `release_report.test.json` — their test suites:
+  fan-out stubs selected by input value, a loop pinned to its `loop.max` bound, and
+  a whole subflow stubbed out.
 
 ```bash
 xdog-flow validate examples/refine_loop.json
@@ -438,4 +459,5 @@ xdog-flow run examples/refine_loop.json --dry-run
 xdog-flow graph examples/refine_loop.json --mermaid
 xdog-flow generate examples/refine_loop.json -o workflow.py
 python workflow.py
+xdog-flow test examples/ --allow-script-stub
 ```

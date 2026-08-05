@@ -64,6 +64,14 @@ _FEATURES = (
     Feature("Runtime overrides", "The generated module honours FLOW_INPUTS (JSON merged into $in) and FLOW_PROVIDER — parity with the interpreter's --input / --provider.", "Codegen & authoring"),
     Feature("Human + Agent authoring", "xdog-flow build edits the same Git-friendly JSON that Coding Agents generate through the Flow skill; a local Web UI is the next editor surface.", "Codegen & authoring"),
     Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid; node boxes are colour-coded by type (agent/script/human/subflow).", "Codegen & authoring"),
+    # --- Testing: proving a workflow behaves ---
+    Feature("Companion test suites", "xdog-flow test runs a workflow's <name>.test.json — a workflow path, a suite, or a whole directory; exit 1 on failure drops it into a pre-commit hook or CI.", "Testing"),
+    Feature("Stub only the boundaries", "Agent turns (SDK and CLI alike), human signals, and whole subflow nodes are stubbable; script nodes need an explicit --allow-script-stub. Edges, conditions, loops, fan-out, coercion and $output collection always run for real.", "Testing"),
+    Feature("Stubs on the production path", "A stub is injected at the provider call, after prompt interpolation and before output parsing — so it is validated by the node's own required-field check and coercion, and a broken {{ $.path }} still fails.", "Testing"),
+    Feature("No accidental network", "The stub runner answers every agent node whatever its backend, and no provider is constructed in test mode; an unstubbed agent node fails loudly instead of dialling out.", "Testing"),
+    Feature("Concurrency-safe selectors", "A stub rule selects on when (deep-subset match on inputs), index (fan array position), or round (activation ordinal) — never on completion order, so a fan-out case is not flaky.", "Testing"),
+    Feature("Three-way outcome + calls", "expect takes one of success / error substring / paused-at-node, plus a deep-subset output match and a calls map that covers executed and skipped nodes, fan instances, and loop iterations in one number.", "Testing"),
+    Feature("Suite validated at load", "A stub aimed at a missing node, the wrong node type, or an undeclared output port fails before anything executes — and a selector that never fires is a failure, not a silent fall-through.", "Testing"),
 )
 
 _FEATURE_CATEGORIES = (
@@ -74,6 +82,7 @@ _FEATURE_CATEGORIES = (
     "Agents & tools",
     "Scheduling",
     "Codegen & authoring",
+    "Testing",
 )
 
 _ROADMAP = (
@@ -204,16 +213,21 @@ _ROADMAP = (
         "SDK-tool audits, dynamic fan-out, deterministic scoring, report subflow, and scheduling.",
     )),
     Phase("P10", "First-class workflow tests", (
-        "Add xdog-flow test <workflow> [--case NAME] with companion .flowtest.json files, "
-        "keeping test data separate from production workflow definitions.",
-        "Inject typed $in values, human signals, and per-node output mocks — including ordered "
-        "mock lists for fan-out workers — so tests never depend on live model wording or auth.",
-        "Assert partial/exact public output, success/failure messages, executed or skipped nodes, "
-        "fan instance counts, loop iterations, and events. Validate every mock against the node's "
-        "declared output schema before execution.",
-        "Run tests through the frontier executor first, then add an optional --compiled parity mode "
-        "that executes generated Python against the same cases.",
-    )),
+        "xdog-flow test <target> [--case NAME] runs a workflow's companion <name>.test.json "
+        "suite — a workflow file, a suite file, or a whole directory. Test data stays out of "
+        "the production workflow definition.",
+        "Stubs cover only the boundaries a test cannot reason about: agent turns (SDK and CLI "
+        "backends alike), human signals, and whole subflow nodes. Script nodes need an explicit "
+        "--allow-script-stub, because stubbing deterministic logic hides the thing under test.",
+        "Stubs are injected at the provider call, so prompt interpolation runs for real and the "
+        "stubbed value is validated by the node's own required-field check and coercion — the "
+        "same code that validates a live model response. No provider is ever constructed, so a "
+        "test cannot reach the network by accident.",
+        "Rules select deterministically under concurrency: when (deep-subset match on inputs), "
+        "index (fan array position), round (activation ordinal). Assertions are one outcome — "
+        "success, error substring, or paused-at-node — plus a deep-subset output match and a "
+        "calls map that covers executed/skipped nodes, fan instances, and loop iterations.",
+    ), done=True),
     Phase("2026", "Beyond the kernel — as a library, not a platform", (
         "Deeper host-integration examples: run a flow graph as one activity inside a "
         "durable engine (e.g. Temporal) for cross-machine scale.",

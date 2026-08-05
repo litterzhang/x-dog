@@ -115,11 +115,59 @@ xdog-flow run      workflow.json     # execute; prints success/message/output/co
 xdog-flow run      workflow.json --input key=value   # override a $in seed
 xdog-flow generate workflow.json -o out.py           # compile to a Python module
 xdog-flow graph    workflow.json     # print the ASCII diagram
+xdog-flow test     workflow.json     # run workflow.test.json (see Testing)
 xdog-flow scheduling install  workflow.json     # install a scheduled workflow (see Scheduling)
 ```
 
 Workflow: **write JSON → `validate` (fix any reported errors — they are precise) →
 `run`.** Iterate on the JSON, not on prose.
+
+## Testing — write `workflow.test.json` next to the workflow
+
+Stub only the boundaries a test cannot reason about; everything else runs for real.
+
+```json
+{
+  "cases": [
+    {
+      "name": "critical finding blocks the release",
+      "inputs": {"repo": "/fixture/repo", "base_ref": "main"},
+      "agents": {
+        "plan_checks": {"checks": [{"name": "security", "focus": "auth"}], "rationale": "..."},
+        "audit": [
+          {"when": {"check": {"name": "security"}}, "then": {"finding": {"severity": "critical"}}},
+          {"then": {"finding": {"severity": "low"}}}
+        ]
+      },
+      "subflows": {"report": {"final_report": "# Blocked", "quality_score": 9, "report_feedback": "ok"}},
+      "expect": {
+        "output": {"risk": {"status": "blocked", "release_allowed": false}},
+        "calls": {"audit": 3, "revise": 0}
+      }
+    }
+  ]
+}
+```
+
+Rules for writing one:
+
+- **Stub every agent node** — an unstubbed one fails rather than calling a model.
+  Also `signals: ["name"]` to pass a human gate, `subflows` for a whole subflow.
+  Script nodes run for real (stubbing them needs `--allow-script-stub`).
+- A stub is the node's **output ports**. Either a constant object, or a rule list
+  where the first match wins and the selector-free default comes last.
+- Selectors: `when` (deep-subset match on the node's inputs — use for fan-out),
+  `index` (fan array position), `round` (1-based activation — use for loops).
+  All are stable under concurrency.
+- `expect` takes exactly one outcome — `success` (default), `error: "<substring>"`,
+  or `paused: "<human node id>"` — plus `output` (deep subset of `$output`) and
+  `calls` (node id → invocation count; `0` asserts a branch was skipped, and a
+  fan-out node reports its instance count).
+- Objects match as subsets, arrays must be the same length, `bool` only matches
+  `bool`.
+
+Stubs are validated against the node's declared output ports, so a wrong port name
+or a missing required field fails immediately. See `docs/testing.md`.
 
 ## Scheduling (optional) — make a workflow fire on its own
 
@@ -159,5 +207,8 @@ In `examples/`:
   demo: SDK agents with filesystem/bash tools, dynamic fan-out audits,
   deterministic risk scoring, a report subflow, bounded review loop, and weekly
   scheduling.
+- `release_readiness.test.json` + `release_report.test.json` — the matching test
+  suites: fan-out stubs selected by input value, a loop pinned to its `loop.max`
+  bound, and a whole subflow stubbed out.
 
 Read the closest example, copy its shape, and adapt.

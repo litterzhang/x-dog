@@ -102,8 +102,12 @@ def test_flow_overview_renders_product_purpose_and_release_radar(client: FlaskCl
 def test_flow_reference_documents_workflow_tests(client: FlaskClient) -> None:
     body = client.get("/packages/flow/reference").get_data(as_text=True)
     assert "xdog-flow test" in body
-    assert ".flowtest.json" in body
-    assert "fan_instances" in body
+    assert ".test.json" in body
+    # The selectors are the load-bearing part of the design — they are what makes a
+    # case deterministic under fan-out concurrency, so the page must name them.
+    assert "--allow-script-stub" in body
+    for selector in ("when", "index", "round"):
+        assert f"<code>{selector}</code>" in body
 
 
 def test_flow_roadmap_includes_web_ui_and_testing(client: FlaskClient) -> None:

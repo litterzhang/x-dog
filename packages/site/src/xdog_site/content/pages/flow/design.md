@@ -114,6 +114,26 @@ node on one model and search with another). Tools beyond the built-ins are
 declared in a JSON manifest of `module:function` references, loaded at both run
 and generate time.
 
+## Testing: stub the boundary, run the graph
+
+The same seam that lets an agent node choose an SDK or CLI backend is where a test
+stub goes. A companion `<name>.test.json` installs a stub runner for **every** agent
+node, so no provider or CLI is constructed and a suite cannot reach the network by
+accident; human signals and whole subflow nodes are stubbable the same way, and
+script nodes only behind an explicit opt-in.
+
+The placement matters more than the mechanism. The stub answers *after* prompt
+interpolation and *before* output parsing, so a stubbed value still passes through
+the node's required-field check and type coercion — it is validated by the same code
+that validates a live model response, and a typo'd `{{ $.path }}` still fails. What
+remains un-stubbed is everything a workflow test is actually for: edges, conditions,
+bounded loops, fan-out and its aggregation, mappings, retry, and `$output`
+collection.
+
+Selection never depends on completion order — a rule matches on input values, on a
+fan instance's array position, or on which activation of the node it is — so a
+fan-out case with three concurrent instances resolves identically every run.
+
 ## Human and Agent authoring
 
 The interactive terminal builder (`xdog-flow build`) edits the graph, script

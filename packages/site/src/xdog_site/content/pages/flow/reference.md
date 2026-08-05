@@ -189,75 +189,102 @@ Every subcommand accepts a `.json` workflow or a `.svg` with the JSON embedded.
 - **`xdog-flow scheduling install <config>`** — Build a portable bundle and install a timer/hook scheduler; supports `--name` and `--dry-run`.
 - **`xdog-flow scheduling list`** — List locally installed scheduled workflows.
 - **`xdog-flow scheduling uninstall <name>`** — Remove units, bundle, and registry entry; supports `--dry-run`.
+- **`xdog-flow test <target>`** — Run a workflow's companion `*.test.json` suite. Accepts a workflow (finds the sibling suite), a suite file, or a directory to sweep. Exits 1 on failure.
+  - `--case NAME` — Run a single case.
+  - `--allow-script-stub` — Permit `scripts` stubs (script nodes run for real by default).
+  - `-v / --verbose` — Show the node trace for passing cases too.
 
-### Planned workflow tests — `xdog-flow test`
+### Workflow tests — `xdog-flow test`
 
-Flow will use companion test artifacts rather than embedding tests in production
-workflows:
+A workflow is a program, so it needs tests. Flow uses a companion suite rather than
+embedding tests in the production artifact:
 
 ```text
 release_readiness.json
-release_readiness.flowtest.json
+release_readiness.test.json
 ```
-
-Planned commands:
 
 ```bash
 xdog-flow test release_readiness.json
-xdog-flow test release_readiness.json --case blocked-release
+xdog-flow test examples/
+xdog-flow test release_readiness.json --case "critical finding blocks the release"
 ```
 
-A case injects `$in`, human signals, and typed node-output mocks; then asserts the
-public result plus graph behavior:
+**Only the boundaries a test cannot reason about are stubbed.** Agent turns (SDK and
+CLI backends alike), human signals, and whole subflow nodes; script nodes are opt-in
+behind `--allow-script-stub`, since stubbing deterministic logic hides the thing
+under test. Edges, conditions, loops, fan-out, fan-in aggregation, mappings, type
+coercion, retry and `$output` collection all run for real — a case cannot degrade
+into "I mocked the chain and asserted my own mocks".
+
+**Stubs are injected at the provider call, not at the node output.** Prompt
+interpolation has already run, and the stubbed value still passes through the node's
+required-field check and `to_state` coercion. So a stub is validated by the same code
+that validates a real model response, and a broken `{{$.path}}` is still broken.
+Because the stub runner answers *every* agent node, no provider or CLI is ever
+constructed — a test cannot reach the network by accident.
 
 ```json
 {
-  "workflow": "./release_readiness.json",
   "cases": [
     {
-      "name": "critical finding blocks release",
+      "name": "critical finding blocks the release",
       "inputs": {"repo": "/fixture/repo", "base_ref": "main"},
-      "mocks": {
-        "collect_repo": {"snapshot": {"changed_files": ["src/auth.py"]}},
-        "plan_checks": {
-          "checks": [{"name": "security", "focus": "auth"}],
-          "rationale": "security-sensitive change"
-        },
+      "agents": {
+        "plan_checks": {"checks": [{"name": "security", "focus": "auth"}], "rationale": "..."},
         "audit": [
-          {
-            "finding": {
-              "category": "security",
-              "severity": "critical",
-              "summary": "Missing authorization check",
-              "evidence": "src/auth.py:42",
-              "recommendation": "Add an authorization guard"
-            }
-          }
+          {"when": {"check": {"name": "security"}}, "then": {"finding": {"severity": "critical"}}},
+          {"then": {"finding": {"severity": "low"}}}
         ]
       },
+      "subflows": {"report": {"final_report": "# Blocked", "quality_score": 9, "report_feedback": "ok"}},
       "expect": {
-        "success": true,
         "output": {"risk": {"status": "blocked", "release_allowed": false}},
-        "executed": ["collect_repo", "plan_checks", "audit", "score_risk", "report"],
-        "fan_instances": {"audit": 1}
+        "calls": {"audit": 3, "revise": 0}
       }
     }
   ]
 }
 ```
 
-Mocks target node **outputs**, not provider text. This keeps tests independent from
-model wording while exercising mappings, conditions, fan-out, loops, scripts,
-subflows, and the final result contract. Expected assertions can cover:
+A stub is authored as the node's **output ports** — either a constant, or an ordered
+rule list where the first match wins. Three selectors, each stable under concurrency:
 
-- partial or exact `$output` values;
-- success/failure and message matching;
-- executed/skipped nodes and execution counts;
-- fan instance counts and loop iterations;
-- emitted events and human signals.
+| Selector | Means | Why it is deterministic |
+| --- | --- | --- |
+| `when` | deep-subset match on the activation's inputs | a value match, so fan-out completion order is irrelevant |
+| `index` | the instance's position in the fanned array | the source array, not arrival order |
+| `round` | which activation of the node this is, 1-based | fan instances share a round; loops are sequential |
 
-Mock outputs must validate against each node's declared output schema, so a test
-cannot bypass the workflow's typed contract.
+Use `when` for fan-out and `round` for loops — that is how a case pins down loop
+termination: score below the gate on round 1, above it on round 2.
+
+`expect` takes exactly one outcome — `success` (the default), `error: "<substring>"`,
+or `paused: "<human node id>"` — plus two partial assertions. `output` is a deep
+subset of `$output`; `calls` maps node id to invocation count and collapses four
+questions into one number:
+
+| Question | Written as |
+| --- | --- |
+| did this node run? | `{"report": 1}` |
+| was this branch skipped? | `{"revise": 0}` |
+| how many fan instances? | `{"audit": 3}` |
+| how many loop iterations? | `{"critique": 2}` |
+
+Objects match as subsets, arrays must be the same length, and `bool` only matches
+`bool`. On failure only the deepest differing path is printed, with a trace marking
+each node `stub` or `ran`. Two further failures are about the suite rather than the
+workflow: no rule matched a call (the activation's inputs are printed), and a
+selector that never fired (a stale `round: 3` against a two-iteration loop).
+
+Authoring mistakes are caught at load time — a stub aimed at a missing node, at the
+wrong node type, or setting an undeclared output port never reaches execution.
+
+Nodes *inside* a subflow are deliberately not stubbable: a child workflow carries its
+own `.test.json`, so the parent asserts the composition and the child asserts its own
+internals. `xdog-flow test` runs the interpreter only — `interpret == compile` is
+flow's own invariant, guarded by flow's own suite, and binding your cases to codegen
+output would couple them to something they should not know about.
 
 ### CLI agent nodes
 

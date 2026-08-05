@@ -136,6 +136,43 @@ uv run xdog-flow scheduling install packages/flow/examples/release_readiness.jso
 The workflow defaults to `/data/workspaces/pyspace/x-dog`, but `repo` and
 `base_ref` are ordinary `$in` values and can be overridden per run.
 
+### Its test suite
+
+`release_readiness.test.json` sits beside it and covers the graph without calling a
+model. Agent turns are stubbed by output port, the `report` subflow is stubbed
+whole — it has its own `release_report.test.json` — and `score_risk` runs for real,
+because the risk policy is exactly what the case is asserting.
+
+```json
+{
+  "cases": [
+    {
+      "name": "critical finding blocks the release",
+      "agents": {
+        "audit": [
+          {"when": {"check": {"name": "security"}}, "then": {"finding": {"severity": "critical"}}},
+          {"then": {"finding": {"severity": "low"}}}
+        ]
+      },
+      "expect": {
+        "output": {"risk": {"status": "blocked", "release_allowed": false}},
+        "calls": {"audit": 3, "revise": 0}
+      }
+    }
+  ]
+}
+```
+
+```bash
+uv run xdog-flow test packages/flow/examples/ --allow-script-stub
+```
+
+`release_report.test.json` pins the review loop from the other side: one case scores
+below the gate then above it, another passes on the first read so `revise` never
+runs, and a third never satisfies the reviewer so the loop stops at its `loop.max`
+bound. Writing that third case is what surfaced a real bug in the example — an
+unconditional `compose → revise` edge that let the quality gate be bypassed.
+
 ## Other shipped patterns
 
 - `trip_planner.json` — structured Agent outputs and JSONPath sub-field mappings.
