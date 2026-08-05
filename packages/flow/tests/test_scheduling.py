@@ -12,12 +12,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import flow.scheduler.install as install_mod
 import pytest
 from flow.builder.serialize import workflow_to_dict
 from flow.errors import WorkflowValidationError
 from flow.loader import parse_workflow, validate_workflow
 from flow.models import ScheduleDef
-import flow.scheduler.install as install_mod
 from flow.scheduler.install import Installer
 from flow.scheduler.systemd import (
     cron_to_oncalendar,
