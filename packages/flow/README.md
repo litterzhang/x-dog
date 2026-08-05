@@ -503,6 +503,8 @@ xdog-flow test examples/ --allow-script-stub
 
 ## Licence
 
+Copyright (c) 2026 HugeMan <942295.xyz>
+
 flow is licensed under the **GNU Affero General Public License v3.0 or later**
 (see [LICENSE](../../LICENSE)).
 

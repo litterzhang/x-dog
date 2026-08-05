@@ -77,4 +77,15 @@ mypy src/ --strict
 
 ## License
 
-MIT
+Copyright (c) 2026 HugeMan <942295.xyz>
+
+Licensed under the **GNU Affero General Public License v3.0 or later** — see
+[LICENSE](LICENSE). Fork it or offer it as a service, and share your changes.
+
+**What flow compiles for you is yours.** `xdog-flow generate` copies parts of
+flow's own runtime into its output, so the AGPL would otherwise follow them into
+every compiled workflow. The [flow Generated Output Exception](LICENSE-EXCEPTION.md)
+— an Additional Permission under AGPL section 7, modelled on the GCC Runtime
+Library Exception — lets you convey generated modules, portable bundles,
+scheduling units and workflow definitions under any terms, including proprietary
+and commercial ones.

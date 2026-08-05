@@ -7,6 +7,7 @@ name = "agent"
 version = "0.57.1"
 description = "Agent runtime with tool calling and state management"
 requires-python = ">=3.12"
+authors = [{ name = "HugeMan" }]
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [

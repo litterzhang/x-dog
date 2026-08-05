@@ -1,5 +1,7 @@
 # flow Generated Output Exception, version 1.0
 
+Copyright (c) 2026 HugeMan <942295.xyz>
+
 This is an Additional Permission under section 7 of the GNU Affero General
 Public License, version 3 (the "AGPL"), granted by the copyright holders of
 flow. It applies in addition to, and not in place of, the AGPL.

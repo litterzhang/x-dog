@@ -7,6 +7,7 @@ name = "tui"
 version = "0.57.1"
 description = "Terminal UI library with differential rendering"
 requires-python = ">=3.12"
+authors = [{ name = "HugeMan" }]
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
