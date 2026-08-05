@@ -7,7 +7,8 @@ name = "tui"
 version = "0.57.1"
 description = "Terminal UI library with differential rendering"
 requires-python = ">=3.12"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
     "wcwidth>=0.2.0",
 ]

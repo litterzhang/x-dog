@@ -475,3 +475,21 @@ xdog-flow generate examples/refine_loop.json -o workflow.py
 python workflow.py
 xdog-flow test examples/ --allow-script-stub
 ```
+
+---
+
+## Licence
+
+flow is licensed under the **GNU Affero General Public License v3.0 or later**
+(see [LICENSE](../../LICENSE)).
+
+**Workflows you compile with it are not.** `xdog-flow generate` inlines parts of
+flow's own runtime into its output, so without an explicit carve-out the AGPL
+would follow those copied portions into every compiled workflow. The
+[flow Generated Output Exception](../../LICENSE-EXCEPTION.md) grants you the
+right to convey generated modules, portable bundles, scheduling units and
+workflow definitions under terms of your choice, including proprietary and
+commercial ones.
+
+In short: **use it, and what it produces is yours; fork it or offer it as a
+service, and share your changes.**

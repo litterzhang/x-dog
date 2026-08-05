@@ -7,7 +7,8 @@ name = "coding"
 version = "0.57.1"
 description = "Interactive coding agent CLI"
 requires-python = ">=3.12"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
     "ai",
     "agent",

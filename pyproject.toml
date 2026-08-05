@@ -7,7 +7,8 @@ name = "x-dog"
 version = "0.57.1"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 requires-python = ">=3.12"
 authors = [
     { name = "Mario Zechner" },

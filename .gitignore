@@ -49,3 +49,6 @@ env/
 data/
 result.txt
 plan.txt
+
+# Claude Code session state and agent worktrees — never publish these.
+.claude/
