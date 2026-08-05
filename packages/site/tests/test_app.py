@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
@@ -469,3 +471,41 @@ def test_havefun_status_includes_execution_log() -> None:
     assert job.log
     assert any(line.startswith("▶ draft") for line in job.log)
     assert any(line.startswith("✓ draft") for line in job.log)
+
+
+def test_robots_txt_points_at_the_sitemap(client: FlaskClient) -> None:
+    resp = client.get("/robots.txt")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/plain"
+    body = resp.get_data(as_text=True)
+    assert "User-agent: *" in body
+    assert "Sitemap: https://xdog.942295.xyz/sitemap.xml" in body
+    # the job-status poll is a GET with unbounded cardinality; crawlers must skip it
+    assert "Disallow: /havefun/*/status/" in body
+
+
+def test_sitemap_lists_only_urls_that_actually_resolve(client: FlaskClient) -> None:
+    """A sitemap advertising 404s is worse than no sitemap at all."""
+    resp = client.get("/sitemap.xml")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/xml"
+    locs = re.findall(r"<loc>([^<]+)</loc>", resp.get_data(as_text=True))
+    assert len(locs) > 20, locs
+    broken = [
+        (path, code)
+        for path in (loc.replace("https://xdog.942295.xyz", "") for loc in locs)
+        if (code := client.get(path).status_code) != 200
+    ]
+    assert not broken, broken
+
+
+def test_sitemap_tracks_the_registries_it_is_built_from(client: FlaskClient) -> None:
+    """Adding a package or a post must not need anyone to remember the sitemap."""
+    from xdog_site.content.blog import get_articles
+    from xdog_site.content.packages import PACKAGES
+
+    body = client.get("/sitemap.xml").get_data(as_text=True)
+    for package in PACKAGES:
+        assert f"<loc>https://xdog.942295.xyz/packages/{package.name}</loc>" in body
+    for article in get_articles():
+        assert f"/blog/{article.slug}</loc>" in body
