@@ -77,7 +77,15 @@
         {% endfor %}
       </ul>
     </li>
-    <li><a href="{{ url_for('main.havefun', name='flow') }}">HaveFun</a></li>
+    <li>
+      HaveFun
+      <ul style="margin:0">
+        <input type="checkbox" />
+        {% for name in havefun_packages() %}
+        <li><a href="{{ url_for('main.havefun', name=name) }}">{{ name }}</a></li>
+        {% endfor %}
+      </ul>
+    </li>
     <li><a href="{{ url_for('blog.blog_index') }}">Blog</a></li>
     <li><a href="{{ url_for('main.faq') }}">FAQ</a></li>
   </ul>

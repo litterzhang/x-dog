@@ -44,6 +44,17 @@ def create_app() -> Flask:
                 pass
         return url
 
+    @app.template_global()
+    def havefun_packages() -> tuple[str, ...]:
+        """Packages with a runnable HaveFun page, for the nav's HaveFun section.
+
+        Read from the route's own allowlist so a nav child can never point at a
+        name that would 404.
+        """
+        from xdog_site.blueprints.main import HAVEFUN_PACKAGES
+
+        return HAVEFUN_PACKAGES
+
     @app.errorhandler(404)
     def not_found(_e: object) -> tuple[str, int]:
         return render_template("errors/404.html"), 404

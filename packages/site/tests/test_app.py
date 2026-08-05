@@ -293,6 +293,23 @@ def test_havefun_page_ok(client: FlaskClient) -> None:
     assert "agent_calculator" in body  # the example option
 
 
+def test_havefun_nav_is_a_collapsible_section_over_its_packages(client: FlaskClient) -> None:
+    """HaveFun nests its runnable packages, matching the Packages section's shape.
+
+    The children are rendered from the route's own allowlist, so a nav link cannot
+    drift into pointing at a name that would 404.
+    """
+    from xdog_site.blueprints.main import HAVEFUN_PACKAGES
+
+    body = client.get("/").get_data(as_text=True)
+    nav = body.split('<ul class="nav">', 1)[1]
+    section = nav.split("HaveFun", 1)[1].split("</li>", 1)[0]
+    assert "<input type=\"checkbox\" />" in section  # collapsible, like Packages
+    for name in HAVEFUN_PACKAGES:
+        assert f'<a href="/havefun/{name}">{name}</a>' in section
+        assert client.get(f"/havefun/{name}").status_code == 200
+
+
 def test_old_flow_havefun_url_gone(client: FlaskClient) -> None:
     # HaveFun moved to a per-package route /havefun/<name>; old + un-named URLs are gone.
     assert client.get("/packages/flow/havefun").status_code == 404

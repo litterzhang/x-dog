@@ -53,12 +53,14 @@ def packages() -> str:
 _HAVEFUN_STEMS: tuple[str, ...] = ("agent_calculator", "refine_loop")
 
 # Packages that expose a runnable HaveFun page. Today only flow ships workflows.
-_HAVEFUN_PACKAGES: tuple[str, ...] = ("flow",)
+# The nav renders its HaveFun children from this same tuple (see app.template_global),
+# so a link can never point at a name the route would 404.
+HAVEFUN_PACKAGES: tuple[str, ...] = ("flow",)
 
 
 @bp.route("/havefun/<name>")
 def havefun(name: str) -> str:
-    if name not in _HAVEFUN_PACKAGES:
+    if name not in HAVEFUN_PACKAGES:
         abort(404)
     return render_template("havefun.html", name=name, example_stems=list(_HAVEFUN_STEMS))
 
@@ -100,7 +102,7 @@ def _load_workflow_from_request(data: dict[str, Any]) -> tuple[Any, Path | None,
 
 @bp.route("/havefun/<name>/load", methods=["POST"])
 def havefun_load(name: str) -> Any:
-    if name not in _HAVEFUN_PACKAGES:
+    if name not in HAVEFUN_PACKAGES:
         abort(404)
     from flow.graph import to_ascii_diagram, to_svg
 
@@ -119,7 +121,7 @@ def havefun_load(name: str) -> Any:
 
 @bp.route("/havefun/<name>/run", methods=["POST"])
 def havefun_run(name: str) -> Any:
-    if name not in _HAVEFUN_PACKAGES:
+    if name not in HAVEFUN_PACKAGES:
         abort(404)
     from xdog_site.jobs import runner
 
@@ -154,7 +156,7 @@ def havefun_run(name: str) -> Any:
 
 @bp.route("/havefun/<name>/status/<job_id>")
 def havefun_status(name: str, job_id: str) -> Any:
-    if name not in _HAVEFUN_PACKAGES:
+    if name not in HAVEFUN_PACKAGES:
         abort(404)
     from xdog_site.jobs import runner
 
