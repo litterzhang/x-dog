@@ -41,6 +41,12 @@ class RenderedUnits:
 
 _EVERY_UNIT = {"s": "s", "m": "min", "h": "h", "d": "d"}
 
+# A Type=oneshot unit with no explicit bound inherits systemd's
+# DefaultTimeoutStartSec — 90s on most distributions — which would kill any
+# workflow that talks to a model. Bound every scheduled run generously by
+# default; a workflow tunes it with schedule.timeout.
+DEFAULT_SCHEDULE_TIMEOUT = "1h"
+
 
 def _every_to_onactivesec(every: str) -> str:
     """'15m' -> '15min', '2h' -> '2h', '30s' -> '30s', '1d' -> '1d'."""
@@ -104,6 +110,7 @@ def render_timer_units(
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
+        f"TimeoutStartSec={_every_to_onactivesec(schedule.timeout or DEFAULT_SCHEDULE_TIMEOUT)}\n"
         f"Environment=FLOW_RUN_ID={name}\n"
         f"{env_lines}"
         f"ExecStart={python} {bundle_dir}\n"
@@ -113,12 +120,18 @@ def render_timer_units(
     else:
         assert schedule.cron is not None
         on = f"OnCalendar={cron_to_oncalendar(schedule.cron)}\n"
+    jitter = (
+        f"RandomizedDelaySec={_every_to_onactivesec(schedule.jitter)}\n"
+        if schedule.jitter is not None
+        else ""
+    )
     timer = (
         "[Unit]\n"
         f"Description=timer for flow workflow: {name}\n"
         "\n"
         "[Timer]\n"
         f"{on}"
+        f"{jitter}"
         "Persistent=true\n"
         "\n"
         "[Install]\n"

@@ -54,6 +54,8 @@ etc. — a `WorkflowDef` field, parsed + validated + round-tripped):
     "every": "15m",                  // "30s"/"15m"/"2h"/"1d", OR:
     "cron":  "*/15 * * * *",         //   a 5-field cron expression (mutually exclusive)
     "inputs": { "report": "..." },   // optional fixed $in for each firing
+    "timeout": "40m",                // bound on ONE firing (default "1h")
+    "jitter":  "15m",                // spread firings across a window (timer only)
     // --- hook mode ---
     "signal": "new-ticket",          // the signal delivered on each event
     "listen": { "type": "http", "path": "/hooks/triage", "port": 8787 }
@@ -66,6 +68,12 @@ etc. — a `WorkflowDef` field, parsed + validated + round-tripped):
   rejects both/neither); `hook` uses `signal` + a `listen` transport.
 - `inputs` is optional per-firing seed data (env `FLOW_INPUTS`); secrets follow the
   `${ENV_VAR}` rule (never inline a token — resolved at fire time).
+- `timeout` bounds one firing. It is **not** a nicety: a `Type=oneshot` unit
+  inherits systemd's `DefaultTimeoutStartSec` — 90 seconds on most distributions —
+  which would kill essentially any workflow that talks to a model. The installer
+  therefore always writes an explicit `TimeoutStartSec`, defaulting to `1h`.
+- `jitter` spreads firings across a window (`RandomizedDelaySec`), so several
+  workflows sharing an hour boundary do not all start at the same instant.
 
 The block is **declarative config for the installer**, not something the engine
 reads at run time — the engine still just runs once per invocation.
@@ -130,6 +138,14 @@ Environment=FLOW_CHECKPOINT_DIR=%S/xdog-flow/cli-triage/ckpt
 ExecStart=/usr/bin/python3 /home/user/.local/share/xdog-flow/cli-triage
 ```
 
+The bundle carries the workflow's own directory with it: a `run: "module:func"`
+script node compiles to a real import, which the interpreter satisfies by putting
+the workflow's directory on `sys.path`. A unit runs from somewhere else entirely,
+so `xdog-flow scheduling install` copies the workflow's sibling `*.py` modules into
+the bundle — the whole set, because those modules routinely reach for peers flow
+cannot see (a helper import, or a subprocess spawned as
+`Path(__file__).parent / "other.py"`).
+
 `<name>.timer` (the schedule):
 ```ini
 [Unit]
@@ -138,6 +154,7 @@ Description=timer for flow workflow: cli-triage
 [Timer]
 # from "every": OnUnitActiveSec=15min ; from "cron": OnCalendar=*/15 * * * *
 OnCalendar=*/15 * * * *
+RandomizedDelaySec=15min        # only when "jitter" is set
 Persistent=true                 # catch up a missed firing after downtime
 
 [Install]

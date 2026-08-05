@@ -163,11 +163,42 @@ def _download_wheels(requirements: list[str], wheels_dir: Path) -> None:
     )
 
 
-def build_bundle(wf: WorkflowDef, out_dir: Path, *, offline: bool = False) -> Path:
+def _copy_workflow_modules(wf: WorkflowDef, base_dir: Path, out_dir: Path) -> list[str]:
+    """Copy the workflow directory's own ``*.py`` modules into the bundle root.
+
+    A ``run: "module:func"`` script node compiles to a real import
+    (``from module import func``), and the interpreter satisfies it by putting the
+    workflow's own directory on ``sys.path``.  A bundle runs from somewhere else
+    entirely, so it has to carry that directory with it or the generated module
+    fails at import time.
+
+    Copying the whole sibling set rather than just the named modules is
+    deliberate: those modules routinely reach for peers that flow cannot see —
+    a helper import, or a subprocess spawned as ``Path(__file__).parent /
+    "other.py"`` — and a bundle missing one of them breaks only at run time, on a
+    timer, at 4am.
+    """
+    if not any(n.type == "script" and n.run for n in wf.nodes) and not wf.tool_refs:
+        return []
+    copied: list[str] = []
+    for path in sorted(base_dir.glob("*.py")):
+        if path.name == "workflow.py":  # never shadow the generated module
+            continue
+        shutil.copy2(path, out_dir / path.name)
+        copied.append(path.name)
+    return copied
+
+
+def build_bundle(
+    wf: WorkflowDef, out_dir: Path, *, base_dir: Path | None = None, offline: bool = False
+) -> Path:
     """Write a self-contained bundle for *wf* into *out_dir*; return *out_dir*.
 
     Overwrites *out_dir* if it exists. With *offline* the third-party wheels are
-    downloaded into ``_vendor/wheels/`` for a no-network install.
+    downloaded into ``_vendor/wheels/`` for a no-network install.  *base_dir* is
+    the workflow file's own directory; its ``*.py`` modules travel with the bundle
+    so ``run:`` script references still resolve (see
+    :func:`_copy_workflow_modules`).
     """
     out_dir = out_dir.resolve()
     if out_dir.exists():
@@ -177,6 +208,10 @@ def build_bundle(wf: WorkflowDef, out_dir: Path, *, offline: bool = False) -> Pa
 
     # 1) The generated workflow module.
     (out_dir / "workflow.py").write_text(generate(wf), encoding="utf-8")
+
+    # 1b) The workflow's own sibling modules, for `run:` script references.
+    if base_dir is not None:
+        _copy_workflow_modules(wf, base_dir.resolve(), out_dir)
 
     # 2) Vendored package sources.  ai/agent are vendored ONLY when the generated
     # module imports them — i.e. the workflow has an SDK agent node (or a tool

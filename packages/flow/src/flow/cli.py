@@ -189,7 +189,9 @@ def _cmd_generate(config_path: str, *, output: str | None, portable: bool = Fals
         from flow.bundle import build_bundle
 
         try:
-            out_dir = build_bundle(wf, Path(output), offline=offline)
+            out_dir = build_bundle(
+                wf, Path(output), base_dir=Path(config_path).resolve().parent, offline=offline
+            )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             print(str(exc))
             raise SystemExit(1)
@@ -298,7 +300,9 @@ def _cmd_scheduling_install(
         print(str(exc))
         raise SystemExit(1)
     try:
-        installed = _scheduling_installer().install(wf, name=name, dry_run=dry_run)
+        installed = _scheduling_installer().install(
+            wf, name=name, dry_run=dry_run, base_dir=Path(config_path).resolve().parent
+        )
     except ValueError as exc:
         print(str(exc))
         raise SystemExit(1)

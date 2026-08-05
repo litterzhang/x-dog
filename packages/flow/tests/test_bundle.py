@@ -8,6 +8,7 @@ import textwrap
 from pathlib import Path
 
 from flow.bundle import build_bundle
+from flow.loader import parse_workflow
 from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 IN = "$in"
@@ -144,3 +145,72 @@ def test_bundle_runs_without_the_flow_package(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, f"bundle failed to run:\n{result.stdout}\n{result.stderr}"
     assert "OK" in result.stdout
+
+
+def test_bundle_carries_the_workflows_own_modules(tmp_path: Path) -> None:
+    """A ``run:`` script node compiles to a real import, so its module must travel.
+
+    The interpreter satisfies ``run: "helpers:step"`` by putting the workflow's own
+    directory on sys.path; a bundle runs from somewhere else entirely, so without
+    this the generated module raises ModuleNotFoundError — on a timer, unattended.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "helpers.py").write_text(
+        "def step(ctx, n):\n    return int(n) + 1\n", encoding="utf-8"
+    )
+    # A peer that `helpers` reaches for at run time; flow cannot see this edge,
+    # which is why the whole sibling set travels rather than just named modules.
+    (src / "peer.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    wf = parse_workflow({
+        "name": "runref",
+        "entry": "step",
+        "in_schema": {"n": {"type": "integer"}},
+        "state": {"n": 1},
+        "nodes": [{
+            "id": "step",
+            "type": "script",
+            "run": "helpers:step",
+            "inputs": [{"name": "n", "schema": {"type": "integer"}, "required": True}],
+            "outputs": [{"name": "out", "schema": {"type": "integer"}, "required": True}],
+        }],
+        "edges": [
+            {"from": "$in", "to": "step", "map": {"n": "n"}},
+            {"from": "step", "to": "$output", "map": {"out": "out"}},
+        ],
+    })
+
+    out = build_bundle(wf, tmp_path / "bundle", base_dir=src)
+    assert (out / "helpers.py").exists()
+    assert (out / "peer.py").exists()
+    # The generated module imports it by name, so the copy must not be shadowed.
+    assert "from helpers import step" in (out / "workflow.py").read_text(encoding="utf-8")
+
+
+def test_inline_script_workflow_copies_nothing(tmp_path: Path) -> None:
+    """No ``run:`` reference means no external import, so no sibling sweep."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "unrelated.py").write_text("x = 1\n", encoding="utf-8")
+
+    wf = parse_workflow({
+        "name": "inline",
+        "entry": "step",
+        "in_schema": {"n": {"type": "integer"}},
+        "state": {"n": 1},
+        "nodes": [{
+            "id": "step",
+            "type": "script",
+            "code": "def step(ctx, n):\n    return int(n) + 1\n",
+            "inputs": [{"name": "n", "schema": {"type": "integer"}, "required": True}],
+            "outputs": [{"name": "out", "schema": {"type": "integer"}, "required": True}],
+        }],
+        "edges": [
+            {"from": "$in", "to": "step", "map": {"n": "n"}},
+            {"from": "step", "to": "$output", "map": {"out": "out"}},
+        ],
+    })
+
+    out = build_bundle(wf, tmp_path / "bundle", base_dir=src)
+    assert not (out / "unrelated.py").exists()

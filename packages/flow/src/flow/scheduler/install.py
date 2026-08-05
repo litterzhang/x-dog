@@ -68,15 +68,26 @@ class Installer:
         subprocess.run(cmd, check=False)
 
     # -- install -----------------------------------------------------------
-    def install(self, wf: WorkflowDef, *, name: str | None = None, dry_run: bool = False) -> str:
-        """Build the bundle + install the scheduler for *wf*; return its name."""
+    def install(
+        self,
+        wf: WorkflowDef,
+        *,
+        name: str | None = None,
+        dry_run: bool = False,
+        base_dir: Path | None = None,
+    ) -> str:
+        """Build the bundle + install the scheduler for *wf*; return its name.
+
+        *base_dir* is the workflow file's directory; it travels into the bundle so
+        ``run:`` script references still import once the unit runs from elsewhere.
+        """
         if wf.schedule is None:
             raise ValueError(f"workflow {wf.name!r} has no 'schedule' block to install")
         name = name or wf.name
         bundle_dir = (self.data_dir / name).resolve()
 
         if not dry_run:
-            build_bundle(wf, bundle_dir)
+            build_bundle(wf, bundle_dir, base_dir=base_dir)
         else:
             print(f"  would build bundle at {bundle_dir}")
 

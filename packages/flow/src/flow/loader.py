@@ -361,7 +361,14 @@ def _parse_schedule(raw: Any) -> ScheduleDef | None:
         cron = str(cron) if cron is not None else None
         if cron is not None and len(cron.split()) != 5:
             raise WorkflowValidationError(f"schedule.cron must be a 5-field cron expression, got {cron!r}")
-        return ScheduleDef(mode="timer", every=every, cron=cron, inputs=inputs)
+        return ScheduleDef(
+            mode="timer",
+            every=every,
+            cron=cron,
+            inputs=inputs,
+            timeout=_duration(raw.get("timeout"), field="schedule.timeout"),
+            jitter=_duration(raw.get("jitter"), field="schedule.jitter"),
+        )
 
     # hook
     signal = raw.get("signal")
@@ -375,11 +382,27 @@ def _parse_schedule(raw: Any) -> ScheduleDef | None:
         raise WorkflowValidationError(
             f"schedule.listen.type must be 'http', 'file', or 'socket', got {ltype!r}"
         )
-    return ScheduleDef(mode="hook", inputs=inputs, signal=signal, listen=listen)
+    return ScheduleDef(
+        mode="hook",
+        inputs=inputs,
+        signal=signal,
+        listen=listen,
+        timeout=_duration(raw.get("timeout"), field="schedule.timeout"),
+    )
 
 
-# schedule.every grammar: an integer followed by a unit (s/m/h/d).
+# schedule.every / .timeout / .jitter grammar: an integer followed by a unit (s/m/h/d).
 _EVERY_RE = re.compile(r"^\d+[smhd]$")
+
+
+def _duration(raw: Any, *, field: str) -> str | None:
+    """Validate an optional duration ('30s'/'15m'/'2h'/'1d'); None when absent."""
+    if raw is None:
+        return None
+    value = str(raw)
+    if not _EVERY_RE.match(value):
+        raise WorkflowValidationError(f"{field} must look like '30s'/'15m'/'2h'/'1d', got {value!r}")
+    return value
 
 
 def parse_workflow(

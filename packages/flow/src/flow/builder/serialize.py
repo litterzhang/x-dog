@@ -158,6 +158,10 @@ def _schedule_to_dict(sch: ScheduleDef) -> dict[str, Any]:
         out["signal"] = sch.signal
     if sch.listen is not None:
         out["listen"] = sch.listen
+    if sch.timeout is not None:
+        out["timeout"] = sch.timeout
+    if sch.jitter is not None:
+        out["jitter"] = sch.jitter
     return out
 
 

@@ -180,8 +180,11 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
     calls: list[tuple[str, object]] = []
 
     class FakeInstaller:
-        def install(self, wf: object, *, name: str | None, dry_run: bool) -> str:
-            calls.append(("install", (wf, name, dry_run)))
+        def install(
+            self, wf: object, *, name: str | None, dry_run: bool, base_dir: Path | None = None
+        ) -> str:
+            # base_dir carries the workflow's sibling modules into the bundle.
+            calls.append(("install", (wf, name, dry_run, base_dir is not None)))
             return name or "demo"
 
         def delete(self, name: str, *, dry_run: bool) -> None:
@@ -200,7 +203,7 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
     cli.main(["scheduling", "list"])
 
     assert calls == [
-        ("install", (workflow, "custom", True)),
+        ("install", (workflow, "custom", True, True)),
         ("uninstall", ("custom", True)),
         ("list", None),
     ]
@@ -438,3 +441,46 @@ def test_human_signal_roundtrips() -> None:
     rt = parse_workflow(workflow_to_dict(wf))
     assert rt == wf
     assert rt.nodes[0].signal == "go"
+
+
+# --- start timeout + jitter --------------------------------------------------
+
+
+def test_timer_service_always_bounds_its_start_timeout() -> None:
+    """A Type=oneshot unit inherits DefaultTimeoutStartSec (90s on most distros).
+
+    That would kill essentially any workflow that talks to a model, so an unset
+    schedule.timeout must still render an explicit, generous bound rather than
+    leaving the unit to inherit the default.
+    """
+    wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *"}))
+    units = render_timer_units("nightly", Path("/srv/bundle"), wf.schedule)
+    service = units.files["nightly.service"]
+    assert "TimeoutStartSec=1h" in service
+
+
+def test_schedule_timeout_and_jitter_reach_the_units() -> None:
+    wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *", "timeout": "40m", "jitter": "15m"}))
+    units = render_timer_units("enrich", Path("/srv/bundle"), wf.schedule)
+    assert "TimeoutStartSec=40min" in units.files["enrich.service"]
+    assert "RandomizedDelaySec=15min" in units.files["enrich.timer"]
+
+
+def test_jitter_is_absent_unless_asked_for() -> None:
+    wf = parse_workflow(_wf({"mode": "timer", "every": "30m"}))
+    assert "RandomizedDelaySec" not in render_timer_units("t", Path("/b"), wf.schedule).files["t.timer"]
+
+
+def test_schedule_durations_round_trip_through_the_serializer() -> None:
+    from flow.builder.serialize import workflow_to_dict
+
+    wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *", "timeout": "40m", "jitter": "15m"}))
+    sched = workflow_to_dict(wf)["schedule"]
+    assert sched["timeout"] == "40m"
+    assert sched["jitter"] == "15m"
+
+
+@pytest.mark.parametrize("bad", ["40", "40mins", "-5m", "m"])
+def test_bad_duration_is_rejected_at_load(bad: str) -> None:
+    with pytest.raises(WorkflowValidationError, match="schedule.timeout"):
+        parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *", "timeout": bad}))

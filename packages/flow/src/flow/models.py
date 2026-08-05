@@ -174,6 +174,13 @@ class ScheduleDef:
       ``listen`` transport (an opaque dict: ``{"type": "http"|"file"|"socket", ...}``).
 
     ``inputs`` is optional per-firing ``$in`` seed data (env ``FLOW_INPUTS``).
+
+    ``timeout`` bounds one firing. It is not a nicety: a ``Type=oneshot`` unit
+    inherits systemd's ``DefaultTimeoutStartSec`` (90s on most distributions),
+    which would kill essentially any agentic workflow mid-run, so a scheduled
+    workflow always gets an explicit bound (:data:`DEFAULT_SCHEDULE_TIMEOUT` when
+    unset).  ``jitter`` spreads firings across a window so several workflows
+    sharing an hour boundary do not start at the same instant.
     """
 
     mode: Literal["timer", "hook"]
@@ -182,6 +189,8 @@ class ScheduleDef:
     inputs: tuple[tuple[str, object], ...] = ()
     signal: str | None = None
     listen: dict[str, object] | None = None
+    timeout: str | None = None
+    jitter: str | None = None
 
 
 @dataclass(frozen=True)
