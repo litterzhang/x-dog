@@ -92,6 +92,26 @@ def test_static_css_served(client: FlaskClient) -> None:
     assert client.get("/static/css/site.css").status_code == 200
 
 
+def test_flow_overview_renders_product_purpose_and_release_radar(client: FlaskClient) -> None:
+    body = client.get("/packages/flow").get_data(as_text=True)
+    assert "Typed workflows for humans and Coding Agents" in body
+    assert "Flow Release Radar" in body
+    assert "release_readiness.json" in body
+
+
+def test_flow_reference_documents_workflow_tests(client: FlaskClient) -> None:
+    body = client.get("/packages/flow/reference").get_data(as_text=True)
+    assert "xdog-flow test" in body
+    assert ".flowtest.json" in body
+    assert "fan_instances" in body
+
+
+def test_flow_roadmap_includes_web_ui_and_testing(client: FlaskClient) -> None:
+    body = client.get("/packages/flow/roadmap").get_data(as_text=True)
+    assert "Human + Agent authoring surfaces" in body
+    assert "First-class workflow tests" in body
+
+
 def test_favicon_served_and_linked(client: FlaskClient) -> None:
     resp = client.get("/static/favicon.ico")
     assert resp.status_code == 200

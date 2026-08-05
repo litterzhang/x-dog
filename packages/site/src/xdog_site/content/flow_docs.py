@@ -13,7 +13,7 @@ from xdog_site.content.docs import Feature, PackageDocs, Phase
 _FEATURES = (
     # --- Modeling: how a workflow is shaped ---
     Feature("Node-private ports", "Typed inputs/outputs wired by explicit edge mappings — no shared flat state.", "Modeling"),
-    Feature("JSON Schema ports", "A port declares a JSON Schema (scalar or nested object/array); one `required` flag replaces the old optional.", "Modeling"),
+    Feature("JSON Schema ports", "A port declares a JSON Schema (scalar or nested object/array) plus one `required` flag.", "Modeling"),
     Feature("Type-native wire", "Port values are live Python (int/float/bool/list/dict), not stringified — structure flows between nodes intact.", "Modeling"),
     Feature("$in / $output nodes", "Reserved source + sink: state seeds $in; edges to $output collect the result. `entry` is optional (derived from $in).", "Modeling"),
     Feature("Conditional edges", "equals / contains / numeric gt / gte / lt / lte / and / or / not guards over a source output port.", "Modeling"),
@@ -29,11 +29,11 @@ _FEATURES = (
     Feature("Sub-field edge mapping", "An edge maps a nested field: `\"map\": {\"$.verdict.within_budget\": \"flag\"}`, type-checked against the source schema.", "Data flow"),
     Feature("Structured $in seed", "Initial state carries type-native JSON; a structured seed stays a dict/list, not a Python repr.", "Data flow"),
     # --- Execution: how a run behaves ---
-    Feature("Parallel executor", "Readiness-based fan-out/fan-in; every ready node runs concurrently via gather. Multi-entry from the $in frontier.", "Execution"),
+    Feature("Shared frontier kernel", "Interpreter and generated Python run the same completion-driven frontier scheduler: stable parallel readiness, conditional inputs, AND joins, and heterogeneous bounded-loop groups.", "Execution"),
     Feature("Dynamic fan-out", "A fan_out edge maps a node over a runtime-sized array (once per element, in parallel); a fan_in edge gathers the results into an index-ordered list.", "Execution"),
     Feature("Pure node + driver", "A node is a pure function (provider, ctx, inputs → outputs); a generic driver owns guards, retry, store, memo, budget, checkpoint.", "Execution"),
     Feature("Concurrency caps", "max_concurrency bounds how many nodes run at once; a separate fan_max_concurrency bounds instances within one fan-out (both default to unlimited).", "Execution"),
-    Feature("Runtime container", "execute() returns {ctx, stack, state, in, out, failed, memo, tokens_used}: outputs plus a per-node trace.", "Execution"),
+    Feature("Structured run result", "CLI and generated Python print one success/message/output/context envelope with workflow/run id, timing, tokens, and last node; execute() retains the detailed internal runtime container.", "Execution"),
     Feature("Structured event stream", "on_event streams NodeStarted / NodeFinished / NodeFailed with per-node duration and tokens.", "Execution"),
     Feature("Metrics aggregation", "A MetricsCollector consumes the event stream into a per-node + per-run snapshot (runs, duration, tokens, failures).", "Execution"),
     Feature("Cost budget", "execute(max_tokens=N) aborts a run with WorkflowBudgetExceeded once cumulative agent tokens pass the ceiling.", "Execution"),
@@ -41,7 +41,7 @@ _FEATURES = (
     # --- Resilience: surviving failure & long runs ---
     Feature("Per-node retry", "A RetryPolicy(max, backoff) retries a failed node before giving up (default: fail-fast). Retry lives in the driver.", "Resilience"),
     Feature("Failure isolation", "on_error:isolate records a failed branch in runtime.failed and skips only its sub-tree.", "Resilience"),
-    Feature("Checkpoint & resume", "A CheckpointStore persists progress by run id; a resumed run skips already-completed nodes.", "Resilience"),
+    Feature("Checkpoint & resume", "A CheckpointStore persists coherent frontier batches by run id; resume restores outputs, completion, loop counters, trace, memo, and token usage with at-least-once batch semantics.", "Resilience"),
     Feature("Human-in-the-loop", "A human node pauses awaiting a named signal; deliver it and resume the run to continue.", "Resilience"),
     Feature("Deterministic reuse", "deterministic:true memoises output by (node, input hash) for safe retry/resume.", "Resilience"),
     # --- Agents & tools ---
@@ -53,16 +53,16 @@ _FEATURES = (
     Feature("CLI tool allow-list", "A CLI agent node NARROWS the CLI's own toolset with allowed_tools (built-ins or mcp__server__tool); flow ships no tools. An empty list runs the tightest sandbox.", "Agents & tools"),
     Feature("Per-node MCP servers", "A CLI agent node declares mcp_servers (an opaque pass-through spec); flow generates the CLI's MCP config, with ${ENV} secret interpolation — the JSON carries the reference, never the token.", "Agents & tools"),
     # --- Scheduling: firing a workflow on its own ---
-    Feature("Active / timer scheduling", "A schedule:{mode:\"timer\"} block fires the workflow on an interval (every:\"15m\") or a cron expression; xdog-flow install writes a systemd user timer (or a crontab fallback).", "Scheduling"),
+    Feature("Active / timer scheduling", "A schedule:{mode:\"timer\"} block fires the workflow on an interval or cron expression; xdog-flow scheduling install writes a systemd user timer (or crontab fallback).", "Scheduling"),
     Feature("Passive / hook scheduling", "A schedule:{mode:\"hook\"} block fires on an external event (http/file), delivering a signal to a fresh run — reusing the human-node pause/resume primitive.", "Scheduling"),
     Feature("Shared hook listener", "All hook workflows on a host share ONE systemd-supervised listener that routes each event (http by path, file by dir) to the right bundle — no port collisions, no per-workflow daemon.", "Scheduling"),
-    Feature("Install lifecycle", "xdog-flow install builds the portable bundle + installs the scheduler; --list and --delete manage installed workflows via a JSON registry; --dry-run previews the units without touching the OS.", "Scheduling"),
+    Feature("Scheduling lifecycle", "xdog-flow scheduling install/uninstall/list manages bundles and OS units through a local registry; --dry-run previews changes without touching the OS.", "Scheduling"),
     # --- Codegen & authoring ---
     Feature("Code generation", "Compile a workflow JSON to a runnable, ruff-clean Python module that mirrors the interpreter node-for-node.", "Codegen & authoring"),
     Feature("Interpret == compile", "Interpreter and generated module agree node-for-node — enforced by a cross-engine parity suite on every feature.", "Codegen & authoring"),
     Feature("Portable bundle", "generate --portable emits a self-contained dir; ai/agent are vendored only when an SDK agent node needs them, so a pure-CLI or script-only bundle drops them (requirements trim to jsonpath-ng). --offline downloads wheels for a no-network install.", "Codegen & authoring"),
     Feature("Runtime overrides", "The generated module honours FLOW_INPUTS (JSON merged into $in) and FLOW_PROVIDER — parity with the interpreter's --input / --provider.", "Codegen & authoring"),
-    Feature("Interactive builder TUI", "xdog-flow build with Builder, Functions, and Tools pages; shows subflow nodes and the workflow's typed signature; round-trips JSON.", "Codegen & authoring"),
+    Feature("Human + Agent authoring", "xdog-flow build edits the same Git-friendly JSON that Coding Agents generate through the Flow skill; a local Web UI is the next editor surface.", "Codegen & authoring"),
     Feature("Four diagram renderers", "Text listing, layered ASCII, Graphviz SVG (with fallback), and Mermaid; node boxes are colour-coded by type (agent/script/human/subflow).", "Codegen & authoring"),
 )
 
@@ -87,9 +87,8 @@ _ROADMAP = (
     ), done=True),
     Phase("P2", "Checkpoint & resume", (
         "Done: a CheckpointStore protocol (with a JSONFileCheckpointStore) persists "
-        "a run's progress snapshot keyed by a run id; the executor saves after each "
-        "node and, on restart with the same run id, restores and skips already-"
-        "completed nodes instead of re-running them.",
+        "coherent frontier-batch snapshots keyed by run id; resume reconstructs graph "
+        "progress and skips already-committed work with batch-level at-least-once semantics.",
         "Turns long agent runs from all-or-nothing into recoverable. Codegen honours "
         "it too via FLOW_RUN_ID / FLOW_CHECKPOINT_DIR, so both run paths agree.",
         "Also implemented by the tools/autoenrich workflow itself.",
@@ -188,14 +187,33 @@ _ROADMAP = (
         "(every:\"15m\") or a cron expression (translated to a systemd OnCalendar); "
         "mode:\"hook\" fires when an external event (http/file) delivers a signal to a "
         "fresh run — reusing the human-node pause/resume primitive.",
-        "Done: xdog-flow install builds the portable bundle and installs a systemd user "
-        "timer (crontab fallback) or, for hooks, adds a route to ONE shared "
-        "systemd-supervised listener; --list / --delete manage installs via a JSON "
-        "registry; --dry-run previews the units without touching the OS.",
+        "Done: xdog-flow scheduling install builds the portable bundle and installs a "
+        "systemd user timer (crontab fallback) or shared hook-listener route; scheduling "
+        "list/uninstall manage installs through a local registry, and --dry-run previews changes.",
         "The scheduler wraps the built bundle — every firing is a fresh python <bundle> "
         "run, so the engine and interpret == compile are untouched. Linux/systemd "
         "first. See docs/scheduling.md.",
     ), done=True),
+    Phase("P9", "Human + Agent authoring surfaces", (
+        "Build a local Web UI as a Workflow JSON IDE: graph canvas, typed forms, JSON "
+        "preview, validation, run/generate/scheduling actions, and structured results. It "
+        "edits the same Git file as the TUI and Coding Agent skill — no second database model.",
+        "Make Agent authoring machine-friendly with schema export and JSON validation errors "
+        "carrying stable path/code/message fields, enabling create → validate → repair → review.",
+        "Grow a high-quality template library, led by Flow Release Radar: local repo collection, "
+        "SDK-tool audits, dynamic fan-out, deterministic scoring, report subflow, and scheduling.",
+    )),
+    Phase("P10", "First-class workflow tests", (
+        "Add xdog-flow test <workflow> [--case NAME] with companion .flowtest.json files, "
+        "keeping test data separate from production workflow definitions.",
+        "Inject typed $in values, human signals, and per-node output mocks — including ordered "
+        "mock lists for fan-out workers — so tests never depend on live model wording or auth.",
+        "Assert partial/exact public output, success/failure messages, executed or skipped nodes, "
+        "fan instance counts, loop iterations, and events. Validate every mock against the node's "
+        "declared output schema before execution.",
+        "Run tests through the frontier executor first, then add an optional --compiled parity mode "
+        "that executes generated Python against the same cases.",
+    )),
     Phase("2026", "Beyond the kernel — as a library, not a platform", (
         "Deeper host-integration examples: run a flow graph as one activity inside a "
         "durable engine (e.g. Temporal) for cross-machine scale.",
@@ -211,14 +229,11 @@ DOCS = PackageDocs(
                    "examples and specified precisely in the Reference.",
     feature_categories=_FEATURE_CATEGORIES,
     features=_FEATURES,
-    roadmap_intro="The runtime-resilience roadmap (P1–P4), the expressiveness push (P5), and the "
-                  "expressiveness-gap closing (P6) are complete — structured type-native wire, JSON "
-                  "Schema ports, JSONPath interpolation/mapping with end-to-end type checking, numeric "
-                  "conditions, strict interpolation, a typed workflow signature (declared or inferred), "
-                  "sub-workflows, and dynamic fan-out — each landing with a cross-engine parity test so "
-                  "interpret == compile holds. P7 adds a CLI agent backend (run an agent turn by shelling "
-                  "out to claude/codex, no provider) and packages flow as a skill; P8 adds scheduling "
-                  "(timer + hook via xdog-flow install). flow stays a single-machine, compilable kernel by "
-                  "design; distributed execution remains a deliberate non-goal. See Design for the non-goals.",
+    roadmap_intro="The execution kernel, typed wire, subflows, fan-out, Coding Agent backends, and local "
+                  "scheduling are shipped with interpreter/codegen parity. The next phases return to "
+                  "Flow's product purpose: one Git-native workflow artifact authored by humans in a TUI/Web "
+                  "UI or generated by Coding Agents. P9 builds those authoring and inspection surfaces; P10 "
+                  "adds deterministic companion tests with typed node-output mocks. Distributed execution "
+                  "remains a deliberate non-goal.",
     roadmap=_ROADMAP,
 )

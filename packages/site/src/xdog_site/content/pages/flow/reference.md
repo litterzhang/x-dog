@@ -26,6 +26,10 @@ parallel).
 | `nodes` | default `[]` | The list of node objects (see below). |
 | `edges` | default `[]` | The list of edge objects wiring node ports together. |
 | `tools` | default `{}` | Custom-tool manifest: `{tool_name: "module.path:callable"}`. |
+| `in_schema` | inferred | Explicit JSON Schema properties for `$in`; otherwise inferred from typed consumers. |
+| `max_concurrency` | default `0` | Maximum static frontier nodes running concurrently; `0` is unlimited. |
+| `fan_max_concurrency` | default `0` | Per-fan-group dynamic instance cap; independent from the outer frontier cap. |
+| `schedule` | optional | Timer or hook declaration consumed by `xdog-flow scheduling install`; ignored by the one-shot engine. |
 
 ### Node
 
@@ -46,8 +50,14 @@ must set exactly one of them.
 | `code` | optional | Script only: inline source defining exactly one ctx-first function. |
 | `run` | optional | Script only: a `"module.path:callable"` reference imported at run time. |
 | `subflow` | optional | Subflow only: the child workflow — an inline object or a `"./child.json"` path string. Ports are derived from the child's signature; do not declare `inputs`/`outputs`. |
-| `inputs` | default `[]` | Input ports (bare name, `{name, type, required}`, or `{name, schema, required}`). |
-| `outputs / output` | default `[]` | Output ports; `output` is singular sugar for one port. For an agent, >1 port (or one non-string port) makes it a structured `submit_result` node — the schema is derived from the ports. |
+| `retry` | optional | `{max, backoff}` retry policy; `max` counts retries after the first attempt. |
+| `on_error` | default `"fail"` | `"fail"` aborts the run; `"isolate"` records the branch failure and skips its descendants. |
+| `deterministic` | default `false` | Memoize output by node id and input hash for safe retry/resume reuse. |
+| `backend` | optional | Agent only: `"claude-cli"` or `"codex-cli"`; absent uses the in-process SDK. |
+| `allowed_tools` | default `[]` | CLI agent only: narrows that CLI's own tool set. |
+| `mcp_servers` | default `{}` | CLI agent only: opaque MCP server specs with `${ENV_VAR}` interpolation. |
+| `inputs` | default `[]` | Input ports: a bare required string name or `{name, schema, required}`. |
+| `outputs` | default `[]` | Output ports in the same canonical forms. For an agent, >1 port (or one non-string port) makes it a structured `submit_result` node — the schema is derived from the ports. |
 
 ### Port
 
@@ -58,9 +68,8 @@ lets an edge map a sub-field with a type check.
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | required | Port name; referenced by edge maps and `{{ $.name }}` interpolation. |
-| `type` | default `"string"` | Shorthand for a scalar schema — one of string, integer, number, boolean, array, object. |
-| `schema` | optional | A JSON Schema fragment (scalar or nested `{type, properties, items, required}`); an alternative to `type` for structured ports. |
-| `required` | default `true` | Input only: `false` exempts it from the must-be-fed rule (loop-carried values); replaces the old `optional`. |
+| `schema` | required in object form | A JSON Schema fragment: scalar or nested `{type, properties, items, required}`. A bare string port implies `{"type":"string"}`. |
+| `required` | default `true` | Input only: `false` exempts it from the must-be-fed rule for loop-carried or conditionally supplied values. |
 
 ### Edge
 
@@ -74,11 +83,14 @@ source-only; `$output` is sink-only.
 | `to` | required | Destination node id, or the reserved `$output` sink. |
 | `map` | default `{}` | `{source_output_port: destination_input_port}` pairs. A source key may be a JSONPath into a structured port, e.g. `"$.verdict.within_budget"`. |
 | `when` | optional | A condition; the edge only fires (or feeds) when it holds. |
-| `loop.max` | optional | Marks a bounded back-edge; required when `to` is not strictly after `from`. |
+| `loop.max` | optional | Marks a bounded back-edge; exhausted plain loops stop normally. |
+| `while` | optional | Strict bounded-loop sugar carrying `cond` and optional `max`; a still-true exhausted condition raises non-convergence. |
+| `fan_out` | optional | Names the source array port whose elements run one worker instance each. |
+| `fan_in` | optional | `"list"` preserves one value per instance; `"concat"` flattens array-valued instance outputs one level. |
 
 ## Type system
 
-Every port carries a JSON type (via `type` shorthand or a full `schema`). The
+Every port carries a JSON Schema (a bare name implies a required string port). The
 wire format is **type-native**: a port value is the live Python value — a script
 node reads its inputs as that value and returns the value directly, with no
 stringify/parse round-trip. An edge is type-checked at load time: the source and
@@ -120,11 +132,30 @@ ports. `value` and `text` support `{{ $.port }}` JSONPath interpolation.
 Every `{{ $.key }}` operand root is checked at load time against the source node's
 output ports (strict interpolation), so a typo fails validation.
 
-## Runtime container
+## Runtime container and process result
 
-`execute()` returns one container describing the whole run. The CLI prints `out`
-by default, falling back to the full container when a workflow declares no
-`$output`.
+The Python `execute()` API returns an internal runtime container. CLI and generated
+Python process boundaries print a stable envelope:
+
+```json
+{
+  "success": true,
+  "message": "Workflow completed",
+  "output": {},
+  "context": {
+    "workflow": "demo",
+    "runId": null,
+    "startTime": "...",
+    "endTime": "...",
+    "durationMs": 42,
+    "tokensUsed": 0,
+    "lastNode": "finish"
+  }
+}
+```
+
+Failures use the same shape with `success:false`, an error `message`, empty
+`output`, and a non-zero process exit code. The internal `execute()` container is:
 
 | Key | Contents |
 |---|---|
@@ -142,7 +173,7 @@ by default, falling back to the full container when a workflow declares no
 Every subcommand accepts a `.json` workflow or a `.svg` with the JSON embedded.
 
 - **`xdog-flow validate <config>`** — Load and validate a workflow; prints OK or the first error.
-- **`xdog-flow run <config>`** — Execute a workflow and print its `$output` (or the whole runtime container when none is declared).
+- **`xdog-flow run <config>`** — Execute a workflow and print the structured `success/message/output/context` result envelope.
   - `--dry-run` — Inject a stub LLM; agent nodes echo `DRYRUN:<model>` so you can test wiring offline.
   - `--input K=V` — Seed or override a `$in` value (repeatable; split on the first `=`).
   - `--provider X` — Override the AI provider.
@@ -155,11 +186,78 @@ Every subcommand accepts a `.json` workflow or a `.svg` with the JSON embedded.
   - `--mermaid` — Emit a Mermaid flowchart.
   - `--svg` — Emit an SVG document with the workflow JSON embedded.
 - **`xdog-flow build <config>`** — Open the interactive TUI builder (created if the file is missing).
-- **`xdog-flow install <config>`** — Build a portable bundle and install a scheduler (Linux/systemd) for a workflow with a `schedule` block.
-  - `--dry-run` — Print the systemd units and actions without touching the OS.
-  - `--name NAME` — Install name (default: the workflow name).
-  - `--list` — List installed scheduled workflows.
-  - `--delete NAME` — Uninstall one (units + bundle + registry entry).
+- **`xdog-flow scheduling install <config>`** — Build a portable bundle and install a timer/hook scheduler; supports `--name` and `--dry-run`.
+- **`xdog-flow scheduling list`** — List locally installed scheduled workflows.
+- **`xdog-flow scheduling uninstall <name>`** — Remove units, bundle, and registry entry; supports `--dry-run`.
+
+### Planned workflow tests — `xdog-flow test`
+
+Flow will use companion test artifacts rather than embedding tests in production
+workflows:
+
+```text
+release_readiness.json
+release_readiness.flowtest.json
+```
+
+Planned commands:
+
+```bash
+xdog-flow test release_readiness.json
+xdog-flow test release_readiness.json --case blocked-release
+```
+
+A case injects `$in`, human signals, and typed node-output mocks; then asserts the
+public result plus graph behavior:
+
+```json
+{
+  "workflow": "./release_readiness.json",
+  "cases": [
+    {
+      "name": "critical finding blocks release",
+      "inputs": {"repo": "/fixture/repo", "base_ref": "main"},
+      "mocks": {
+        "collect_repo": {"snapshot": {"changed_files": ["src/auth.py"]}},
+        "plan_checks": {
+          "checks": [{"name": "security", "focus": "auth"}],
+          "rationale": "security-sensitive change"
+        },
+        "audit": [
+          {
+            "finding": {
+              "category": "security",
+              "severity": "critical",
+              "summary": "Missing authorization check",
+              "evidence": "src/auth.py:42",
+              "recommendation": "Add an authorization guard"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "success": true,
+        "output": {"risk": {"status": "blocked", "release_allowed": false}},
+        "executed": ["collect_repo", "plan_checks", "audit", "score_risk", "report"],
+        "fan_instances": {"audit": 1}
+      }
+    }
+  ]
+}
+```
+
+Mocks target node **outputs**, not provider text. This keeps tests independent from
+model wording while exercising mappings, conditions, fan-out, loops, scripts,
+subflows, and the final result contract. Expected assertions can cover:
+
+- partial or exact `$output` values;
+- success/failure and message matching;
+- executed/skipped nodes and execution counts;
+- fan instance counts and loop iterations;
+- emitted events and human signals.
+
+Mock outputs must validate against each node's declared output schema, so a test
+cannot bypass the workflow's typed contract.
 
 ### CLI agent nodes
 
@@ -179,7 +277,7 @@ shelling out to a coding-agent CLI instead of the in-process SDK:
 ### Scheduling
 
 A top-level `schedule` block makes a workflow fire on its own (config for
-`xdog-flow install`; the engine ignores it):
+`xdog-flow scheduling install`; the engine ignores it):
 
 - **`{"mode": "timer", "every": "15m"}`** or `{"mode": "timer", "cron": "0 9 * * 1-5"}`
   — a systemd user timer (or crontab fallback) runs the bundle on schedule.

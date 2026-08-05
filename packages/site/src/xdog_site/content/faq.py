@@ -9,15 +9,17 @@ FAQS: list[dict[str, str]] = [
             "x-dog is a Python monorepo of composable packages for building AI agents and managing "
             "LLM deployments: a unified provider API (ai), an agent runtime (agent), a terminal UI "
             "library (tui), an interactive coding CLI (coding), an orchestration runtime with "
-            "long-term memory (claw), and a multi-agent workflow engine with code generation (flow)."
+            "long-term memory (claw), and a typed local-first workflow format/compiler for humans "
+            "and Coding Agents (flow)."
         ),
     },
     {
         "q": "Which package do I need?",
         "a": (
             "Start with ai if you just want one interface over many model providers. Add agent to "
-            "get a tool-calling loop. Reach for flow when you have a multi-step pipeline you want to "
-            "define as data, run concurrently, and optionally compile to Python. tui is the "
+            "get a tool-calling loop. Reach for flow when a developer or Coding Agent needs to "
+            "crystallize a repeatable process as validated, Git-friendly JSON, then run, compile, or "
+            "schedule it locally. tui is the "
             "rendering layer; coding and claw are ready-to-use applications built on the rest."
         ),
     },
@@ -52,21 +54,19 @@ FAQS: list[dict[str, str]] = [
     {
         "q": "Can I see and edit a workflow visually?",
         "a": (
-            "Yes. xdog-flow build opens an interactive terminal builder with three pages: the graph "
-            "and node/edge editor, a Functions page showing each script node's source, and a Tools "
-            "page showing every built-in and custom tool's description, parameters, and source."
+            "Yes. xdog-flow build opens an interactive terminal builder with graph, node/edge, "
+            "Functions, and Tools views. A local Web UI is planned as a Workflow JSON IDE; both UI "
+            "surfaces and Coding Agents edit the same file rather than a database-only model."
         ),
     },
     {
         "q": "Is flow production-ready?",
         "a": (
-            "The modeling layer — typed ports, explicit edges, conditional and bounded-loop edges, "
-            "codegen, and a strict type-checked codebase — is solid. Runtime resilience is still "
-            "maturing: there is no built-in per-node retry/backoff, no checkpointing or resume, and "
-            "no durable state store yet, so long-running deployments should add their own retry and "
-            "recovery around the engine (as the reference autonomous-enrichment daemon does with a "
-            "deterministic driver). Treat it as a strong orchestration core, not a drop-in "
-            "replacement for a durable-execution platform."
+            "Flow ships typed ports, explicit mappings, frontier-based parallel execution, retry policies, "
+            "coherent batch checkpoints, human signals, failure isolation, dynamic fan-out, subflows, "
+            "standalone codegen, and local scheduling. It is production-appropriate for single-machine "
+            "developer automation, but deliberately not a distributed durable-execution platform or "
+            "multi-tenant hosted service."
         ),
     },
     {

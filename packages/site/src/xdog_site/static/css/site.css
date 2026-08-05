@@ -46,6 +46,7 @@ body.hack {
    width so the <pre>'s overflow-x:auto scrolls instead of stretching. */
 .main .cell {
   min-width: 0;
+  max-width: 100%;
 }
 
 /* Responsive: stack (mobile: show left, right, main vertically) */

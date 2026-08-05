@@ -122,22 +122,21 @@ PACKAGES: tuple[Package, ...] = (
     Package(
         name="flow",
         cli="xdog-flow",
-        tagline="Multi-agent workflow engine and JSON to Python codegen",
+        tagline="Typed workflows for humans and Coding Agents",
         summary=(
-            "Define a multi-agent pipeline as JSON, run it directly, or compile it to a "
-            "self-contained Python module. Data flows through named ports wired by explicit edge "
-            "mappings — not a shared global state — so every connection is spelled out and "
-            "statically checkable.",
-            "The executor runs nodes concurrently by readiness, supports conditional and bounded "
-            "loop edges, and ships an interactive TUI builder plus ASCII and SVG diagram renderers.",
+            "A local-first workflow format and compiler: developers design repeatable Agent "
+            "workflows in the TUI (and future Web UI), while Coding Agents generate the same "
+            "Git-friendly JSON artifact and repair it through precise validation feedback.",
+            "Run the JSON directly, compile it to standalone Python, or install a local timer/hook "
+            "schedule. Both execution paths share one typed frontier kernel.",
         ),
         highlights=(
-            "Node-private ports + explicit edge mappings (no shared flat state)",
-            "Parallel fan-out/fan-in executor with conditional and loop edges",
-            "Codegen: compile a workflow JSON to a runnable Python module",
-            "Agent nodes with built-in web_search and JSON-declared custom tools",
-            "Interactive builder TUI (xdog-flow build) with Functions/Tools viewers",
-            "Deterministic ASCII flow diagrams and Graphviz-backed SVG",
+            "One canonical workflow JSON for visual editors, Coding Agents, Git, and deployment",
+            "Typed ports, explicit mappings, and fail-fast validation",
+            "Interpret directly or compile to standalone Python with identical semantics",
+            "SDK and Claude Code/Codex CLI agent nodes with tools and MCP",
+            "Dynamic fan-out, subflows, checkpoints, human signals, and local scheduling",
+            "Interactive TUI today; local Workflow JSON Web UI is the next product surface",
         ),
         install="uv run xdog-flow --help",
     ),

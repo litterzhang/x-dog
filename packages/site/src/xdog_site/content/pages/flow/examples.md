@@ -5,9 +5,10 @@ title: Examples
 <!-- ASCII diagrams below are generated verbatim from flow.graph.to_ascii_diagram
      over the shipped packages/flow/examples/*.json. Regenerate if an example changes. -->
 
-Four workflows ship with flow (`packages/flow/examples/*.json`). The first two are
-loadable and runnable live on the [HaveFun](/havefun/flow) page — pick the example,
-fill its inputs, and watch the per-node execution log stream.
+Ten workflows ship with Flow (`packages/flow/examples/*.json`), from small focused
+patterns to the flagship Release Radar. Selected examples are runnable on the
+[HaveFun](/havefun/flow) page; every artifact is also available to the CLI, TUI,
+Coding Agent skill, codegen, and scheduler.
 
 ## Agent Calculator (script → agent + bash)
 
@@ -89,6 +90,59 @@ its own. Both engines run `compose` by calling the same `execute()` on the child
 so `interpret == compile` holds by construction. See the
 [*A Workflow as a Node*](/blog/a-workflow-as-a-node) post for the design.
 
+## Flow Release Radar (local repository audit)
+
+`release_readiness.json` is the flagship demonstration of Flow's product vision:
+an Agent-authored, human-reviewable workflow that audits this local x-dog
+repository and can run every Monday.
+
+```text
+collect_repo [deterministic script]
+        │ snapshot
+        ▼
+plan_checks [SDK Agent + filesystem/bash]
+        │ checks[]
+        ▼ fan_out
+ audit#0 … audit#N [parallel SDK Agents]
+        │ findings[]
+        ▼
+score_risk [deterministic policy]
+        │
+        ▼
+report [subflow]
+  compose → critique → revise ↺
+        │
+        ▼
+     $output
+```
+
+It combines:
+
+- local Git inspection with a deterministic script;
+- in-process SDK Agents using `filesystem` and `bash` tools;
+- dynamic fan-out over Agent-planned review dimensions;
+- deterministic release scoring (`ready` / `review` / `blocked`);
+- a path-referenced report subflow with compose/critique/revise and a bounded loop;
+- typed schemas, structured Agent output, frontier-batch checkpoints, and a weekly
+  systemd timer declaration.
+
+```bash
+uv run xdog-flow validate packages/flow/examples/release_readiness.json
+uv run xdog-flow graph packages/flow/examples/release_readiness.json --mermaid
+uv run xdog-flow generate packages/flow/examples/release_readiness.json -o release_readiness.py
+uv run xdog-flow scheduling install packages/flow/examples/release_readiness.json --dry-run
+```
+
+The workflow defaults to `/data/workspaces/pyspace/x-dog`, but `repo` and
+`base_ref` are ordinary `$in` values and can be overridden per run.
+
+## Other shipped patterns
+
+- `trip_planner.json` — structured Agent outputs and JSONPath sub-field mappings.
+- `cli_triage.json` — Claude Code CLI backend plus deterministic routing.
+- `digest_timer.json` — cron-based timer scheduling.
+- `triage_hook.json` — HTTP hook delivery into a human signal.
+
 ## Run them
 
 ```bash
@@ -99,4 +153,4 @@ uv run xdog-flow run packages/flow/examples/agent_calculator.json --dry-run --in
 uv run xdog-flow graph packages/flow/examples/refine_loop.json
 ```
 
-Or open [HaveFun](/havefun/flow) to run either example in the browser.
+Or open [HaveFun](/havefun/flow) to run a supported example in the browser.

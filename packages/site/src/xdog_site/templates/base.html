@@ -29,13 +29,18 @@
       </h1>
     </div>
 
-    <div class="content grid">
-      <div class="cell content" id="content">
-        {% block content %}{% endblock %}
+    <div class="content">
+      <div class="grid">
+        <div class="cell content-body" id="content-body">
+          {% block content %}{% endblock %}
+        </div>
+        </div>
+        <div class="grid">
+          <div class="cell content-nav" id="content-nav">
+            {% block content_nav %}{% endblock %}
+          </div>
       </div>
     </div>
-
-    {% block content_nav %}{% endblock %}
 
     <div class="footer grid">
       <div class="cell">

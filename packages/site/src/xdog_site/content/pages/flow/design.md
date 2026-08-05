@@ -2,9 +2,10 @@
 title: Design
 ---
 
-How flow models a multi-agent pipeline and runs it — the ideas behind the JSON.
-For the exact field-by-field schema, the type system, and every validation rule,
-see the [Reference](/packages/flow/reference).
+How Flow turns one typed JSON artifact into a workflow that developers can edit
+visually and Coding Agents can generate, validate, and repair. For the exact
+field-by-field schema and validation rules, see the
+[Reference](/packages/flow/reference).
 
 ## Node-private ports, not shared state
 
@@ -17,21 +18,18 @@ Because the wiring is spelled out rather than implied by matching key names, the
 graph can be validated before it runs: unknown ports, two producers feeding one
 input, or an unfed required input all fail fast at load time.
 
-## Readiness-based parallel executor
+## One frontier execution model
 
-The executor runs nodes concurrently by readiness: a node becomes ready when all
-of its non-loop predecessors have completed, and every currently-ready node is
-launched at once. A fan-in node simply waits until all of its upstreams finish.
+The interpreter and generated module execute the same frontier transition kernel.
+A node becomes ready when its ordinary predecessors complete; the complete ready
+frontier runs concurrently in declaration order. Condition-enabled edges provide
+inputs, while false edges do not leak values into a destination.
 
-Linear pipelines behave exactly like a sequential run; diamonds and fan-outs get
-parallelism for free.
-
-## Conditional and bounded-loop edges
-
-Edges can carry a condition (equals / contains / and / or / not over a source
-output port) so branches only fire when their guard holds. A back-edge must
-declare a bounded loop (`loop.max`), which is how a review→revise cycle stays
-finite.
+All bounded back-edges entering one destination form a conditional AND loop join:
+every source must complete in the current generation and every guard must hold
+before that destination runs again, exactly once. Each edge keeps its own `max`
+and strict-`while` behavior. Dynamic `fan_out` remains one frontier node whose
+runtime instances use a separate concurrency cap and preserve input order.
 
 ## One runtime container in, workflow outputs out
 
@@ -42,11 +40,26 @@ ports to a sink node called `$output` with ordinary edges, and those collected
 key/value pairs are the workflow's result — flushed the moment each feeding node
 finishes, so a looped writer's latest value wins.
 
-`execute()` returns a single runtime container: `ctx` (the last node's
-step/id/name), `stack` (a per-node delta trace — one `{step, node, in, out}`
-frame per execution, so a looped node's refinement history is visible), `state`
-(real-node outputs only), `in` (`$in`), and `out` (`$output`). The CLI prints
-`out` by default, falling back to the full container.
+`execute()` returns an internal runtime container with `ctx`, `stack`, `state`,
+`in`, `out`, failures, memo, and token usage. Process boundaries (`xdog-flow run`
+and generated Python) print a stable envelope instead:
+
+```json
+{
+  "success": true,
+  "message": "Workflow completed",
+  "output": {},
+  "context": {
+    "workflow": "...",
+    "runId": null,
+    "startTime": "...",
+    "endTime": "...",
+    "durationMs": 42,
+    "tokensUsed": 0,
+    "lastNode": "..."
+  }
+}
+```
 
 ## Typed ports and JSON Schema
 
@@ -58,11 +71,10 @@ downstream node reads a real object. A script node sees its inputs coerced to th
 declared top-level type; nested structure is validated (by fastjsonschema), not
 re-stringified.
 
-An input port is `required` by default. Marking it `required: false` (the old
-`optional`) exempts it from the rule that every declared input must be fed by an
-edge — that is how a loop-carried value, absent on the first pass and supplied
-only by the back-edge, stays an internal port instead of leaking into the
-workflow's user-facing inputs.
+An input port is `required` by default. Marking it `required: false` exempts it
+from the rule that every declared input must be fed by an edge — that is how a
+loop-carried value, absent on the first pass and supplied only by the back-edge,
+stays internal instead of leaking into the workflow's user-facing inputs.
 
 ## JSONPath data flow
 
@@ -77,21 +89,15 @@ thing on both run paths.
 
 ## Two ways to run: interpret or compile
 
-The same JSON can be executed directly by the runtime, or compiled with codegen
-into a single self-contained Python module. In both engines a node is a **pure
-function** — `node(provider, ctx, inputs) → outputs` — and a generic **driver**
-owns the cross-cutting work (entry guards, input assembly, the retry loop,
-output storage, the memo fast-path, the token budget, checkpointing, and
-isolation). The generated code keeps node outputs in the same nested port
-structure the interpreter uses and builds the identical runtime container, so
-the two forms agree node-for-node — enforced by a cross-engine parity suite.
+The same JSON can execute directly or compile to a self-contained Python module.
+Codegen embeds workflow-specific node functions, static graph metadata, and the
+exact same frontier transition kernel used by the interpreter. It does not
+translate the graph into a second BFS/for-loop control-flow implementation.
 
-Linear and parallel graphs compile to BFS waves (a lone await, or
-`asyncio.gather` for a fan-out); bounded loops become a for-range; and a
-workflow with forward conditionals compiles to a topologically-ordered,
-guard-gated body instead. The generated module also honours `FLOW_INPUTS` and
-`FLOW_PROVIDER` env overrides — parity with the interpreter's `--input` and
-`--provider`.
+Cross-cutting behavior stays aligned: enabled-edge input assembly, retries,
+structured output, memoization, token budgets, failure isolation, fan-out, and
+coherent frontier-batch checkpoints. A cross-engine parity suite enforces that
+both paths produce the same node state and `$output`.
 
 ## Structured output and web search
 
@@ -108,18 +114,21 @@ node on one model and search with another). Tools beyond the built-ins are
 declared in a JSON manifest of `module:function` references, loaded at both run
 and generate time.
 
-## Author visually, review as a diagram
+## Human and Agent authoring
 
-An interactive terminal builder (`xdog-flow build`) edits the graph across a
-Builder page (with Graph / Nodes / Edges blocks), a Functions page that shows
-each script node's source, and a Tools page listing every built-in and custom
-tool. It round-trips JSON losslessly — parse then re-serialise is the identity —
-so hand-edited and TUI-edited files stay interchangeable.
+The interactive terminal builder (`xdog-flow build`) edits the graph, script
+functions, and tool declarations while round-tripping the canonical JSON. A
+future local Web UI will edit the same file — not a second database-owned model —
+and add graph forms, validation, execution, structured results, scheduling, and
+run inspection.
 
-The same definition renders four ways: a plain-text listing, a layered
-box-drawing ASCII diagram with orthogonal edge routing and right-side lanes for
-skip/loop edges, a Graphviz-backed SVG (with a dependency-free fallback), and a
-Mermaid flowchart.
+Coding Agents are another editor for the same artifact. The Flow skill gives them
+examples and authoring rules; precise validation errors support a create → validate
+→ repair → preview → human-review loop. Git remains the collaboration and history
+layer.
+
+The same definition renders as plain text, layered ASCII, Graphviz SVG (with a
+dependency-free fallback), or Mermaid.
 
 ## Deliberately single-machine — a kernel, not a platform
 
@@ -148,9 +157,9 @@ reuse) are all the single-machine, in-kernel kind.
 - **Multi-tenancy & auth.** flow is a kernel/library, not a hosted service.
   Isolation, authn/authz, and quotas per tenant are the host environment's job
   (the reference HaveFun runner adds only a single-slot guard for safety).
-- **Built-in scheduling.** Cron/interval/event triggers are wired around flow by
-  the host, not baked into the engine — the same separation a library keeps from
-  its scheduler.
+- **In-engine scheduling daemon.** `xdog-flow scheduling` installs timers and hook
+  listeners around generated bundles; the frontier engine itself remains a
+  one-shot executor.
 - **Compensation / rollback.** Saga-style compensation earns its keep in
   distributed, long-running, cross-service flows — which flow deliberately isn't.
   Failure cleanup is expressible with existing primitives: an `on_error:isolate`
