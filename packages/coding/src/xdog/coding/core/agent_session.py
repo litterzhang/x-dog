@@ -248,6 +248,7 @@ class AgentSession:
                 platform_info=PlatformInfo.detect(),
             ),
             tool_defs,
+            extra_context=_skills_context(),
         )
         self.agent.set_system_prompt(prompt)
 
@@ -279,3 +280,26 @@ class AgentSession:
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None
+
+
+def _skills_context() -> str:
+    """One line per available skill, for the system prompt.
+
+    This is what makes a skill more than a command the user has to remember:
+    the model can see that `/flow` exists and suggest it. Only names and
+    descriptions go in — bodies are read on demand, so the cost of having many
+    skills installed stays a line each.
+
+    Returns an empty string on any failure. A skills directory that cannot be
+    read is not a reason to start without a system prompt.
+    """
+    try:
+        from xdog.coding.core.slash_commands import skill_manager
+
+        summary = skill_manager().skills_summary()
+    except Exception:
+        logger.debug("could not build the skills section of the system prompt", exc_info=True)
+        return ""
+    if not summary:
+        return ""
+    return summary + "\nRun one with the /<slug> command, or ask the user to."

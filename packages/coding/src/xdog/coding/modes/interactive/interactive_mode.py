@@ -265,14 +265,23 @@ class InteractiveMode:
             return
 
         # Regular message
-        self._chat_log.add_user(value)
+        self._start_turn(value)
+
+    def _start_turn(self, message: str, *, echo: bool = True) -> None:
+        """Run one agent turn in a background thread.
+
+        ``echo`` is False for text the user did not type — a skill's
+        instructions can run to hundreds of lines, and replaying them into the
+        chat log would bury the conversation they were meant to help with.
+        """
+        if echo:
+            self._chat_log.add_user(message)
         self._set_busy(True)
         self._streaming_text = ""
 
-        # Run agent in background thread
         thread = threading.Thread(
             target=self._run_agent_turn,
-            args=(value,),
+            args=(message,),
             daemon=True,
         )
         thread.start()
@@ -290,6 +299,7 @@ class InteractiveMode:
                 "type": "command_result",
                 "output": result.output,
                 "exit": result.exit_requested,
+                "prompt": result.prompt,
             })
 
         thread = threading.Thread(target=_run, daemon=True)
@@ -494,6 +504,10 @@ class InteractiveMode:
                 self._chat_log.add_system(output)
             if event.get("exit"):
                 self._request_exit()
+            prompt = event.get("prompt", "")
+            if prompt:
+                # A skill command: carry its instructions into a real turn.
+                self._start_turn(prompt, echo=False)
             self._update_footer()
 
         elif event_type == "error":

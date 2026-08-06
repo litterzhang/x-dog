@@ -170,7 +170,15 @@ def _run_simple_repl(session: Any, verbose: bool) -> None:
                     print(f"\n{result.output}\n")
                 if result.exit_requested:
                     break
-            continue
+                if result.prompt:
+                    # A skill command: fall through to a normal turn carrying
+                    # the skill's instructions instead of returning to the
+                    # prompt, which would leave the model unaware of them.
+                    user_input = result.prompt
+                else:
+                    continue
+            else:
+                continue
 
         # Send message
         try:

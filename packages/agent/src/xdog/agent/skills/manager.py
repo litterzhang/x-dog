@@ -1,22 +1,30 @@
 """Skill manager — load, save, list, patch, remove skills.
 
-Skills have two tiers:
+Skills come from three tiers, each overriding the one before it:
+
+- **Packaged** — ``<installed package>/skill/`` — discovered, read-only
 - **Shared** — ``{data_dir}/skills/`` — available to all groups
 - **Group** — ``{workspace}/skills/`` — specific to one group
 
-When listing or loading, both directories are searched. Group skills
-take precedence when slugs conflict. New skills are saved to the
-shared directory by default (so other groups benefit). Use
-``scope="group"`` to save a group-specific skill.
+Packaged skills arrive with the distributions the user installed, so
+``pip install xdog-flow`` is all it takes for an agent to know how to write a
+flow workflow. They are read-only: they live in site-packages, and a user who
+wants to change one shadows it by saving a skill with the same slug, which
+lands in the shared tier and wins.
+
+New skills are saved to the shared directory by default (so other groups
+benefit). Use ``scope="group"`` to save a group-specific skill.
 """
 from __future__ import annotations
 
 import logging
 import re
 import shutil
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
+from xdog.agent.skills.discovery import packaged_skills
 from xdog.agent.skills.types import Skill
 
 logger = logging.getLogger(__name__)
@@ -62,7 +70,7 @@ def _build_frontmatter(name: str, description: str, created: str, updated: str) 
     return "\n".join(lines)
 
 
-def _load_skill_from_dir(skill_dir: Path) -> Skill | None:
+def _load_skill_from_dir(skill_dir: Path, *, slug: str = "", packaged: bool = False) -> Skill | None:
     """Load a skill from a directory."""
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.exists():
@@ -81,38 +89,48 @@ def _load_skill_from_dir(skill_dir: Path) -> Skill | None:
 
     return Skill(
         name=meta.get("name", skill_dir.name),
-        slug=skill_dir.name,
+        slug=slug or skill_dir.name,
         description=desc,
         content=body,
         created=meta.get("created", ""),
         updated=meta.get("updated", ""),
         path=skill_file,
+        packaged=packaged,
     )
 
 
 class SkillManager:
-    """Manages reusable skills (procedural memory) across two tiers.
+    """Manages reusable skills across three tiers, later overriding earlier.
 
+    - ``packaged``: shipped inside installed packages, read-only
     - ``shared_dir``: skills available to all groups
-    - ``group_dir``: skills specific to one group (takes precedence)
+    - ``group_dir``: skills specific to one group
     """
 
     def __init__(
         self,
         shared_dir: Path,
         group_dir: Path | None = None,
+        packaged: Mapping[str, Path] | None = None,
     ) -> None:
         self._shared_dir = shared_dir
         self._shared_dir.mkdir(parents=True, exist_ok=True)
         self._group_dir = group_dir
         if self._group_dir:
             self._group_dir.mkdir(parents=True, exist_ok=True)
+        # None means "discover what is installed"; pass {} to opt out, which is
+        # what tests want so an installed package cannot change their fixtures.
+        self._packaged = dict(packaged_skills() if packaged is None else packaged)
 
     def list_skills(self) -> list[Skill]:
-        """List all skills. Group skills override shared on slug conflict."""
+        """List all skills. Later tiers override earlier ones on slug conflict."""
         by_slug: dict[str, Skill] = {}
 
-        # Load shared first
+        for slug, skill_dir in self._packaged.items():
+            skill = _load_skill_from_dir(skill_dir, slug=slug, packaged=True)
+            if skill:
+                by_slug[slug] = _without_body(skill)
+
         for skill in self._list_from_dir(self._shared_dir):
             by_slug[skill.slug] = skill
 
@@ -124,12 +142,18 @@ class SkillManager:
         return sorted(by_slug.values(), key=lambda s: s.slug)
 
     def load_skill(self, slug: str) -> Skill | None:
-        """Load full skill content. Group takes precedence over shared."""
+        """Load full skill content, most specific tier first."""
         if self._group_dir:
             skill = _load_skill_from_dir(self._group_dir / slug)
             if skill:
                 return skill
-        return _load_skill_from_dir(self._shared_dir / slug)
+        shared = _load_skill_from_dir(self._shared_dir / slug)
+        if shared:
+            return shared
+        packaged_dir = self._packaged.get(slug)
+        if packaged_dir:
+            return _load_skill_from_dir(packaged_dir, slug=slug, packaged=True)
+        return None
 
     def save_skill(
         self,
@@ -202,13 +226,23 @@ class SkillManager:
         )
 
     def remove_skill(self, slug: str) -> bool:
-        """Delete a skill from both tiers."""
+        """Delete a skill from the writable tiers.
+
+        A packaged skill is never touched: its directory is inside
+        site-packages, and ``rmtree`` there would quietly damage an installed
+        distribution to satisfy what is only a request to hide a skill. Users
+        who want one gone should uninstall the package that ships it.
+        """
         removed = False
         for d in [self._group_dir, self._shared_dir]:
             if d and (d / slug).exists():
                 shutil.rmtree(d / slug)
                 removed = True
                 logger.info("Removed skill: %s from %s", slug, d)
+        if not removed and slug in self._packaged:
+            logger.info(
+                "Skill %s is shipped by an installed package and cannot be removed", slug
+            )
         return removed
 
     def skills_summary(self) -> str:
@@ -238,14 +272,24 @@ class SkillManager:
                 continue
             skill = _load_skill_from_dir(skill_dir)
             if skill:
-                # Strip full content for listing (progressive disclosure)
-                skills.append(Skill(
-                    name=skill.name,
-                    slug=skill.slug,
-                    description=skill.description,
-                    created=skill.created,
-                    updated=skill.updated,
-                    path=skill.path,
-                ))
+                skills.append(_without_body(skill))
 
         return skills
+
+
+def _without_body(skill: Skill) -> Skill:
+    """Drop the body for listing — progressive disclosure.
+
+    Every skill on disk contributes its description to the prompt, so bodies
+    must not travel with them: a dozen skills would otherwise cost a dozen full
+    documents before the agent has decided it needs any of them.
+    """
+    return Skill(
+        name=skill.name,
+        slug=skill.slug,
+        description=skill.description,
+        created=skill.created,
+        updated=skill.updated,
+        path=skill.path,
+        packaged=skill.packaged,
+    )

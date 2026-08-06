@@ -21,3 +21,7 @@ class Skill:
     created: str = ""
     updated: str = ""
     path: Path | None = None
+    #: True when the skill came from an installed package rather than a user
+    #: directory. Packaged skills are read-only — they live in site-packages,
+    #: and editing or deleting one would corrupt the installation.
+    packaged: bool = False

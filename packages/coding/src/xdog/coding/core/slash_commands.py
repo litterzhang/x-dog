@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
+from xdog.agent.skills import Skill, SkillManager
+from xdog.coding.config import get_skills_dir
 from xdog.coding.core.agent_session import AgentSession
 
 
@@ -13,11 +16,17 @@ class CommandResult:
 
     output: str
     exit_requested: bool = False
+    #: Text to send to the agent as if the user had typed it. Loading a skill
+    #: is only useful if its instructions reach the model — printing them to
+    #: the terminal would tell the human something they already asked for and
+    #: leave the agent none the wiser.
+    prompt: str = ""
 
 
 # Registry of built-in slash commands: name → description
 BUILTIN_COMMANDS: dict[str, str] = {
     "help": "Show available commands",
+    "skills": "List available skills: /skills",
     "model": "Show or switch model: /model [name]",
     "thinking": "Show or set thinking level: /thinking [off|low|medium|high]",
     "compact": "Force conversation compaction",
@@ -31,9 +40,38 @@ BUILTIN_COMMANDS: dict[str, str] = {
 }
 
 
+@lru_cache(maxsize=1)
+def skill_manager() -> SkillManager:
+    """The skill source for slash commands.
+
+    Cached because it is consulted on every unrecognised command, and because
+    constructing one creates its directory. Discovery of packaged skills is
+    left at its default, so installing a distribution that ships one is all it
+    takes for a new command to appear.
+    """
+    return SkillManager(shared_dir=get_skills_dir())
+
+
+def available_skills() -> list[Skill]:
+    """Skills usable as commands right now. Never raises — a broken skills
+    directory should not take the command dispatcher down with it."""
+    try:
+        return skill_manager().list_skills()
+    except OSError:
+        return []
+
+
 def list_commands() -> dict[str, str]:
-    """Return all built-in commands and their descriptions."""
-    return dict(BUILTIN_COMMANDS)
+    """Return every command, built-in and skill-provided.
+
+    Skills are listed alongside built-ins deliberately: to the person typing,
+    `/flow` and `/model` are the same gesture, and a skill that does not appear
+    in completion may as well not be installed. Built-ins win a name clash, so
+    a skill can never shadow `/quit`.
+    """
+    commands = {s.slug: s.description or f"Skill: {s.name}" for s in available_skills()}
+    commands.update(BUILTIN_COMMANDS)
+    return commands
 
 
 async def execute_command(
@@ -64,8 +102,16 @@ async def execute_command(
         return _cmd_branch(args, session)
     elif cmd in ("quit", "exit"):
         return CommandResult(output="Goodbye.", exit_requested=True)
-    else:
-        return CommandResult(output=f"Unknown command: /{cmd}. Type /help for available commands.")
+    elif cmd == "skills":
+        return _cmd_skills()
+
+    # Not a built-in: a skill of that name becomes a command. Checked last so
+    # a skill can never take over `/quit`.
+    skill = _load_skill(cmd)
+    if skill is not None:
+        return _run_skill(skill, args)
+
+    return CommandResult(output=f"Unknown command: /{cmd}. Type /help for available commands.")
 
 
 def parse_slash_command(text: str) -> tuple[str, str] | None:
@@ -84,12 +130,59 @@ def parse_slash_command(text: str) -> tuple[str, str] | None:
 # -- Command implementations --
 
 
+def _load_skill(slug: str) -> Skill | None:
+    try:
+        return skill_manager().load_skill(slug)
+    except OSError:
+        return None
+
+
+def _run_skill(skill: Skill, args: str) -> CommandResult:
+    """Turn a skill into a turn: its instructions go to the model, not the user.
+
+    The user's own words are appended so `/flow add a retry step` reads as one
+    request rather than two — the skill says how, the argument says what.
+    """
+    prompt = skill.content
+    if args:
+        prompt = f"{prompt}\n\n---\n\n{args}"
+
+    origin = " (shipped with an installed package)" if skill.packaged else ""
+    return CommandResult(output=f"Using skill: {skill.name}{origin}", prompt=prompt)
+
+
+def _cmd_skills() -> CommandResult:
+    skills = available_skills()
+    if not skills:
+        return CommandResult(
+            output=(
+                "No skills found.\n\n"
+                f"Add one at {get_skills_dir()}/<name>/SKILL.md, or install a package "
+                "that ships one — `pip install xdog-flow` provides /flow."
+            )
+        )
+
+    lines = ["Available skills:", ""]
+    width = max(len(s.slug) for s in skills)
+    for s in skills:
+        mark = "*" if s.packaged else " "
+        lines.append(f"  {mark} /{s.slug:<{width}s}  {s.description}")
+    lines += ["", "  * shipped with an installed package", "", "Run one with /<name> [request]."]
+    return CommandResult(output="\n".join(lines))
+
+
 def _cmd_help() -> CommandResult:
     lines = ["Available commands:", ""]
     for name, desc in sorted(BUILTIN_COMMANDS.items()):
         if name == "exit":
             continue
         lines.append(f"  /{name:<12s} {desc}")
+
+    skills = available_skills()
+    if skills:
+        lines += ["", "Skills:", ""]
+        for s in skills:
+            lines.append(f"  /{s.slug:<12s} {s.description}")
     return CommandResult(output="\n".join(lines))
 
 

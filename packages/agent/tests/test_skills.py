@@ -19,7 +19,7 @@ def _mk(root: Path, slug: str, text: str) -> Path:
 
 
 def test_save_then_load_round_trips(tmp_path: Path) -> None:
-    m = SkillManager(shared_dir=tmp_path / "shared")
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
     m.save_skill("deploy", "Run `make deploy`.", name="Deploy", description="Ship it")
 
     got = m.load_skill("deploy")
@@ -33,7 +33,7 @@ def test_group_skill_overrides_shared_of_the_same_slug(tmp_path: Path) -> None:
     _mk(shared, "notes", "---\nname: shared one\n---\n\nshared body")
     _mk(group, "notes", "---\nname: group one\n---\n\ngroup body")
 
-    m = SkillManager(shared_dir=shared, group_dir=group)
+    m = SkillManager(shared_dir=shared, group_dir=group, packaged={})
 
     loaded = m.load_skill("notes")
     assert loaded is not None and loaded.content == "group body"
@@ -45,7 +45,7 @@ def test_listing_omits_bodies_so_the_prompt_stays_small(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     _mk(shared, "big", "---\nname: big\ndescription: d\n---\n\n" + "x" * 5000)
 
-    m = SkillManager(shared_dir=shared)
+    m = SkillManager(shared_dir=shared, packaged={})
 
     listed = m.list_skills()
     assert [s.description for s in listed] == ["d"]
@@ -59,7 +59,7 @@ def test_description_falls_back_to_first_body_line(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     _mk(shared, "undescribed", "---\nname: u\n---\n\n# Heading\n\nThe real summary.")
 
-    skill = SkillManager(shared_dir=shared).load_skill("undescribed")
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("undescribed")
     assert skill is not None
     assert skill.description == "The real summary."
 
@@ -68,7 +68,7 @@ def test_updating_keeps_the_original_created_date(tmp_path: Path) -> None:
     shared = tmp_path / "shared"
     _mk(shared, "old", "---\nname: old\ncreated: 2020-01-01\nupdated: 2020-01-01\n---\n\nbody")
 
-    m = SkillManager(shared_dir=shared)
+    m = SkillManager(shared_dir=shared, packaged={})
     updated = m.save_skill("old", "new body", name="old")
 
     assert updated.created == "2020-01-01"
@@ -76,7 +76,7 @@ def test_updating_keeps_the_original_created_date(tmp_path: Path) -> None:
 
 
 def test_patch_appends_and_preserves_metadata(tmp_path: Path) -> None:
-    m = SkillManager(shared_dir=tmp_path / "shared")
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
     m.save_skill("s", "first", name="S", description="keep me")
 
     patched = m.patch_skill("s", "second")
@@ -92,7 +92,7 @@ def test_remove_clears_both_tiers(tmp_path: Path) -> None:
     _mk(shared, "dup", "---\nname: a\n---\n\na")
     _mk(group, "dup", "---\nname: b\n---\n\nb")
 
-    m = SkillManager(shared_dir=shared, group_dir=group)
+    m = SkillManager(shared_dir=shared, group_dir=group, packaged={})
     assert m.remove_skill("dup") is True
     assert m.load_skill("dup") is None
     assert m.remove_skill("dup") is False
@@ -101,7 +101,7 @@ def test_remove_clears_both_tiers(tmp_path: Path) -> None:
 def test_summary_is_empty_when_there_are_no_skills(tmp_path: Path) -> None:
     # An empty string is what the prompt builder tests for; a header with no
     # entries under it would be worse than nothing.
-    assert SkillManager(shared_dir=tmp_path / "shared").skills_summary() == ""
+    assert SkillManager(shared_dir=tmp_path / "shared", packaged={}).skills_summary() == ""
 
 
 def test_summary_lists_every_slug_with_its_description(tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ def test_summary_lists_every_slug_with_its_description(tmp_path: Path) -> None:
     _mk(shared, "b-skill", "---\nname: B\ndescription: does b\n---\n\nbody")
     _mk(shared, "a-skill", "---\nname: A\ndescription: does a\n---\n\nbody")
 
-    summary = SkillManager(shared_dir=shared).skills_summary()
+    summary = SkillManager(shared_dir=shared, packaged={}).skills_summary()
 
     assert "`a-skill` — does a" in summary
     assert "`b-skill` — does b" in summary
@@ -123,15 +123,11 @@ def test_non_directories_and_dirs_without_skill_md_are_ignored(tmp_path: Path) -
     (shared / "empty").mkdir()
     _mk(shared, "real", "---\nname: real\n---\n\nbody")
 
-    assert [s.slug for s in SkillManager(shared_dir=shared).list_skills()] == ["real"]
+    assert [s.slug for s in SkillManager(shared_dir=shared, packaged={}).list_skills()] == ["real"]
 
 
-def test_reads_a_skill_shipped_inside_an_installed_package() -> None:
-    """The packaging path: `xdog-flow` ships `xdog/flow/skill/SKILL.md`.
-
-    Pointing a manager at a package's own directory is how an installed
-    distribution teaches an agent to use it, with no copying and nothing to
-    drift out of date.
+def _flow_skill_dir() -> Path:
+    """Where `xdog-flow`'s shipped skill lives, in either layout.
 
     Under an editable install the packaged copy does not exist — the skill is
     force-included at build time — so fall back to the source directory the
@@ -143,15 +139,69 @@ def test_reads_a_skill_shipped_inside_an_installed_package() -> None:
 
     packaged = Path(str(files("xdog.flow"))) / "skill"
     source = Path(__file__).resolve().parents[2] / "flow" / "skill"
-    skill_root = packaged if (packaged / "SKILL.md").exists() else source
-    assert (skill_root / "SKILL.md").exists(), f"no SKILL.md at {packaged} or {source}"
+    found = packaged if (packaged / "SKILL.md").exists() else source
+    assert (found / "SKILL.md").exists(), f"no SKILL.md at {packaged} or {source}"
+    return found
 
-    # The manager lists *subdirectories* of what it is given, so point it at
-    # the parent and address the skill by directory name.
-    m = SkillManager(shared_dir=skill_root.parent, group_dir=None)
-    assert skill_root.name in {s.slug for s in m.list_skills()}
 
-    loaded = m.load_skill(skill_root.name)
+def test_a_packaged_skill_is_listed_and_loadable(tmp_path: Path) -> None:
+    """The packaging path: `pip install xdog-flow` teaches an agent flow."""
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={"flow": _flow_skill_dir()})
+
+    listed = m.list_skills()
+    assert [s.slug for s in listed] == ["flow"]
+    assert listed[0].packaged is True
+    assert listed[0].content == "", "packaged skills must honour progressive disclosure too"
+
+    loaded = m.load_skill("flow")
     assert loaded is not None
-    assert loaded.description
+    assert loaded.packaged is True
     assert "workflow" in loaded.content.lower()
+
+
+def test_a_user_skill_shadows_a_packaged_one_of_the_same_slug(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "flow", "---\nname: mine\ndescription: my own\n---\n\nmy body")
+
+    m = SkillManager(shared_dir=shared, packaged={"flow": _flow_skill_dir()})
+
+    loaded = m.load_skill("flow")
+    assert loaded is not None
+    assert loaded.content == "my body"
+    assert loaded.packaged is False
+    # Shadowed, not duplicated.
+    assert [s.name for s in m.list_skills()] == ["mine"]
+
+
+def test_removing_a_packaged_skill_does_not_touch_site_packages(tmp_path: Path) -> None:
+    """`remove_skill` calls rmtree. Pointed at site-packages it would delete
+    part of an installed distribution to satisfy a request to hide a skill."""
+    flow_skill = _flow_skill_dir()
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={"flow": flow_skill})
+
+    assert m.remove_skill("flow") is False
+    assert (flow_skill / "SKILL.md").exists(), "the packaged skill was deleted!"
+    assert m.load_skill("flow") is not None
+
+
+def test_removing_a_shadow_reveals_the_packaged_skill_again(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "flow", "---\nname: mine\n---\n\nmy body")
+    m = SkillManager(shared_dir=shared, packaged={"flow": _flow_skill_dir()})
+
+    assert m.remove_skill("flow") is True
+    revealed = m.load_skill("flow")
+    assert revealed is not None and revealed.packaged is True
+
+
+def test_discovery_is_safe_to_call_and_finds_only_real_skills() -> None:
+    """Discovery walks every installed `xdog.*` package. It must not raise —
+    an agent that cannot start because some unrelated package is unreadable
+    would be a bad trade for a convenience feature."""
+    from xdog.agent.skills import packaged_skills
+
+    found = packaged_skills()
+    assert isinstance(found, dict)
+    for slug, path in found.items():
+        assert (path / "SKILL.md").is_file()
+        assert slug not in {"", "skill"}, "slug must name the package, not the directory"
