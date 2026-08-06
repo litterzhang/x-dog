@@ -51,7 +51,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Absolute file path"),
             offset=Param("integer", description="Line number to start from (1-based)"),
             limit=Param("integer", description=f"Max lines to return. Default: {_DEFAULT_READ_LIMIT}"))
-    async def read(self, ctx, path: str, offset: int = 1, limit: int = _DEFAULT_READ_LIMIT):
+    async def read(self, ctx: dict[str, Any], path: str, offset: int = 1, limit: int = _DEFAULT_READ_LIMIT) -> str | AgentToolResult:
         error = validate_path(path)
         if error:
             return error
@@ -60,7 +60,7 @@ class FilesystemTool(ToolDef):
     @action("write", description="Write content to a file",
             path=Param("string", required=True, description="Absolute file path"),
             content=Param("string", required=True, description="Content to write"))
-    async def write(self, ctx, path: str, content: str):
+    async def write(self, ctx: dict[str, Any], path: str, content: str) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -68,7 +68,7 @@ class FilesystemTool(ToolDef):
 
     @action("delete", description="Delete a file",
             path=Param("string", required=True, description="Absolute file path"))
-    async def delete(self, ctx, path: str):
+    async def delete(self, ctx: dict[str, Any], path: str) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -97,7 +97,7 @@ class FilesystemTool(ToolDef):
     @action("ls", description="List directory contents",
             path=Param("string", required=True, description="Absolute directory path"),
             show_hidden=Param("boolean", description="Include hidden files"))
-    async def ls(self, ctx, path: str, show_hidden: bool = False):
+    async def ls(self, ctx: dict[str, Any], path: str, show_hidden: bool = False) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -112,7 +112,7 @@ class FilesystemTool(ToolDef):
             context=Param("integer", description="Context lines"),
             multiline=Param("boolean"),
             head_limit=Param("integer"))
-    async def grep(self, ctx, path: str, pattern: str, **kwargs):
+    async def grep(self, ctx: dict[str, Any], path: str, pattern: str, **kwargs) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -122,7 +122,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Directory to search"),
             pattern=Param("string", required=True, description="Glob pattern"),
             head_limit=Param("integer"))
-    async def find(self, ctx, path: str, pattern: str, head_limit: int = _DEFAULT_FIND_LIMIT):
+    async def find(self, ctx: dict[str, Any], path: str, pattern: str, head_limit: int = _DEFAULT_FIND_LIMIT) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -137,7 +137,7 @@ def create_filesystem_tool() -> Any:
 # Internal helpers (unchanged from original)
 # ---------------------------------------------------------------------------
 
-def _fs_read(path: Path, args: dict[str, Any]):
+def _fs_read(path: Path, args: dict[str, Any]) -> str | AgentToolResult:
     if not path.exists():
         return f"Error: file not found: {path}"
     if path.is_dir():
@@ -178,7 +178,7 @@ def _fs_read(path: Path, args: dict[str, Any]):
     return AgentToolResult(content=(TextContent(text=result_text),))
 
 
-def _fs_read_image(path: Path):
+def _fs_read_image(path: Path) -> str | AgentToolResult:
     size = path.stat().st_size
     if size > _IMAGE_MAX_SIZE:
         return f"Error: image too large ({human_size(size)}). Max: {human_size(_IMAGE_MAX_SIZE)}."
@@ -188,14 +188,14 @@ def _fs_read_image(path: Path):
     return AgentToolResult(content=(ImageContent(data=data, mime_type=mime or "image/png"),))
 
 
-def _fs_write(path: Path, content: str):
+def _fs_write(path: Path, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     lines = content.count("\n") + (0 if content.endswith("\n") else 1)
     return f"Wrote {len(content)} chars ({lines} lines) to {path}"
 
 
-def _fs_delete(path: Path):
+def _fs_delete(path: Path) -> str:
     if not path.exists():
         return f"Error: file not found: {path}"
     if path.is_dir():
@@ -204,7 +204,7 @@ def _fs_delete(path: Path):
     return f"Deleted {path}"
 
 
-def _fs_edit(path: Path, args: dict[str, Any]):
+def _fs_edit(path: Path, args: dict[str, Any]) -> str:
     if not path.exists():
         return f"Error: file not found: {path}"
     if path.is_dir():
@@ -258,7 +258,7 @@ def _fs_edit(path: Path, args: dict[str, Any]):
     return AgentToolResult(content=(TextContent(text=diff_text),))
 
 
-def _fs_ls(path: Path, args: dict[str, Any]):
+def _fs_ls(path: Path, args: dict[str, Any]) -> str:
     if not path.exists():
         return f"Error: directory not found: {path}"
     if not path.is_dir():
@@ -296,7 +296,7 @@ def _fs_ls(path: Path, args: dict[str, Any]):
     return AgentToolResult(content=(TextContent(text=truncate(header + "\n".join(lines))),))
 
 
-async def _fs_grep(path: Path, args: dict[str, Any], cancel: Any = None):
+async def _fs_grep(path: Path, args: dict[str, Any], cancel: Any = None) -> str:
     pattern = args.get("pattern", "")
     if not pattern:
         return "Error: pattern is required for grep."
@@ -386,7 +386,7 @@ async def _fs_grep(path: Path, args: dict[str, Any], cancel: Any = None):
         return f"Error: {exc}"
 
 
-async def _fs_find(path: Path, args: dict[str, Any], cancel: Any = None):
+async def _fs_find(path: Path, args: dict[str, Any], cancel: Any = None) -> str:
     pattern = args.get("pattern", "")
     if not pattern:
         return "Error: pattern is required for find."
