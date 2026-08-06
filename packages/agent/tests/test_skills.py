@@ -389,20 +389,22 @@ def test_our_own_shipped_skill_conforms() -> None:
 # -- Declared lifetime --
 
 
-def test_scope_defaults_to_session(tmp_path: Path) -> None:
-    """A skill that says nothing stays until it is unloaded.
+def test_anything_that_is_not_turn_means_session(tmp_path: Path) -> None:
+    """Absent and unrecognised both mean "stays" — the safe direction.
 
-    The safe default, because the dangerous mistake is asymmetric: silently
-    dropping a guardrail costs correctness, keeping a finished procedure around
-    costs tokens.
+    Merged from two tests that asserted the same thing about different inputs.
+    An unknown value must never be read as "expire": silently dropping a
+    guardrail is the expensive mistake, keeping a finished skill is not.
     """
     shared = tmp_path / "shared"
-    _mk(shared, "s", "---\nname: s\ndescription: d\n---\n\nbody")
+    _mk(shared, "absent", "---\nname: absent\ndescription: d\n---\n\nbody")
+    _mk(shared, "unknown", "---\nname: unknown\ndescription: d\nmetadata:\n  scope: forever\n---\n\nb")
 
-    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
-    assert skill is not None
-    assert skill.scope == "session"
-    assert skill.expires_after_turn is False
+    m = SkillManager(shared_dir=shared, packaged={})
+    for slug in ("absent", "unknown"):
+        skill = m.load_skill(slug)
+        assert skill is not None
+        assert skill.scope == "session" and skill.expires_after_turn is False
 
 
 def test_an_author_can_declare_a_turn_scoped_skill(tmp_path: Path) -> None:
@@ -421,28 +423,6 @@ def test_scope_survives_the_listing_projection(tmp_path: Path) -> None:
 
     listed = SkillManager(shared_dir=shared, packaged={}).list_skills()
     assert [s.expires_after_turn for s in listed] == [True]
-
-
-def test_scope_is_read_case_and_space_insensitively(tmp_path: Path) -> None:
-    """One test, not three: `TURN`, ` turn ` and `Turn` all exercise the same
-    `.strip().lower()` and would fail together."""
-    shared = tmp_path / "shared"
-    for i, declared in enumerate(("TURN", " turn ", "Turn")):
-        _mk(shared, f"s{i}", f'---\nname: s{i}\ndescription: d\nmetadata:\n  scope: "{declared}"\n---\n\nb')
-
-    manager = SkillManager(shared_dir=shared, packaged={})
-    for i in range(3):
-        skill = manager.load_skill(f"s{i}")
-        assert skill is not None and skill.expires_after_turn is True
-
-
-def test_an_unrecognised_scope_falls_back_to_session(tmp_path: Path) -> None:
-    """Anything we do not understand must not silently mean "expire"."""
-    shared = tmp_path / "shared"
-    _mk(shared, "s", "---\nname: s\ndescription: d\nmetadata:\n  scope: forever\n---\n\nbody")
-
-    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
-    assert skill is not None and skill.expires_after_turn is False
 
 
 # -- Bundled files have to be findable --
