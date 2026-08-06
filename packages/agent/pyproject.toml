@@ -3,17 +3,24 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent"
+name = "xdog-agent"
 version = "0.57.1"
 description = "Agent runtime with tool calling and state management"
 requires-python = ">=3.12"
 authors = [{ name = "HugeMan" }]
+readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
-    "ai",
+    "xdog-ai",
     "fastjsonschema",
 ]
+
+[project.urls]
+Homepage = "https://xdog.942295.xyz"
+Repository = "https://github.com/litterzhang/x-dog"
+Documentation = "https://xdog.942295.xyz"
+Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
 xdog-agent = "agent.cli:main"

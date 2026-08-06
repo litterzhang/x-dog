@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+
+      - name: Tests
+        run: uv run pytest packages/flow/tests packages/site/tests -q
+
+      - name: Lint
+        run: uv run ruff check packages
+
+      - name: Types
+        run: uv run mypy --strict packages/flow/src/flow
+
+      # The examples are executable artifacts, not decoration: this catches a
+      # workflow whose companion suite stopped passing after a kernel change.
+      - name: Example suites
+        run: uv run xdog-flow test packages/flow/examples/ --allow-script-stub
+
+      # A dependency named `ai` or `flow` on PyPI is somebody else's package.
+      # Publishing metadata that points at one is a supply-chain bug, so fail
+      # the build rather than discover it after upload.
+      - name: No bare inter-package requirements
+        run: |
+          uv build --package xdog-flow --out-dir /tmp/metacheck
+          python - <<'PY'
+          import glob, re, sys, zipfile
+          wheel = glob.glob("/tmp/metacheck/*.whl")[0]
+          meta = zipfile.ZipFile(wheel).read(
+              next(n for n in zipfile.ZipFile(wheel).namelist() if n.endswith("METADATA"))
+          ).decode()
+          reqs = re.findall(r"^Requires-Dist: (\S+)", meta, re.M)
+          bad = [r for r in reqs if r in {"ai", "agent", "tui", "flow", "claw", "coding", "site"}]
+          print("Requires-Dist:", reqs)
+          if bad:
+              sys.exit(f"bare inter-package requirement(s) would resolve to unrelated PyPI projects: {bad}")
+          PY

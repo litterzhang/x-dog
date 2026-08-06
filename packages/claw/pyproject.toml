@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claw"
+name = "xdog-claw"
 version = "0.57.1"
 description = "AI agent orchestration runtime with long-term memory"
 requires-python = ">=3.12"
@@ -11,9 +11,9 @@ authors = [{ name = "HugeMan" }]
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
-    "ai",
-    "agent",
-    "tui",
+    "xdog-ai",
+    "xdog-agent",
+    "xdog-tui",
     "click>=8.1.0",
     "pyyaml>=6.0",
     "aiosqlite>=0.20.0",
@@ -22,6 +22,12 @@ dependencies = [
 [project.optional-dependencies]
 search = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2"]
 all = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2", "croniter>=2.0.0"]
+
+[project.urls]
+Homepage = "https://xdog.942295.xyz"
+Repository = "https://github.com/litterzhang/x-dog"
+Documentation = "https://xdog.942295.xyz"
+Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
 xdog-claw = "claw.cli:main"

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "site"
+name = "xdog-site"
 version = "0.1.0"
 description = "x-dog public site: package overview, blog, and FAQ (Flask)"
 requires-python = ">=3.12"
@@ -16,6 +16,12 @@ dependencies = [
     "python-frontmatter>=1.0",
     "pygments>=2.17",
 ]
+
+[project.urls]
+Homepage = "https://xdog.942295.xyz"
+Repository = "https://github.com/litterzhang/x-dog"
+Documentation = "https://xdog.942295.xyz"
+Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
 xdog-site = "xdog_site.app:main"

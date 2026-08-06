@@ -4,56 +4,15 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
-    "agent",
-    "ai",
-    "claw",
-    "coding",
-    "flow",
-    "site",
-    "tui",
     "x-dog",
+    "xdog-agent",
+    "xdog-ai",
+    "xdog-claw",
+    "xdog-coding",
+    "xdog-flow",
+    "xdog-site",
+    "xdog-tui",
 ]
-
-[[package]]
-name = "agent"
-version = "0.57.1"
-source = { editable = "packages/agent" }
-dependencies = [
-    { name = "ai" },
-    { name = "fastjsonschema" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ai", editable = "packages/ai" },
-    { name = "fastjsonschema" },
-]
-
-[[package]]
-name = "ai"
-version = "0.57.1"
-source = { editable = "packages/ai" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "openai" },
-]
-openai = [
-    { name = "openai" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "openai", marker = "extra == 'all'", specifier = ">=2.38,<3" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.38,<3" },
-    { name = "pydantic", specifier = ">=2.0" },
-]
-provides-extras = ["openai", "all"]
 
 [[package]]
 name = "aiosqlite"
@@ -114,50 +73,6 @@ wheels = [
 ]
 
 [[package]]
-name = "claw"
-version = "0.57.1"
-source = { editable = "packages/claw" }
-dependencies = [
-    { name = "agent" },
-    { name = "ai" },
-    { name = "aiosqlite" },
-    { name = "click" },
-    { name = "pyyaml" },
-    { name = "tui" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "croniter" },
-    { name = "rank-bm25" },
-    { name = "sentence-transformers" },
-    { name = "sqlite-vec" },
-]
-search = [
-    { name = "rank-bm25" },
-    { name = "sentence-transformers" },
-    { name = "sqlite-vec" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agent", editable = "packages/agent" },
-    { name = "ai", editable = "packages/ai" },
-    { name = "aiosqlite", specifier = ">=0.20.0" },
-    { name = "click", specifier = ">=8.1.0" },
-    { name = "croniter", marker = "extra == 'all'", specifier = ">=2.0.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rank-bm25", marker = "extra == 'all'", specifier = ">=0.2.2" },
-    { name = "rank-bm25", marker = "extra == 'search'", specifier = ">=0.2.2" },
-    { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=3.0.0" },
-    { name = "sentence-transformers", marker = "extra == 'search'", specifier = ">=3.0.0" },
-    { name = "sqlite-vec", marker = "extra == 'all'", specifier = ">=0.1.1" },
-    { name = "sqlite-vec", marker = "extra == 'search'", specifier = ">=0.1.1" },
-    { name = "tui", editable = "packages/tui" },
-]
-provides-extras = ["search", "all"]
-
-[[package]]
 name = "click"
 version = "8.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -167,25 +82,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/57/75/31212c6bf2503fdf920d87fee5d7a86a2e3bcf444984126f13d8e4016804/click-8.3.2.tar.gz", hash = "sha256:14162b8b3b3550a7d479eafa77dfd3c38d9dc8951f6f69c78913a8f9a7540fd5", size = 302856, upload-time = "2026-04-03T19:14:45.118Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e4/20/71885d8b97d4f3dde17b1fdb92dbd4908b00541c5a3379787137285f602e/click-8.3.2-py3-none-any.whl", hash = "sha256:1924d2c27c5653561cd2cae4548d1406039cb79b858b747cfea24924bbc1616d", size = 108379, upload-time = "2026-04-03T19:14:43.505Z" },
-]
-
-[[package]]
-name = "coding"
-version = "0.57.1"
-source = { editable = "packages/coding" }
-dependencies = [
-    { name = "agent" },
-    { name = "ai" },
-    { name = "pyyaml" },
-    { name = "tui" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agent", editable = "packages/agent" },
-    { name = "ai", editable = "packages/ai" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "tui", editable = "packages/tui" },
 ]
 
 [[package]]
@@ -320,29 +216,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/26/00/35d85dcce6c57fdc871f3867d465d780f302a175ea360f62533f12b27e2b/flask-3.1.3.tar.gz", hash = "sha256:0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb", size = 759004, upload-time = "2026-02-19T05:00:57.678Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl", hash = "sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c", size = 103424, upload-time = "2026-02-19T05:00:56.027Z" },
-]
-
-[[package]]
-name = "flow"
-version = "0.57.1"
-source = { editable = "packages/flow" }
-dependencies = [
-    { name = "agent" },
-    { name = "ai" },
-    { name = "fastjsonschema" },
-    { name = "jsonpath-ng" },
-    { name = "pydot" },
-    { name = "tui" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agent", editable = "packages/agent" },
-    { name = "ai", editable = "packages/ai" },
-    { name = "fastjsonschema" },
-    { name = "jsonpath-ng" },
-    { name = "pydot" },
-    { name = "tui", editable = "packages/tui" },
 ]
 
 [[package]]
@@ -1585,25 +1458,6 @@ wheels = [
 ]
 
 [[package]]
-name = "site"
-version = "0.1.0"
-source = { editable = "packages/site" }
-dependencies = [
-    { name = "flask" },
-    { name = "markdown" },
-    { name = "pygments" },
-    { name = "python-frontmatter" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "flask", specifier = ">=3.0" },
-    { name = "markdown", specifier = ">=3.5" },
-    { name = "pygments", specifier = ">=2.17" },
-    { name = "python-frontmatter", specifier = ">=1.0" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1773,17 +1627,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tui"
-version = "0.57.1"
-source = { editable = "packages/tui" }
-dependencies = [
-    { name = "wcwidth" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "wcwidth", specifier = ">=0.2.0" }]
-
-[[package]]
 name = "typer"
 version = "0.24.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1845,10 +1688,10 @@ name = "x-dog"
 version = "0.57.1"
 source = { editable = "." }
 dependencies = [
-    { name = "agent" },
-    { name = "ai" },
-    { name = "flow" },
-    { name = "site" },
+    { name = "xdog-agent" },
+    { name = "xdog-ai" },
+    { name = "xdog-flow" },
+    { name = "xdog-site" },
 ]
 
 [package.dev-dependencies]
@@ -1862,10 +1705,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent", editable = "packages/agent" },
-    { name = "ai", editable = "packages/ai" },
-    { name = "flow", editable = "packages/flow" },
-    { name = "site", editable = "packages/site" },
+    { name = "xdog-agent", editable = "packages/agent" },
+    { name = "xdog-ai", editable = "packages/ai" },
+    { name = "xdog-flow", editable = "packages/flow" },
+    { name = "xdog-site", editable = "packages/site" },
 ]
 
 [package.metadata.requires-dev]
@@ -1876,3 +1719,160 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.14" },
     { name = "ruff", specifier = ">=0.4" },
 ]
+
+[[package]]
+name = "xdog-agent"
+version = "0.57.1"
+source = { editable = "packages/agent" }
+dependencies = [
+    { name = "fastjsonschema" },
+    { name = "xdog-ai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastjsonschema" },
+    { name = "xdog-ai", editable = "packages/ai" },
+]
+
+[[package]]
+name = "xdog-ai"
+version = "0.57.1"
+source = { editable = "packages/ai" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "openai" },
+]
+openai = [
+    { name = "openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "openai", marker = "extra == 'all'", specifier = ">=2.38,<3" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.38,<3" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+provides-extras = ["openai", "all"]
+
+[[package]]
+name = "xdog-claw"
+version = "0.57.1"
+source = { editable = "packages/claw" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "click" },
+    { name = "pyyaml" },
+    { name = "xdog-agent" },
+    { name = "xdog-ai" },
+    { name = "xdog-tui" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "croniter" },
+    { name = "rank-bm25" },
+    { name = "sentence-transformers" },
+    { name = "sqlite-vec" },
+]
+search = [
+    { name = "rank-bm25" },
+    { name = "sentence-transformers" },
+    { name = "sqlite-vec" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20.0" },
+    { name = "click", specifier = ">=8.1.0" },
+    { name = "croniter", marker = "extra == 'all'", specifier = ">=2.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rank-bm25", marker = "extra == 'all'", specifier = ">=0.2.2" },
+    { name = "rank-bm25", marker = "extra == 'search'", specifier = ">=0.2.2" },
+    { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=3.0.0" },
+    { name = "sentence-transformers", marker = "extra == 'search'", specifier = ">=3.0.0" },
+    { name = "sqlite-vec", marker = "extra == 'all'", specifier = ">=0.1.1" },
+    { name = "sqlite-vec", marker = "extra == 'search'", specifier = ">=0.1.1" },
+    { name = "xdog-agent", editable = "packages/agent" },
+    { name = "xdog-ai", editable = "packages/ai" },
+    { name = "xdog-tui", editable = "packages/tui" },
+]
+provides-extras = ["search", "all"]
+
+[[package]]
+name = "xdog-coding"
+version = "0.57.1"
+source = { editable = "packages/coding" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "xdog-agent" },
+    { name = "xdog-ai" },
+    { name = "xdog-tui" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "xdog-agent", editable = "packages/agent" },
+    { name = "xdog-ai", editable = "packages/ai" },
+    { name = "xdog-tui", editable = "packages/tui" },
+]
+
+[[package]]
+name = "xdog-flow"
+version = "0.57.1"
+source = { editable = "packages/flow" }
+dependencies = [
+    { name = "fastjsonschema" },
+    { name = "jsonpath-ng" },
+    { name = "pydot" },
+    { name = "xdog-agent" },
+    { name = "xdog-ai" },
+    { name = "xdog-tui" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastjsonschema" },
+    { name = "jsonpath-ng" },
+    { name = "pydot" },
+    { name = "xdog-agent", editable = "packages/agent" },
+    { name = "xdog-ai", editable = "packages/ai" },
+    { name = "xdog-tui", editable = "packages/tui" },
+]
+
+[[package]]
+name = "xdog-site"
+version = "0.1.0"
+source = { editable = "packages/site" }
+dependencies = [
+    { name = "flask" },
+    { name = "markdown" },
+    { name = "pygments" },
+    { name = "python-frontmatter" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "flask", specifier = ">=3.0" },
+    { name = "markdown", specifier = ">=3.5" },
+    { name = "pygments", specifier = ">=2.17" },
+    { name = "python-frontmatter", specifier = ">=1.0" },
+]
+
+[[package]]
+name = "xdog-tui"
+version = "0.57.1"
+source = { editable = "packages/tui" }
+dependencies = [
+    { name = "wcwidth" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "wcwidth", specifier = ">=0.2.0" }]

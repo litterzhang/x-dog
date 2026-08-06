@@ -1,0 +1,89 @@
+name: publish
+
+# Publishes the four distributions to PyPI via Trusted Publishing (OIDC) — no API
+# token is stored anywhere. PyPI verifies the request came from this repository,
+# this workflow file, and the named environment.
+#
+# Two ways in:
+#   * push a tag `v0.57.1`  → builds and publishes to PyPI
+#   * Run workflow…         → choose testpypi (default) or pypi
+#
+# Publish order does not matter: PyPI does not resolve Requires-Dist at upload
+# time, only at install time, and all four land in the same run.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to publish
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Only the libraries that make sense standalone. `xdog-site` is the
+        # website, `xdog-claw` and `xdog-coding` are not ready to publish.
+        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build sdist + wheel
+        run: uv build --package ${{ matrix.package }} --out-dir dist
+      - name: Check metadata renders on PyPI
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest packages/flow/tests packages/site/tests -q
+      - run: uv run ruff check packages
+      - run: uv run mypy --strict packages/flow/src/flow
+
+  publish:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    # The environment name must match the Trusted Publisher entry on PyPI.
+    environment:
+      name: ${{ inputs.target == 'pypi' && 'pypi' || (github.event_name == 'push' && 'pypi' || 'testpypi') }}
+    permissions:
+      # Mints the short-lived OIDC token PyPI trades for an upload token.
+      # Without this the action silently falls back to looking for a password.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist/
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI accumulates versions from earlier dry runs; re-running a
+          # build that produced identical files should not fail the job.
+          skip-existing: true
+      - name: Publish to PyPI
+        if: github.event_name == 'push' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1

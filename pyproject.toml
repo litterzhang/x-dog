@@ -11,15 +11,21 @@ license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 requires-python = ">=3.12"
 authors = [
-    { name = "Mario Zechner" },
+    { name = "HugeMan" },
 ]
 
 dependencies = [
-    "ai",
-    "agent",
-    "flow",
-    "site",
+    "xdog-ai",
+    "xdog-agent",
+    "xdog-flow",
+    "xdog-site",
 ]
+
+[project.urls]
+Homepage = "https://xdog.942295.xyz"
+Repository = "https://github.com/litterzhang/x-dog"
+Documentation = "https://xdog.942295.xyz"
+Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [dependency-groups]
 dev = [
@@ -54,13 +60,13 @@ members = [
 ]
 
 [tool.uv.sources]
-ai = { workspace = true }
-agent = { workspace = true }
-flow = { workspace = true }
-tui = { workspace = true }
-site = { workspace = true }
-claw = { workspace = true }
-coding = { workspace = true }
+xdog-ai = { workspace = true }
+xdog-agent = { workspace = true }
+xdog-flow = { workspace = true }
+xdog-tui = { workspace = true }
+xdog-site = { workspace = true }
+xdog-claw = { workspace = true }
+xdog-coding = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
