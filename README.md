@@ -1,7 +1,10 @@
 # x-dog
 
+[![CI](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml/badge.svg)](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/xdog-flow?label=xdog-flow)](https://pypi.org/project/xdog-flow/)
+[![Release](https://img.shields.io/github/v/release/litterzhang/x-dog?label=release)](https://github.com/litterzhang/x-dog/releases)
+[![Python](https://img.shields.io/pypi/pyversions/xdog-flow)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Docs](https://img.shields.io/badge/docs-xdog.942295.xyz-informational.svg)](https://xdog.942295.xyz)
 
 **A local-first toolkit for building, running and scheduling LLM workflows — no
@@ -30,15 +33,19 @@ Python module that needs nothing from flow at run time.
 带类型化端口和显式的边映射。它在**任何东西跑起来之前**整图校验，本地执行，并能编译成
 运行时不依赖 flow 的独立 Python 模块。
 
-| Package | CLI | What it does · 做什么 |
-|---|---|---|
-| **flow** | `xdog-flow` | Typed workflow format, validator, interpreter, Python compiler, systemd scheduler |
-| **ai** | `xdog-ai` | Unified LLM provider API — chat, embeddings, web search, Anthropic-compatible proxy |
-| **agent** | `xdog-agent` | Agent runtime: tool calling, structured output, steering |
-| **coding** | `xdog-coding` | Interactive coding-agent CLI with session management |
-| **claw** | `xdog-claw` | Agent orchestration runtime |
-| **tui** | — | Terminal UI library with differential rendering |
-| **site** | `xdog-site` | The documentation site linked above |
+| Package | Import | CLI | What it does · 做什么 |
+|---|---|---|---|
+| [`xdog-flow`](https://pypi.org/project/xdog-flow/) | `xdog.flow` | `xdog-flow` | Typed workflow format, validator, interpreter, Python compiler, systemd scheduler |
+| [`xdog-ai`](https://pypi.org/project/xdog-ai/) | `xdog.ai` | `xdog-ai` | Unified LLM provider API — chat, embeddings, web search, Anthropic-compatible proxy |
+| [`xdog-agent`](https://pypi.org/project/xdog-agent/) | `xdog.agent` | `xdog-agent` | Agent runtime: tool calling, structured output, steering |
+| [`xdog-coding`](https://pypi.org/project/xdog-coding/) | `xdog.coding` | `xdog-coding` | Interactive coding-agent CLI with session management |
+| [`xdog-claw`](https://pypi.org/project/xdog-claw/) | `xdog.claw` | `xdog-claw` | Agent orchestration runtime |
+| [`xdog-tui`](https://pypi.org/project/xdog-tui/) | `xdog.tui` | — | Terminal UI library with differential rendering |
+
+Every package shares the `xdog` namespace, so they install side by side without
+colliding with anything else on PyPI.
+
+所有包共用 `xdog` 命名空间，彼此并存，也不会和 PyPI 上的同名项目冲突。
 
 ---
 
@@ -46,26 +53,32 @@ Python module that needs nothing from flow at run time.
 
 ### 1. Install · 安装
 
-Requires **Python 3.12+** and [uv](https://docs.astral.sh/uv/).
-需要 **Python 3.12+** 和 [uv](https://docs.astral.sh/uv/)。
+Requires **Python 3.12+**. 需要 **Python 3.12+**。
 
 ```bash
-git clone https://github.com/litterzhang/x-dog.git
-cd x-dog
-uv sync
+pip install xdog-flow
 ```
 
-`uv sync` creates the virtualenv and installs every package in editable mode.
-Prefix commands with `uv run`, or `source .venv/bin/activate` and drop the prefix.
+That pulls in `xdog-ai`, `xdog-agent` and `xdog-tui`, and puts `xdog-flow` and
+`xdog-ai` on your PATH. Nothing else is needed — no server, no database, no
+account.
 
-`uv sync` 会创建虚拟环境并以 editable 模式装上所有包。命令前加 `uv run`，
-或者 `source .venv/bin/activate` 之后省掉前缀。
+这会一并装上 `xdog-ai`、`xdog-agent`、`xdog-tui`，并把 `xdog-flow` 和 `xdog-ai`
+放进 PATH。没有别的前置条件 —— 不需要服务、不需要数据库、不需要账号。
+
+Prefer an isolated tool install, or want the coding agent as well:
+想要隔离安装，或者也要那个编码 agent：
+
+```bash
+uv tool install xdog-flow       # isolated, still on PATH · 隔离安装,命令照样可用
+pip install xdog-coding         # the interactive coding agent · 交互式编码 agent
+```
 
 ### 2. Log in to a provider · 登录 provider
 
 ```bash
-uv run xdog-ai providers        # what's available · 有哪些 provider
-uv run xdog-ai login copilot    # device-code flow · 设备码登录
+xdog-ai providers        # what's available · 有哪些 provider
+xdog-ai login copilot    # device-code flow · 设备码登录
 ```
 
 Credentials stay on your machine; nothing is sent anywhere except the provider itself.
@@ -75,27 +88,26 @@ Credentials stay on your machine; nothing is sent anywhere except the provider i
 
 ```bash
 # One-shot · 单次提问
-uv run xdog-ai chat copilot gpt-5.6-sol "Explain the CAP theorem in three sentences."
+xdog-ai chat copilot gpt-5.6-sol "Explain the CAP theorem in three sentences."
 
 # Interactive — omit the message · 省略消息进入交互模式
-uv run xdog-ai chat copilot gpt-5.6-sol
+xdog-ai chat copilot gpt-5.6-sol
 
 # Handy flags · 常用参数
-uv run xdog-ai chat copilot gpt-5.6-sol "Summarise today's news" --web-search
-uv run xdog-ai chat copilot gpt-5.6-sol "What is in this image?" -i photo.png
-uv run xdog-ai models copilot --sync     # refresh the model list · 刷新模型列表
+xdog-ai chat copilot gpt-5.6-sol "Summarise today's news" --web-search
+xdog-ai chat copilot gpt-5.6-sol "What is in this image?" -i photo.png
+xdog-ai models copilot --sync     # refresh the model list · 刷新模型列表
 ```
 
 ### 4. Your first workflow · 第一个工作流
 
-`packages/flow/examples/agent_calculator.json` is the smallest workflow that uses
-both node kinds: a deterministic **script** node builds an arithmetic problem, and
-an **agent** node solves it *by running a `bash` command* rather than doing the
+Save this as `calculator.json`. It is the smallest workflow that uses both node
+kinds: a deterministic **script** node builds an arithmetic problem, and an
+**agent** node solves it *by running a `bash` command* rather than doing the
 arithmetic in its head.
 
-`packages/flow/examples/agent_calculator.json` 是同时用到两种节点的最小示例：
-确定性的 **script** 节点构造算式，**agent** 节点**通过执行 `bash` 命令**求解，
-而不是靠脑内心算。
+把下面这段存成 `calculator.json`。它是同时用到两种节点的最小示例：确定性的
+**script** 节点构造算式，**agent** 节点**通过执行 `bash` 命令**求解，而不是靠脑内心算。
 
 ```jsonc
 {
@@ -141,19 +153,17 @@ moves only along declared edges; there is no shared global state.
 **Run it · 运行**
 
 ```bash
-cd packages/flow
-
 # Validate before executing; --json gives every error at once, machine-readable
 # 执行前校验；--json 一次给出全部错误，机器可读
-uv run xdog-flow validate examples/agent_calculator.json
-uv run xdog-flow validate examples/agent_calculator.json --json
+xdog-flow validate calculator.json
+xdog-flow validate calculator.json --json
 
 # Offline dry run — no model calls, no login needed, but the whole graph runs
 # 离线试跑 —— 不调模型、不需登录，但整张图真的跑一遍
-uv run xdog-flow run examples/agent_calculator.json --dry-run --input a=12 --input b=30
+xdog-flow run calculator.json --dry-run --input a=12 --input b=30
 
 # For real · 真实执行
-uv run xdog-flow run examples/agent_calculator.json --input a=12 --input b=30
+xdog-flow run calculator.json --input a=12 --input b=30
 ```
 
 Every run prints the same envelope · 每次运行都返回同一种结果信封：
@@ -176,27 +186,27 @@ Every run prints the same envelope · 每次运行都返回同一种结果信封
 
 ```bash
 # Topology as ASCII / Mermaid / SVG · 拓扑图
-uv run xdog-flow graph examples/agent_calculator.json
-uv run xdog-flow graph examples/agent_calculator.json --mermaid
+xdog-flow graph calculator.json
+xdog-flow graph calculator.json --mermaid
 
 # Compile to a standalone module and run it with plain python
 # 编译成独立模块，用普通 python 直接跑
-uv run xdog-flow generate examples/agent_calculator.json -o workflow.py
+xdog-flow generate calculator.json -o workflow.py
 python workflow.py
 
 # Run the companion test suites — model turns are stubbed, everything else is real
 # 跑配套测试套件 —— 只 stub 模型调用，边/条件/循环全部真跑
-uv run xdog-flow test examples/ --allow-script-stub
+xdog-flow test .  --allow-script-stub
 
 # Install a systemd timer from the workflow's own `schedule` block
 # 依工作流自带的 schedule 块生成并安装 systemd timer
-uv run xdog-flow scheduling install examples/digest_timer.json
+xdog-flow scheduling install calculator.json
 ```
 
 Or edit one in the interactive terminal builder · 或用交互式终端编辑器：
 
 ```bash
-uv run xdog-flow build my_workflow.json
+xdog-flow build my_workflow.json
 ```
 
 You can also run an example in your browser at
@@ -209,19 +219,23 @@ You can also run an example in your browser at
 | | |
 |---|---|
 | **[xdog.942295.xyz](https://xdog.942295.xyz)** | documentation, design notes, blog · 文档、设计笔记、博客 |
-| **[packages/flow/README.md](packages/flow/README.md)** | the full workflow schema, execution model and CLI · 完整 schema、执行模型与 CLI |
-| **[packages/flow/examples/](packages/flow/examples/)** | runnable examples · 可运行示例 |
-| **[packages/flow/examples/depins_enrich/](packages/flow/examples/depins_enrich/)** | a case study — a workflow that runs unattended every four hours and writes real commits · 案例研究：每四小时无人值守运行并产生真实提交的工作流 |
+| **[flow's README](https://github.com/litterzhang/x-dog/blob/main/packages/flow/README.md)** | the full workflow schema, execution model and CLI · 完整 schema、执行模型与 CLI |
+| **[examples/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples)** | runnable examples · 可运行示例 |
+| **[depins_enrich/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples/depins_enrich)** | a case study — a workflow that runs unattended every four hours and writes real commits · 案例研究：每四小时无人值守运行并产生真实提交的工作流 |
 
 ---
 
 ## Development · 开发
 
 ```bash
-uv sync                                       # install everything · 安装全部
-uv run pytest packages/flow/tests -q          # test one package · 单包测试
-uv run ruff check packages                    # lint
-uv run mypy --strict packages/flow/src/flow   # type check
+git clone https://github.com/litterzhang/x-dog.git
+cd x-dog
+uv sync                                  # editable install of every package · 全部包 editable 安装
+
+uv run pytest packages/flow/tests -q     # test one package · 单包测试
+uv run ruff check packages               # lint
+uv run mypy --strict -p xdog.flow        # type check
+uv run xdog-flow test packages/flow/examples/ --allow-script-stub
 ```
 
 ---
