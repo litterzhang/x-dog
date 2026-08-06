@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
+from xdog.flow import error_codes as codes
 from xdog.flow.coerce import VALID_TYPES
 from xdog.flow.errors import FlowWarning, WorkflowValidationError
 from xdog.flow.frontier import build_frontier_spec
@@ -54,7 +55,7 @@ _WHILE_SAFE_MAX = 100
 
 def _parse_condition(data: Any) -> Condition:
     if not isinstance(data, dict):
-        raise WorkflowValidationError(f"Condition must be a dict, got {type(data)}")
+        raise WorkflowValidationError(f"Condition must be a dict, got {type(data)}", code=codes.WRONG_SHAPE)
     if "equals" in data:
         inner = data["equals"]
         return Condition(op="equals", value=str(inner["value"]), text=str(inner["text"]))
@@ -71,7 +72,11 @@ def _parse_condition(data: Any) -> Condition:
         return Condition(op="and", children=tuple(_parse_condition(c) for c in data["and"]))
     if "or" in data:
         return Condition(op="or", children=tuple(_parse_condition(c) for c in data["or"]))
-    raise WorkflowValidationError(f"Unknown condition keys: {list(data.keys())}")
+    raise WorkflowValidationError(
+        f"Unknown condition keys: {list(data.keys())}",
+        code=codes.UNKNOWN_FIELD,
+        hint="Use one of: equals, contains, gt, gte, lt, lte, not, and, or.",
+    )
 
 
 def _parse_ports(raw: Any) -> tuple[Port, ...]:
@@ -97,7 +102,11 @@ def _port_from_obj(item: dict[str, Any]) -> Port:
     name = str(item["name"])
     schema = item.get("schema")
     if not isinstance(schema, dict):
-        raise WorkflowValidationError(f"Port {name!r}: object form requires a 'schema' object")
+        raise WorkflowValidationError(
+            f"Port {name!r}: object form requires a 'schema' object",
+            code=codes.MISSING_REQUIRED,
+            hint='Use the bare-string form ("text") for a port that needs no schema.',
+        )
     return Port(name=name, schema=schema, required=bool(item.get("required", True)))
 
 
@@ -119,22 +128,31 @@ def _parse_node(
     raw_retry = data.get("retry")
     if raw_retry is not None:
         if not isinstance(raw_retry, dict):
-            raise WorkflowValidationError(f"Node {node_id!r}: retry must be an object")
+            raise WorkflowValidationError(
+                f"Node {node_id!r}: retry must be an object",
+                code=codes.WRONG_SHAPE,
+                hint='Write it as {"max": 2, "backoff": 1.0}.',
+            )
         raw_max = raw_retry.get("max", 0)
         if not isinstance(raw_max, int) or raw_max < 0:
-            raise WorkflowValidationError(f"Node {node_id!r}: retry.max must be >= 0")
+            raise WorkflowValidationError(f"Node {node_id!r}: retry.max must be >= 0", code=codes.INVALID_VALUE)
         raw_backoff = raw_retry.get("backoff", 0.0)
         if not isinstance(raw_backoff, (int, float)) or raw_backoff < 0:
-            raise WorkflowValidationError(f"Node {node_id!r}: retry.backoff must be >= 0")
+            raise WorkflowValidationError(
+                f"Node {node_id!r}: retry.backoff must be >= 0", code=codes.INVALID_VALUE
+            )
         retry = RetryPolicy(max=int(raw_max), backoff=float(raw_backoff))
     raw_on_error = data.get("on_error", "fail")
     if raw_on_error not in ("fail", "isolate"):
-        raise WorkflowValidationError(f"Node {node_id!r}: on_error must be 'fail' or 'isolate'")
+        raise WorkflowValidationError(
+            f"Node {node_id!r}: on_error must be 'fail' or 'isolate'", code=codes.INVALID_VALUE
+        )
     on_error: Literal["fail", "isolate"] = raw_on_error
     raw_type = data.get("type", "agent")
     if raw_type not in ("agent", "script", "human", "subflow"):
         raise WorkflowValidationError(
-            f"Node {node_id!r}: type must be 'agent', 'script', 'human', or 'subflow', got {raw_type!r}"
+            f"Node {node_id!r}: type must be 'agent', 'script', 'human', or 'subflow', got {raw_type!r}",
+            code=codes.INVALID_VALUE,
         )
     node_type: Literal["agent", "script", "human", "subflow"] = raw_type
     signal = str(data.get("signal", ""))
@@ -149,7 +167,8 @@ def _parse_node(
         if data.get("inputs") or data.get("outputs"):
             raise WorkflowValidationError(
                 f"Subflow node {node_id!r}: must not declare 'inputs'/'outputs' — they are "
-                f"derived from the child workflow's signature"
+                f"derived from the child workflow's signature",
+                code=codes.INVALID_SUBFLOW,
             )
         if isinstance(raw_child, str):
             # Path reference: resolve against base_dir, guard against cycles, and
@@ -157,17 +176,21 @@ def _parse_node(
             if base_dir is None:
                 raise WorkflowValidationError(
                     f"Subflow node {node_id!r}: a path reference {raw_child!r} needs a base directory; "
-                    f"load via load_workflow(path), not parse_workflow(dict)"
+                    f"load via load_workflow(path), not parse_workflow(dict)",
+                    code=codes.INVALID_SUBFLOW,
                 )
             child_path = (base_dir / raw_child).resolve()
             seen = _seen or frozenset()
             if child_path in seen:
                 raise WorkflowValidationError(
-                    f"Subflow node {node_id!r}: cyclic subflow reference to {child_path}"
+                    f"Subflow node {node_id!r}: cyclic subflow reference to {child_path}",
+                    code=codes.INVALID_SUBFLOW,
                 )
             if not child_path.is_file():
                 raise WorkflowValidationError(
-                    f"Subflow node {node_id!r}: child workflow file not found: {child_path}"
+                    f"Subflow node {node_id!r}: child workflow file not found: {child_path}",
+                    code=codes.INVALID_SUBFLOW,
+                    hint="The path resolves against the parent workflow file's directory, not the cwd.",
                 )
             with child_path.open(encoding="utf-8") as _fh:
                 child_data = json.load(_fh)
@@ -177,7 +200,8 @@ def _parse_node(
         else:
             raise WorkflowValidationError(
                 f"Subflow node {node_id!r}: must set 'subflow' to an inline child workflow object "
-                f"or a path string to a child workflow JSON"
+                f"or a path string to a child workflow JSON",
+                code=codes.MISSING_REQUIRED,
             )
         in_sig = workflow_input_schema(child)["properties"]
         out_sig = workflow_output_schema(child)["properties"]
@@ -200,7 +224,9 @@ def _parse_node(
         mcp_list: list[tuple[str, dict[str, object]]] = []
         for k, v in raw_mcp.items():
             if not isinstance(v, dict):
-                raise WorkflowValidationError(f"Node {node_id!r}: mcp_servers[{k!r}] must be an object")
+                raise WorkflowValidationError(
+                    f"Node {node_id!r}: mcp_servers[{k!r}] must be an object", code=codes.WRONG_SHAPE
+                )
             mcp_list.append((str(k), v))
         mcp_servers = tuple(mcp_list)
     else:
@@ -245,18 +271,22 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
         # unlike a plain ``loop.max`` which silently stops.
         if "loop" in data:
             raise WorkflowValidationError(
-                f"Edge {data.get('from')!r}->{data.get('to')!r}: cannot use both 'while' and 'loop'"
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: cannot use both 'while' and 'loop'",
+                code=codes.INVALID_LOOP,
+                hint='Keep the while form and set its bound with {"cond": ..., "max": N}.',
             )
         if "when" in data:
             raise WorkflowValidationError(
                 f"Edge {data.get('from')!r}->{data.get('to')!r}: cannot use both 'while' and 'when'"
-                f" ('while' already carries the loop condition)"
+                f" ('while' already carries the loop condition)",
+                code=codes.INVALID_LOOP,
             )
         raw_while = data["while"]
         if isinstance(raw_while, dict) and ("cond" in raw_while or "max" in raw_while):
             if "cond" not in raw_while:
                 raise WorkflowValidationError(
-                    f"Edge {data.get('from')!r}->{data.get('to')!r}: while must declare a 'cond' condition"
+                    f"Edge {data.get('from')!r}->{data.get('to')!r}: while must declare a 'cond' condition",
+                    code=codes.INVALID_LOOP,
                 )
             when = _parse_condition(raw_while["cond"])
             if "max" in raw_while:
@@ -265,12 +295,14 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
                 except (TypeError, ValueError):
                     raise WorkflowValidationError(
                         f"Edge {data.get('from')!r}->{data.get('to')!r}: while 'max' must be an"
-                        f" integer, got {raw_while['max']!r}"
+                        f" integer, got {raw_while['max']!r}",
+                        code=codes.INVALID_LOOP,
                     ) from None
                 if loop_max <= 0:
                     raise WorkflowValidationError(
                         f"Edge {data.get('from')!r}->{data.get('to')!r}: while 'max' must be positive,"
-                        f" got {loop_max}"
+                        f" got {loop_max}",
+                        code=codes.INVALID_LOOP,
                     )
             else:
                 loop_max = _WHILE_SAFE_MAX
@@ -281,19 +313,23 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
     elif "loop" in data and isinstance(data["loop"], dict):
         if "max" not in data["loop"]:
             raise WorkflowValidationError(
-                f"Edge {data.get('from')!r}->{data.get('to')!r}: loop must declare an integer 'max'"
+                f"Edge {data.get('from')!r}->{data.get('to')!r}: loop must declare an integer 'max'",
+                code=codes.INVALID_LOOP,
+                hint='Bound it with {"loop": {"max": N}}, or use "while" for a condition-driven loop.',
             )
         try:
             loop_max = int(data["loop"]["max"])
         except (TypeError, ValueError):
             raise WorkflowValidationError(
                 f"Edge {data.get('from')!r}->{data.get('to')!r}: loop 'max' must be an integer,"
-                f" got {data['loop']['max']!r}"
+                f" got {data['loop']['max']!r}",
+                code=codes.INVALID_LOOP,
             ) from None
         if loop_max <= 0:
             raise WorkflowValidationError(
                 f"Edge {data.get('from')!r}->{data.get('to')!r}: loop 'max' must be positive,"
-                f" got {loop_max}"
+                f" got {loop_max}",
+                code=codes.INVALID_LOOP,
             )
     raw_map = data.get("map", {})
     mapping: tuple[tuple[str, str], ...]
@@ -311,7 +347,8 @@ def _parse_edge(data: dict[str, Any]) -> EdgeDef:
         if raw_fan_in not in ("list", "concat"):
             raise WorkflowValidationError(
                 f"Edge {data.get('from')!r}->{data.get('to')!r}: fan_in must be 'list' or 'concat',"
-                f" got {raw_fan_in!r}"
+                f" got {raw_fan_in!r}",
+                code=codes.INVALID_FANOUT,
             )
         fan_in = raw_fan_in
     return EdgeDef(
@@ -335,10 +372,12 @@ def _parse_schedule(raw: Any) -> ScheduleDef | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise WorkflowValidationError("schedule must be an object")
+        raise WorkflowValidationError("schedule must be an object", code=codes.INVALID_SCHEDULE)
     mode = raw.get("mode")
     if mode not in ("timer", "hook"):
-        raise WorkflowValidationError(f"schedule.mode must be 'timer' or 'hook', got {mode!r}")
+        raise WorkflowValidationError(
+            f"schedule.mode must be 'timer' or 'hook', got {mode!r}", code=codes.INVALID_SCHEDULE
+        )
 
     raw_inputs = raw.get("inputs", {})
     inputs: tuple[tuple[str, object], ...]
@@ -347,22 +386,29 @@ def _parse_schedule(raw: Any) -> ScheduleDef | None:
     elif not raw_inputs:
         inputs = ()
     else:
-        raise WorkflowValidationError("schedule.inputs must be an object")
+        raise WorkflowValidationError("schedule.inputs must be an object", code=codes.INVALID_SCHEDULE)
 
     if mode == "timer":
         every = raw.get("every")
         cron = raw.get("cron")
         if (every is None) == (cron is None):
-            raise WorkflowValidationError("schedule (timer) needs exactly one of 'every' or 'cron'")
+            raise WorkflowValidationError(
+                "schedule (timer) needs exactly one of 'every' or 'cron'", code=codes.INVALID_SCHEDULE
+            )
         if every is not None:
             every = str(every)
             if not _EVERY_RE.match(every):
                 raise WorkflowValidationError(
-                    f"schedule.every must look like '30s'/'15m'/'2h'/'1d', got {every!r}"
+                    f"schedule.every must look like '30s'/'15m'/'2h'/'1d', got {every!r}",
+                    code=codes.INVALID_SCHEDULE,
                 )
         cron = str(cron) if cron is not None else None
         if cron is not None and len(cron.split()) != 5:
-            raise WorkflowValidationError(f"schedule.cron must be a 5-field cron expression, got {cron!r}")
+            raise WorkflowValidationError(
+                f"schedule.cron must be a 5-field cron expression, got {cron!r}",
+                code=codes.INVALID_SCHEDULE,
+                hint="Fields are: minute hour day-of-month month day-of-week (no seconds field).",
+            )
         return ScheduleDef(
             mode="timer",
             every=every,
@@ -375,14 +421,19 @@ def _parse_schedule(raw: Any) -> ScheduleDef | None:
     # hook
     signal = raw.get("signal")
     if not signal or not isinstance(signal, str):
-        raise WorkflowValidationError("schedule (hook) needs a non-empty 'signal'")
+        raise WorkflowValidationError("schedule (hook) needs a non-empty 'signal'", code=codes.INVALID_SCHEDULE)
     listen = raw.get("listen")
     if not isinstance(listen, dict):
-        raise WorkflowValidationError("schedule (hook) needs a 'listen' object")
+        raise WorkflowValidationError(
+            "schedule (hook) needs a 'listen' object",
+            code=codes.INVALID_SCHEDULE,
+            hint='Say how the signal arrives, e.g. "listen": {"type": "http"}.',
+        )
     ltype = listen.get("type")
     if ltype not in ("http", "file", "socket"):
         raise WorkflowValidationError(
-            f"schedule.listen.type must be 'http', 'file', or 'socket', got {ltype!r}"
+            f"schedule.listen.type must be 'http', 'file', or 'socket', got {ltype!r}",
+            code=codes.INVALID_SCHEDULE,
         )
     return ScheduleDef(
         mode="hook",
@@ -403,7 +454,9 @@ def _duration(raw: Any, *, field: str) -> str | None:
         return None
     value = str(raw)
     if not _EVERY_RE.match(value):
-        raise WorkflowValidationError(f"{field} must look like '30s'/'15m'/'2h'/'1d', got {value!r}")
+        raise WorkflowValidationError(
+            f"{field} must look like '30s'/'15m'/'2h'/'1d', got {value!r}", code=codes.INVALID_SCHEDULE
+        )
     return value
 
 
@@ -441,7 +494,11 @@ def parse_workflow(
         parsed: list[tuple[str, dict[str, object]]] = []
         for k, v in raw_in_schema.items():
             if not isinstance(v, dict):
-                raise WorkflowValidationError(f"in_schema[{k!r}] must be a JSON Schema object")
+                raise WorkflowValidationError(
+                    f"in_schema[{k!r}] must be a JSON Schema object",
+                    code=codes.INVALID_SCHEMA,
+                    hint='Give a schema fragment such as {"type": "string"}, not a bare type name.',
+                )
             parsed.append((str(k), v))
         in_schema = tuple(parsed)
     else:
@@ -456,12 +513,20 @@ def parse_workflow(
 
     raw_max_concurrency = data.get("max_concurrency", 0)
     if not isinstance(raw_max_concurrency, int) or raw_max_concurrency < 0:
-        raise WorkflowValidationError("max_concurrency must be an int >= 0")
+        raise WorkflowValidationError(
+            "max_concurrency must be an int >= 0",
+            code=codes.INVALID_VALUE,
+            hint="Omit it or use 0 for no limit.",
+        )
     max_concurrency = raw_max_concurrency
 
     raw_fan_max = data.get("fan_max_concurrency", 0)
     if not isinstance(raw_fan_max, int) or raw_fan_max < 0:
-        raise WorkflowValidationError("fan_max_concurrency must be an int >= 0")
+        raise WorkflowValidationError(
+            "fan_max_concurrency must be an int >= 0",
+            code=codes.INVALID_VALUE,
+            hint="Omit it or use 0 for no limit.",
+        )
     fan_max_concurrency = raw_fan_max
 
     schedule = _parse_schedule(data.get("schedule"))
@@ -491,15 +556,22 @@ def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
     has_code = node.code is not None
     has_run = bool(node.run)
     if has_code and has_run:
-        raise WorkflowValidationError(f"Script node {node.id!r}: set either 'code' or 'run', not both")
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: set either 'code' or 'run', not both", code=codes.NODE_KIND_CONFLICT
+        )
     if not has_code and not has_run:
-        raise WorkflowValidationError(f"Script node {node.id!r}: must set 'code' or 'run'")
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: must set 'code' or 'run'",
+            code=codes.MISSING_REQUIRED,
+            hint="'code' holds an inline function; 'run' points at an importable 'module.path:callable'.",
+        )
 
     if has_run:
         assert node.run is not None
         if not run_re.match(node.run):
             raise WorkflowValidationError(
-                f"Script node {node.id!r}: 'run' must match 'module.path:callable', got {node.run!r}"
+                f"Script node {node.id!r}: 'run' must match 'module.path:callable', got {node.run!r}",
+                code=codes.INVALID_VALUE,
             )
         return
 
@@ -508,21 +580,29 @@ def _validate_script_node(node: NodeDef, run_re: re.Pattern[str]) -> None:
     try:
         tree = ast.parse(node.code, filename=f"<{node.id}>", mode="exec")
     except SyntaxError as exc:
-        raise WorkflowValidationError(f"Script node {node.id!r}: invalid code — {exc}") from exc
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: invalid code — {exc}", code=codes.INVALID_SCRIPT
+        ) from exc
     funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
     if len(funcs) != 1:
         raise WorkflowValidationError(
-            f"Script node {node.id!r}: 'code' must define exactly one top-level function, found {len(funcs)}"
+            f"Script node {node.id!r}: 'code' must define exactly one top-level function, found {len(funcs)}",
+            code=codes.INVALID_SCRIPT,
+            hint="Move helpers inside that function, or use 'run' to point at a module-level callable.",
         )
     fn = funcs[0]
     arg_names = [a.arg for a in fn.args.args]
     if not arg_names or arg_names[0] != "ctx":
-        raise WorkflowValidationError(f"Script node {node.id!r}: function's first parameter must be 'ctx'")
+        raise WorkflowValidationError(
+            f"Script node {node.id!r}: function's first parameter must be 'ctx'", code=codes.INVALID_SCRIPT
+        )
     declared = set(node.input_names)
     got = set(arg_names[1:])
     if got != declared:
         raise WorkflowValidationError(
-            f"Script node {node.id!r}: function params {sorted(got)} != declared inputs {sorted(declared)}"
+            f"Script node {node.id!r}: function params {sorted(got)} != declared inputs {sorted(declared)}",
+            code=codes.INVALID_SCRIPT,
+            hint="Each declared input port becomes one parameter after 'ctx'.",
         )
 
 
@@ -834,7 +914,8 @@ def _validate_fan_out_edge(
     label = f"Edge {edge.src!r}->{edge.dst!r}"
     if edge.fan_out not in src_outputs:
         raise WorkflowValidationError(
-            f"{label}: fan_out names {edge.fan_out!r} which is not an output port of {edge.src!r}"
+            f"{label}: fan_out names {edge.fan_out!r} which is not an output port of {edge.src!r}",
+            code=codes.UNKNOWN_REFERENCE,
         )
     # The fan_out port must be declared as an array.  A real node's output port
     # carries its schema; a ``$in`` seed carries one only when declared in
@@ -844,29 +925,38 @@ def _validate_fan_out_edge(
     if edge.src == IN_NODE_ID and edge.fan_out not in src_schemas:
         raise WorkflowValidationError(
             f"{label}: fan_out from {IN_NODE_ID} requires an array in_schema for {edge.fan_out!r} "
-            f"(untyped seed cannot drive fan-out)"
+            f"(untyped seed cannot drive fan-out)",
+            code=codes.INVALID_FANOUT,
+            hint='Declare it in in_schema, e.g. {"type": "array", "items": {"type": "string"}}.',
         )
     src_schema = src_schemas.get(edge.fan_out, {})
     if src_schema.get("type") != "array":
         raise WorkflowValidationError(
             f"{label}: fan_out port {edge.fan_out!r} must be an array output, "
-            f"got type {src_schema.get('type', 'string')!r}"
+            f"got type {src_schema.get('type', 'string')!r}",
+            code=codes.INVALID_FANOUT,
         )
     # The fan_out port must appear as a mapping source (its elements feed the worker).
     if edge.fan_out not in {_jsonpath_root(s)[0] for s, _ in edge.mapping}:
         raise WorkflowValidationError(
-            f"{label}: fan_out port {edge.fan_out!r} must be mapped to a worker input port"
+            f"{label}: fan_out port {edge.fan_out!r} must be mapped to a worker input port",
+            code=codes.INVALID_FANOUT,
+            hint='Add it to the edge map, e.g. "map": {"items": "item"} — each element feeds one worker.',
         )
     # v1 scope guards: no worker inside a loop, no fan_out on a loop back-edge, no nesting.
     if edge.loop_max is not None:
-        raise WorkflowValidationError(f"{label}: a fan_out edge may not be a bounded loop back-edge")
+        raise WorkflowValidationError(
+            f"{label}: a fan_out edge may not be a bounded loop back-edge", code=codes.INVALID_FANOUT
+        )
     if edge.dst in loop_touched:
         raise WorkflowValidationError(
-            f"{label}: fan-out worker {edge.dst!r} may not also be part of a bounded loop (v1)"
+            f"{label}: fan-out worker {edge.dst!r} may not also be part of a bounded loop (v1)",
+            code=codes.INVALID_FANOUT,
         )
     if any(e.fan_out is not None and e.dst == edge.src for e in wf.edges):
         raise WorkflowValidationError(
-            f"{label}: nested fan-out is not supported (v1) — {edge.src!r} is itself a fan-out worker"
+            f"{label}: nested fan-out is not supported (v1) — {edge.src!r} is itself a fan-out worker",
+            code=codes.INVALID_FANOUT,
         )
 
 
@@ -876,7 +966,8 @@ def _validate_fan_in_edge(edge: EdgeDef, fan_out_workers: set[str]) -> None:
     if edge.src not in fan_out_workers:
         raise WorkflowValidationError(
             f"Edge {edge.src!r}->{edge.dst!r}: fan_in source {edge.src!r} is not a fan-out worker "
-            f"(no incoming fan_out edge feeds it)"
+            f"(no incoming fan_out edge feeds it)",
+            code=codes.INVALID_FANOUT,
         )
 
 
@@ -897,7 +988,9 @@ def _validate_concat_source(
     if item_type != "array":
         raise WorkflowValidationError(
             f"Edge {edge.src!r}->{edge.dst!r}: fan_in='concat' source {sport!r} must be"
-            " a whole array-valued worker output port"
+            " a whole array-valued worker output port",
+            code=codes.INVALID_FANOUT,
+            hint="Map the port itself (no JSONPath sub-field), or use fan_in='list' to collect one value each.",
         )
 
 
@@ -909,7 +1002,7 @@ def _validate_loop_regions(wf: WorkflowDef) -> None:
     spec = build_frontier_spec(wf)
     raw_regions = spec["invalidation_regions"]
     if not isinstance(raw_regions, dict):
-        raise WorkflowValidationError("Invalid frontier loop-region metadata")
+        raise WorkflowValidationError("Invalid frontier loop-region metadata", code=codes.INVALID_LOOP)
     regions = {
         str(destination): {str(node) for node in region}
         for destination, region in raw_regions.items()
@@ -919,7 +1012,8 @@ def _validate_loop_regions(wf: WorkflowDef) -> None:
         if edge.src not in regions.get(edge.dst, set()):
             raise WorkflowValidationError(
                 f"Loop edge {edge.src!r}->{edge.dst!r}: source must be forward-reachable "
-                "from its loop destination"
+                "from its loop destination",
+                code=codes.INVALID_LOOP,
             )
     destinations = tuple(regions)
     for index, left in enumerate(destinations):
@@ -929,7 +1023,9 @@ def _validate_loop_regions(wf: WorkflowDef) -> None:
                 shared = ", ".join(sorted(overlap))
                 raise WorkflowValidationError(
                     f"Loop regions for {left!r} and {right!r} cross without nesting "
-                    f"(shared nodes: {shared})"
+                    f"(shared nodes: {shared})",
+                    code=codes.INVALID_LOOP,
+                    hint="Nest one region fully inside the other, or move the shared nodes out of one loop.",
                 )
 
 
@@ -938,18 +1034,23 @@ def _validate_subflow_node(node: NodeDef) -> None:
     signature, and the mutually-exclusive-field rules.  Recursively validates the
     child so a broken child fails at the parent's load time."""
     if node.child is None:
-        raise WorkflowValidationError(f"Subflow node {node.id!r}: missing inline child workflow")
+        raise WorkflowValidationError(
+            f"Subflow node {node.id!r}: missing inline child workflow", code=codes.INVALID_SUBFLOW
+        )
     if node.code is not None:
-        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set 'code'")
+        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set 'code'", code=codes.NODE_KIND_CONFLICT)
     if node.prompt or node.system_prompt:
-        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set a prompt")
+        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set a prompt", code=codes.NODE_KIND_CONFLICT)
     if node.tools:
-        raise WorkflowValidationError(f"Subflow node {node.id!r} must not set 'tools'")
+        raise WorkflowValidationError(
+            f"Subflow node {node.id!r} must not set 'tools'", code=codes.NODE_KIND_CONFLICT
+        )
     # v1: no nested subflows (recursion is structurally impossible with inline
     # children, but a child may still itself contain a subflow node — reject that).
     if any(cn.type == "subflow" for cn in node.child.nodes):
         raise WorkflowValidationError(
-            f"Subflow node {node.id!r}: nested sub-workflows are not supported (v1)"
+            f"Subflow node {node.id!r}: nested sub-workflows are not supported (v1)",
+            code=codes.INVALID_SUBFLOW,
         )
     # Recursively validate the child (a broken child fails here).
     validate_workflow(node.child)
@@ -1021,13 +1122,19 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
 
     for nid in node_ids:
         if not nid:
-            raise WorkflowValidationError("Node id must be non-empty")
+            raise WorkflowValidationError("Node id must be non-empty", code=codes.MISSING_REQUIRED)
         if nid == IN_NODE_ID:
-            raise WorkflowValidationError(f"Node id {IN_NODE_ID!r} is reserved for the workflow input source")
+            raise WorkflowValidationError(
+                f"Node id {IN_NODE_ID!r} is reserved for the workflow input source",
+                code=codes.DUPLICATE_OR_RESERVED_ID,
+            )
         if nid == OUT_NODE_ID:
-            raise WorkflowValidationError(f"Node id {OUT_NODE_ID!r} is reserved for the workflow output sink")
+            raise WorkflowValidationError(
+                f"Node id {OUT_NODE_ID!r} is reserved for the workflow output sink",
+                code=codes.DUPLICATE_OR_RESERVED_ID,
+            )
     if len(node_ids) != len(set(node_ids)):
-        raise WorkflowValidationError(f"Duplicate node ids: {node_ids}")
+        raise WorkflowValidationError(f"Duplicate node ids: {node_ids}", code=codes.DUPLICATE_OR_RESERVED_ID)
 
     # $in is index -1 (earliest); real nodes are 0..n-1 in declaration order;
     # $output is index n (latest) so edges into it are always forward.
@@ -1045,18 +1152,20 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
     if cycle is not None:
         raise WorkflowValidationError(
             f"Workflow has a cycle with no bounded loop: {' -> '.join(cycle)}. "
-            f"Add loop.max to a back-edge to make it a bounded loop."
+            f"Add loop.max to a back-edge to make it a bounded loop.",
+            code=codes.INVALID_LOOP,
         )
 
     # ``entry`` is optional: when set it names a single start node (must exist);
     # when empty the entry frontier is derived from the nodes that depend only on
     # ``$in``.  Either way at least one start node must exist.
     if wf.entry and wf.entry not in node_by_id:
-        raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes")
+        raise WorkflowValidationError(f"Entry node {wf.entry!r} not found in nodes", code=codes.UNKNOWN_REFERENCE)
     if not entry_frontier(wf):
         raise WorkflowValidationError(
             "Workflow has no entry node: it has no nodes, or every node has a predecessor so "
-            "nothing can start. Feed at least one node from $in (or set an explicit entry)."
+            "nothing can start. Feed at least one node from $in (or set an explicit entry).",
+            code=codes.GRAPH_INCOMPLETE,
         )
 
     # A provider is required only if the workflow has an SDK agent node (an agent
@@ -1066,7 +1175,8 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
     if _has_sdk_agent and not wf.provider:
         raise WorkflowValidationError(
             "Workflow has an SDK agent node but no 'provider'. Set a provider, or give the "
-            "agent node a CLI 'backend' (e.g. 'claude-cli') which needs no provider."
+            "agent node a CLI 'backend' (e.g. 'claude-cli') which needs no provider.",
+            code=codes.PROVIDER_REQUIRED,
         )
 
     _run_re = re.compile(r"^[\w.]+:[\w]+$")
@@ -1078,10 +1188,12 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
     manifest_names: set[str] = set()
     for tname, ref in wf.tool_refs:
         if not tname:
-            raise WorkflowValidationError("Tool manifest: tool name must be non-empty")
+            raise WorkflowValidationError("Tool manifest: tool name must be non-empty", code=codes.MISSING_REQUIRED)
         if not _run_re.match(ref):
             raise WorkflowValidationError(
-                f"Tool {tname!r}: ref must match 'module.path:callable', got {ref!r}"
+                f"Tool {tname!r}: ref must match 'module.path:callable', got {ref!r}",
+                code=codes.INVALID_VALUE,
+                hint="Left of ':' is an importable module, right of it a callable in that module.",
             )
         manifest_names.add(tname)
     known_tools = default_registry().names() | manifest_names
@@ -1094,31 +1206,47 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                 if _port.type not in VALID_TYPES:
                     raise WorkflowValidationError(
                         f"Node {node.id!r}: port {_port.name!r} has unknown type {_port.type!r}; "
-                        f"expected one of {', '.join(VALID_TYPES)}"
+                        f"expected one of {', '.join(VALID_TYPES)}",
+                        code=codes.INVALID_SCHEMA,
                     )
             for tool in node.tools:
                 if not tool:
-                    raise WorkflowValidationError(f"Node {node.id!r}: tool name must be non-empty")
+                    raise WorkflowValidationError(
+                        f"Node {node.id!r}: tool name must be non-empty", code=codes.MISSING_REQUIRED
+                    )
                 if tool not in known_tools:
                     known = ", ".join(sorted(known_tools)) or "<none>"
                     raise WorkflowValidationError(
-                        f"Node {node.id!r} references unknown tool {tool!r}. Known tools: {known}"
+                        f"Node {node.id!r} references unknown tool {tool!r}. Known tools: {known}",
+                        code=codes.UNKNOWN_REFERENCE,
+                        hint="Register custom tools in the workflow's top-level 'tools' manifest.",
                     )
             if node.type == "script":
                 _validate_script_node(node, _run_re)
             elif node.type == "agent":
                 if node.run is not None:
-                    raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'run'")
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r} must not set 'run'",
+                        code=codes.NODE_KIND_CONFLICT,
+                        hint="Use type='script' for a node that calls a Python callable.",
+                    )
                 if node.code is not None:
-                    raise WorkflowValidationError(f"Agent node {node.id!r} must not set 'code'")
+                    raise WorkflowValidationError(
+                        f"Agent node {node.id!r} must not set 'code'",
+                        code=codes.NODE_KIND_CONFLICT,
+                        hint="Use type='script' for a node whose body is inline Python.",
+                    )
                 if node.backend is not None and node.backend not in _KNOWN_CLI_BACKENDS:
                     known = ", ".join(sorted(_KNOWN_CLI_BACKENDS))
                     raise WorkflowValidationError(
-                        f"Agent node {node.id!r}: unknown backend {node.backend!r}; expected one of {known}"
+                        f"Agent node {node.id!r}: unknown backend {node.backend!r}; expected one of {known}",
+                        code=codes.INVALID_VALUE,
                     )
                 if node.backend is None and (node.allowed_tools or node.mcp_servers):
                     raise WorkflowValidationError(
-                        f"Agent node {node.id!r}: 'allowed_tools'/'mcp_servers' require a CLI 'backend'"
+                        f"Agent node {node.id!r}: 'allowed_tools'/'mcp_servers' require a CLI 'backend'",
+                        code=codes.NODE_KIND_CONFLICT,
+                        hint="Set a CLI 'backend', or drop these fields — the SDK path has no equivalent.",
                     )
                 # Strict interpolation: every {{ $.x }} in a prompt must root at a
                 # declared input port (a typo would otherwise silently interpolate to "").
@@ -1128,21 +1256,37 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                         if _root not in _in_names:
                             raise WorkflowValidationError(
                                 f"Agent node {node.id!r}: prompt references {{{{ ${_root} }}}} but "
-                                f"{_root!r} is not a declared input port"
+                                f"{_root!r} is not a declared input port",
+                                code=codes.INVALID_TEMPLATE,
+                                hint="Add an input port with that name and an edge mapping that feeds it.",
                             )
             elif node.type == "human":
                 if not node.signal:
-                    raise WorkflowValidationError(f"Human node {node.id!r} must declare a non-empty 'signal'")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} must declare a non-empty 'signal'", code=codes.MISSING_REQUIRED
+                    )
                 if node.code is not None:
-                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'code'")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} must not set 'code'", code=codes.NODE_KIND_CONFLICT
+                    )
                 if node.run is not None:
-                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'run'")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} must not set 'run'", code=codes.NODE_KIND_CONFLICT
+                    )
                 if node.prompt:
-                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'prompt'")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} must not set 'prompt'", code=codes.NODE_KIND_CONFLICT
+                    )
                 if node.tools:
-                    raise WorkflowValidationError(f"Human node {node.id!r} must not set 'tools'")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} must not set 'tools'", code=codes.NODE_KIND_CONFLICT
+                    )
                 if len(node.output_ports) > 1:
-                    raise WorkflowValidationError(f"Human node {node.id!r} may declare at most one output port")
+                    raise WorkflowValidationError(
+                        f"Human node {node.id!r} may declare at most one output port",
+                        code=codes.NODE_KIND_CONFLICT,
+                        hint="A human node emits the one value supplied on resume; use two nodes for two values.",
+                    )
             elif node.type == "subflow":
                 _validate_subflow_node(node)
 
@@ -1166,27 +1310,42 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
             continue
         if _n.id in loop_touched:
             raise WorkflowValidationError(
-                f"Subflow node {_n.id!r} may not be part of a bounded loop (v1)"
+                f"Subflow node {_n.id!r} may not be part of a bounded loop (v1)",
+                code=codes.INVALID_SUBFLOW,
             )
         if _n.id in fan_out_workers:
             raise WorkflowValidationError(
-                f"Subflow node {_n.id!r} may not be a fan-out worker (v1)"
+                f"Subflow node {_n.id!r} may not be a fan-out worker (v1)",
+                code=codes.INVALID_SUBFLOW,
             )
     for edge in wf.edges:
         with collector.item(edge=(edge.src, edge.dst)):
             if edge.src == OUT_NODE_ID:
-                raise WorkflowValidationError(f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)")
+                raise WorkflowValidationError(
+                    f"Edge src {OUT_NODE_ID!r} is not allowed ($output is a sink only)",
+                    code=codes.DUPLICATE_OR_RESERVED_ID,
+                    hint="Read from the node that produced the value; $output only collects results.",
+                )
             if edge.src != IN_NODE_ID and edge.src not in node_by_id:
-                raise WorkflowValidationError(f"Edge src {edge.src!r} not found in nodes")
+                raise WorkflowValidationError(
+                    f"Edge src {edge.src!r} not found in nodes", code=codes.UNKNOWN_REFERENCE
+                )
             if edge.dst != OUT_NODE_ID and edge.dst not in node_by_id:
-                raise WorkflowValidationError(f"Edge dst {edge.dst!r} not found in nodes")
+                raise WorkflowValidationError(
+                    f"Edge dst {edge.dst!r} not found in nodes", code=codes.UNKNOWN_REFERENCE
+                )
             if edge.dst == IN_NODE_ID:
-                raise WorkflowValidationError(f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)")
+                raise WorkflowValidationError(
+                    f"Edge dst {IN_NODE_ID!r} is not allowed ($in is a source only)",
+                    code=codes.DUPLICATE_OR_RESERVED_ID,
+                    hint="Seed values in the workflow's 'state' block; $in only feeds edges.",
+                )
             # Strict ``while`` is a public-model invariant too (not only loader sugar):
             # it must have both a positive bound and a condition to converge against.
             if edge.loop_strict and (edge.loop_max is None or edge.loop_max < 1 or edge.when is None):
                 raise WorkflowValidationError(
-                    f"Edge {edge.src!r} -> {edge.dst!r}: loop_strict requires loop_max >= 1 and a 'when' condition"
+                    f"Edge {edge.src!r} -> {edge.dst!r}: loop_strict requires loop_max >= 1 and a 'when' condition",
+                    code=codes.INVALID_LOOP,
                 )
 
             src_outputs = _output_port_names(wf, edge.src, in_ports)
@@ -1197,7 +1356,8 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                     if _root not in src_outputs:
                         raise WorkflowValidationError(
                             f"Edge {edge.src!r}->{edge.dst!r}: condition references {{{{ ${_root} }}}} but "
-                            f"{_root!r} is not an output port of {edge.src!r}"
+                            f"{_root!r} is not an output port of {edge.src!r}",
+                            code=codes.INVALID_TEMPLATE,
                         )
 
             # Dynamic fan-out (G1) edge-shape validation.
@@ -1216,7 +1376,8 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                     # use jsonpath_get); its root must still be a real output port.
                     if head not in src_outputs:
                         raise WorkflowValidationError(
-                            f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
+                            f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}",
+                            code=codes.UNKNOWN_REFERENCE,
                         )
                     _validate_concat_source(wf, edge, sport, head, subpath)
                 continue
@@ -1231,11 +1392,13 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                 head, subpath = _jsonpath_root(sport)
                 if head not in src_outputs:
                     raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}"
+                        f"Edge {edge.src!r}->{edge.dst!r}: source has no output port {head!r}",
+                        code=codes.UNKNOWN_REFERENCE,
                     )
                 if dport not in dst_inputs:
                     raise WorkflowValidationError(
-                        f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}"
+                        f"Edge {edge.src!r}->{edge.dst!r}: destination has no input port {dport!r}",
+                        code=codes.UNKNOWN_REFERENCE,
                     )
                 # concat flattens one whole array emitted by each worker instance.
                 _validate_concat_source(wf, edge, sport, head, subpath)
@@ -1267,7 +1430,9 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                     if src_type is not None and src_type != dst_types[dport]:
                         raise WorkflowValidationError(
                             f"Edge {edge.src!r}->{edge.dst!r}: type mismatch — source {sport!r} is "
-                            f"{src_type!r} but destination port {dport!r} is {dst_types[dport]!r}"
+                            f"{src_type!r} but destination port {dport!r} is {dst_types[dport]!r}",
+                            code=codes.TYPE_MISMATCH,
+                            hint="Change one of the two port schemas, or convert the value in a script node.",
                         )
                 fed[(edge.dst, dport)] = fed.get((edge.dst, dport), 0) + 1
                 if edge.when is None and edge.loop_max is None:
@@ -1276,7 +1441,11 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
             # back-edge (dst not strictly after src) must be a bounded loop
             if node_index[edge.dst] <= node_index[edge.src]:
                 if not (edge.loop_max is not None and edge.loop_max >= 1):
-                    raise WorkflowValidationError(f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1")
+                    raise WorkflowValidationError(
+                        f"Back-edge {edge.src!r} -> {edge.dst!r} must have loop.max >= 1",
+                        code=codes.INVALID_LOOP,
+                        hint="Nodes run in declaration order, so an edge to an earlier node is a loop.",
+                    )
 
             # G6: a bounded loop with no `when` guard runs the full loop_max every time,
             # which is almost always an authoring mistake (a loop usually exits early on
@@ -1297,7 +1466,8 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
         if count > 1:
             raise WorkflowValidationError(
                 f"Node {dst!r}: input port {port!r} is fed by {count} unconditional edges "
-                f"(ambiguous producer; use conditional edges if mutually exclusive)"
+                f"(ambiguous producer; use conditional edges if mutually exclusive)",
+                code=codes.AMBIGUOUS_INPUT,
             )
 
     # Every declared input port must be fed by at least one edge mapping — unless
@@ -1309,7 +1479,9 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                     continue
                 if fed.get((node.id, p.name), 0) == 0:
                     raise WorkflowValidationError(
-                        f"Node {node.id!r}: input port {p.name!r} is not fed by any edge mapping"
+                        f"Node {node.id!r}: input port {p.name!r} is not fed by any edge mapping",
+                        code=codes.GRAPH_INCOMPLETE,
+                        hint='Add an edge whose map targets it, or mark the port {"required": false}.',
                     )
 
 

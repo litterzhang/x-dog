@@ -155,8 +155,9 @@ xdog-flow validate examples/refine_loop.json
 ```
 
 `--json` reports the **whole** per-node and per-edge pass in one envelope, each
-error carrying the node or edge it belongs to. The prose form stops at the first
-failure, which costs an authoring Agent one round trip per mistake:
+error carrying a stable `code`, the node or edge it belongs to, and a `hint`
+where the repair is not obvious from the message. The prose form stops at the
+first failure, which costs an authoring Agent one round trip per mistake:
 
 ```bash
 xdog-flow validate broken.json --json
@@ -167,15 +168,54 @@ xdog-flow validate broken.json --json
   "path": "broken.json",
   "workflow": "refine-loop",
   "errors": [
-    {"message": "Node 'critic' references unknown tool 'no_such_tool'. …", "node": "critic"},
+    {"message": "Node 'critic' references unknown tool 'no_such_tool'. …",
+     "code": "unknown-reference", "node": "critic"},
     {"message": "Edge 'draft'->'critic': source has no output port 'x'",
-     "edge": {"from": "draft", "to": "critic"}}
+     "code": "unknown-reference", "edge": {"from": "draft", "to": "critic"}},
+    {"message": "Node 'draft': input port 'topic' is not fed by any edge mapping",
+     "code": "graph-incomplete", "node": "draft",
+     "hint": "Add an edge whose map targets it, or mark the port {\"required\": false}."}
   ]
 }
 ```
 
 Exit status is 1 when `ok` is false, either way. A read or parse failure is still
 a single error — there is no graph yet to say more about.
+
+#### Error codes
+
+`code` is what a caller branches on. Messages are written for humans and get
+reworded; matching on them makes every rewording a silent breaking change.
+
+The set is small on purpose. Ninety-nine checks in the loader map to eighteen
+codes, because what you *do* about a failure falls into far fewer buckets than
+the number of ways to reach one — `unknown-reference` covers a missing node, a
+missing port and an unknown tool alike, since the repair is the same shape in
+all three.
+
+| Code | Means | Typical repair |
+|---|---|---|
+| `unknown-reference` | A name that should resolve doesn't | Fix the name, or add what's missing |
+| `duplicate-or-reserved-id` | Two things claim one name, or a name is reserved | Rename |
+| `unknown-field` | A field the format doesn't define | Usually a typo |
+| `missing-required` | A required field is absent | Add it |
+| `wrong-shape` | Right field, wrong JSON type | Object vs list vs scalar |
+| `invalid-value` | Right shape, value out of range or off-enum | Pick a legal value |
+| `type-mismatch` | An edge joins ports whose types can't carry one value | Convert, or change a schema |
+| `invalid-schema` | A port's type or JSON Schema is uninterpretable | Fix the schema |
+| `graph-incomplete` | No entry, an unreachable node, an unfed input port | Add an edge, or mark it optional |
+| `ambiguous-input` | One port fed by several edges that could both fire | Add a `when`, or drop one |
+| `invalid-loop` | Unbounded cycle, bound without guard, crossing regions | Add `loop.max` / `when` |
+| `invalid-fanout` | A fan-out/fan-in rule is broken | Restructure the topology |
+| `node-kind-conflict` | A node carries a field of a different kind | Remove it, or change `type` |
+| `invalid-script` | Script `code` won't parse, or its signature disagrees | Match params to declared inputs |
+| `invalid-template` | A prompt or condition references a root that won't exist | Fix the `{{$.…}}` path |
+| `invalid-subflow` | A child workflow won't resolve, or is cyclic | Fix the path or the cycle |
+| `provider-required` | An SDK agent node with no provider | Set `provider`, or use a CLI `backend` |
+| `invalid-schedule` | The `schedule` block isn't a valid timer or hook | Fix `every` / `cron` / `listen` |
+
+These strings are API: new ones may appear, existing ones will not be renamed
+or removed. `xdog.flow.error_codes.ALL_CODES` is the authoritative list.
 
 ### run
 

@@ -217,11 +217,56 @@ xdog-flow test "$EXAMPLES" --allow-script-stub    # 11 suites, no network
 xdog-flow graph "$EXAMPLES/depins_enrich/depins_enrich.json"
 ```
 
-**示例随包分发**，不需要 clone。同目录下还有 `skills/flow-workflows/SKILL.md` —— 让 coding agent
-照着写 flow 工作流的说明书。
+**示例随包分发**，不需要 clone。
 
 You can also run an example in your browser at
 **[xdog.942295.xyz/havefun/flow](https://xdog.942295.xyz/havefun/flow)**.
+
+### 5. Teach your coding agent · 让编码 agent 学会
+
+`xdog-flow` also ships a **skill** — a `SKILL.md` in the open
+[Agent Skills](https://agentskills.io/specification) format that teaches an
+agent to author flow workflows. Installing the package is the whole
+installation step:
+
+`xdog-flow` 同时附带一份 **skill** —— 开放
+[Agent Skills](https://agentskills.io/specification) 格式的 `SKILL.md`，教 agent
+写 flow 工作流。装包就是全部安装步骤：
+
+```bash
+pip install xdog-coding xdog-flow
+xdog-coding
+> /skills                  # what's available · 有哪些
+> /flow-workflows          # activate it · 激活
+> /unload flow-workflows   # and take it back out · 撤下
+```
+
+The command appears because the package is installed and disappears when it is
+uninstalled — nothing is registered and nothing is copied, so there is no copy
+to drift out of date with the package it documents.
+
+命令因为包被安装而出现，因为卸载而消失 —— 不注册、不拷贝，也就没有会与它所描述的包脱节的副本。
+
+Two things here are not how the format's reference clients behave, deliberately:
+
+这里有两点是**刻意**不同于该格式参考实现的：
+
+- **A skill can be unloaded.** Its instructions go into the system prompt, which
+  is rebuilt every turn, rather than into the transcript, which cannot be
+  edited. Elsewhere an invoked skill occupies the context window for the rest of
+  the session.
+  **可以卸载。** 指令进的是每轮重建的系统提示词，而不是无法修改的会话历史。别处一旦调用就占满余下整个会话。
+- **The model cannot unload one.** A skill is often a constraint — "always run
+  the tests before deploying" — and the party being constrained should not hold
+  the release. It may suggest `/unload`; the user decides. An author can declare
+  `scope: turn` for a one-shot skill that retires itself.
+  **模型不能自己卸载。** skill 常常是约束（「部署前必须跑测试」），被约束者不该握着弹射按钮。
+  它可以建议 `/unload`，由用户决定。作者可声明 `scope: turn` 让一次性技能自行退场。
+
+Any package can carry skills in `<package>/skills/<name>/SKILL.md`, and a skill
+written for another client works here unmodified.
+
+任何包都能在 `<package>/skills/<name>/SKILL.md` 里携带技能；为其他客户端写的技能可原样使用。
 
 ---
 

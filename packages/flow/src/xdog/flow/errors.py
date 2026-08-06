@@ -10,22 +10,31 @@ class WorkflowError(Exception):
 class WorkflowValidationError(WorkflowError):
     """Raised when a workflow definition fails validation.
 
-    ``node`` / ``edge`` say *where* the problem is when the check knew, and
-    ``hint`` suggests a repair.  All three are optional and ``str(exc)`` is
-    unchanged, so nothing that only reads the message is affected — they exist
-    so ``xdog-flow validate --json`` can hand a machine something better than
-    prose to act on.
+    ``code`` names the *kind* of problem, ``node`` / ``edge`` say where it is
+    when the check knew, and ``hint`` suggests a repair.  All are optional and
+    ``str(exc)`` is unchanged, so nothing that only reads the message is
+    affected — they exist so ``xdog-flow validate --json`` can hand a machine
+    something better than prose to act on.
+
+    The code matters more than it looks.  Without one, a caller that wants to
+    react differently to "this port does not exist" and "these two ports have
+    incompatible types" has to pattern-match English, and every reworded
+    message is a silent breaking change for them.  The codes are grouped by
+    what the author has to *do*, not by where in the loader the check lives,
+    because that is the axis a repair loop branches on.
     """
 
     def __init__(
         self,
         message: str,
         *,
+        code: str = "",
         node: str | None = None,
         edge: tuple[str, str] | None = None,
         hint: str | None = None,
     ) -> None:
         super().__init__(message)
+        self.code = code
         self.node = node
         self.edge = edge
         self.hint = hint
@@ -33,6 +42,8 @@ class WorkflowValidationError(WorkflowError):
     def as_dict(self) -> dict[str, object]:
         """A JSON-ready rendering; absent fields are omitted rather than null."""
         payload: dict[str, object] = {"message": str(self)}
+        if self.code:
+            payload["code"] = self.code
         if self.node is not None:
             payload["node"] = self.node
         if self.edge is not None:

@@ -28,13 +28,20 @@ _FEATURES = (
             "Sessions"),
     Feature("Default tools", "filesystem, bash, and current_time — the tools an agent needs to work a "
             "real repo.", "Tools"),
-    Feature("Skills", "YAML skills add reusable prompts / capabilities per project.", "Tools"),
+    Feature("Skills", "SKILL.md skills — the open Agent Skills format, so a skill written for another "
+            "client works here — surfaced as /commands.", "Skills"),
+    Feature("Skills ship in packages", "pip install a package that carries one and its command appears; "
+            "uninstall and it is gone. Nothing to register, nothing to copy out of date.", "Skills"),
+    Feature("Unloadable", "A skill's instructions go into the system prompt, not the transcript, so "
+            "/unload can take them back out — the message-history approach cannot.", "Skills"),
+    Feature("Declared lifetime", "An author marks a skill scope: turn and it retires itself. Only the "
+            "user ends one early; the model can suggest, never execute.", "Skills"),
     Feature("Extensions", "An extension loader adds capabilities without forking the agent.", "Tools"),
     Feature("Model fallback", "Model resolution falls back sensibly when a requested model is "
             "unavailable.", "Tools"),
 )
 
-_FEATURE_CATEGORIES = ("Modes", "Sessions", "Tools")
+_FEATURE_CATEGORIES = ("Modes", "Sessions", "Tools", "Skills")
 
 _ROADMAP = (
     Phase("Shipped", "Interactive coding agent", (
@@ -49,6 +56,12 @@ _ROADMAP = (
         "Print mode (text / json / markdown) and RPC mode for IDEs",
         "Layered session > project > global settings",
     ), done=True),
+    Phase("Shipped", "Skills", (
+        "The open Agent Skills SKILL.md format, read and written",
+        "Discovered from installed packages — pip install xdog-flow provides /flow-workflows",
+        "Activated into the system prompt, so /unload actually removes them",
+        "Author-declared lifetime; only the user ends a skill early",
+    ), done=True),
     Phase("2026", "Deeper repo awareness", (
         "Project indexing / retrieval for large codebases",
         "Test- and build-aware tool loops",
@@ -56,7 +69,6 @@ _ROADMAP = (
     )),
     Phase("2026", "Ecosystem", (
         "Editor plugins over the RPC mode",
-        "Shareable skills / extension registry",
         "Sub-agent delegation for parallel tasks (via agent)",
     )),
 )
