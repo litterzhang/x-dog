@@ -47,7 +47,7 @@ packages = ["src/xdog"]
 # guessing at a path.
 [tool.hatch.build.targets.wheel.force-include]
 "examples" = "xdog/flow/examples"
-"skill" = "xdog/flow/skill"
+"skills" = "xdog/flow/skills"
 
 [tool.hatch.build]
 exclude = ["**/__pycache__", "**/*.pyc"]

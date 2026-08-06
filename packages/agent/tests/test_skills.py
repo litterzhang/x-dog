@@ -138,8 +138,8 @@ def _flow_skill_dir() -> Path:
     """
     from importlib.resources import files
 
-    packaged = Path(str(files("xdog.flow"))) / "skill"
-    source = Path(__file__).resolve().parents[2] / "flow" / "skill"
+    packaged = Path(str(files("xdog.flow"))) / "skills" / "flow-workflows"
+    source = Path(__file__).resolve().parents[2] / "flow" / "skills" / "flow-workflows"
     found = packaged if (packaged / "SKILL.md").exists() else source
     assert (found / "SKILL.md").exists(), f"no SKILL.md at {packaged} or {source}"
     return found
@@ -205,7 +205,7 @@ def test_discovery_is_safe_to_call_and_finds_only_real_skills() -> None:
     assert isinstance(found, dict)
     for slug, path in found.items():
         assert (path / "SKILL.md").is_file()
-        assert slug not in {"", "skill"}, "slug must name the package, not the directory"
+        assert slug not in {"", "skill", "skills"}, "slug must be the skill's own name"
 
 
 # -- Frontmatter is YAML, and must be parsed and written as YAML --
@@ -377,3 +377,41 @@ def test_a_saved_skill_is_named_after_its_directory(tmp_path: Path) -> None:
 
     assert saved.slug == "my-great-skill"
     assert (tmp_path / "shared" / "my-great-skill" / "SKILL.md").exists()
+
+
+def test_a_package_can_ship_more_than_one_skill(tmp_path: Path) -> None:
+    """What the `skills/<name>/` layout buys over a fixed `skill/` directory.
+
+    The old layout could only ever carry one skill per distribution, and named
+    it after the package — which the standard forbids, since `name` has to
+    match the directory it sits in.
+    """
+    container = tmp_path / "skills"
+    for slug in ("first-skill", "second-skill"):
+        d = container / slug
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {slug}\ndescription: {slug} does things\n---\n\n{slug} body",
+            encoding="utf-8",
+        )
+
+    packaged = {p.name: p for p in sorted(container.iterdir())}
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged=packaged)
+
+    assert [s.slug for s in m.list_skills()] == ["first-skill", "second-skill"]
+    loaded = m.load_skill("second-skill")
+    assert loaded is not None and loaded.content == "second-skill body"
+
+
+def test_our_own_shipped_skill_conforms() -> None:
+    """`name` must equal the directory it lives in, or other clients reject it."""
+    from xdog.agent.skills.manager import SPEC_FIELDS, _parse_frontmatter, is_valid_skill_name
+
+    skill_dir = _flow_skill_dir()
+    meta, body = _parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+
+    assert meta.get("name") == skill_dir.name
+    assert is_valid_skill_name(skill_dir.name)
+    assert 0 < len(meta.get("description", "")) <= 1024
+    assert set(meta) <= set(SPEC_FIELDS) | {"created", "updated"}
+    assert len(body.splitlines()) < 500, "the standard recommends under 500 lines"

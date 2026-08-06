@@ -21,16 +21,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: Directory name a package uses to ship its skill.
-SKILL_DIRNAME = "skill"
+#: Directory a package puts its skills in. Each subdirectory is one skill,
+#: named after it — the standard requires a skill's `name` to match its parent
+#: directory, so the directory cannot be a fixed word like `skill`.
+SKILLS_DIRNAME = "skills"
 
 
 def packaged_skills() -> dict[str, Path]:
     """Map slug → skill directory for every installed ``xdog.*`` package.
 
-    The slug is the subpackage name, so ``xdog.flow``'s skill is ``flow`` — not
-    ``skill``, which is what the directory is actually called and which would
-    collide the moment a second package shipped one.
+    A package ships ``skills/<name>/SKILL.md``, and the slug is ``<name>``.
+    Addressing them by directory rather than by package is what the standard
+    requires, and it means one distribution can carry several skills — which a
+    single fixed ``skill/`` directory could not.
 
     Never raises: a package that fails to introspect is skipped with a log
     line. Skill discovery is a convenience, and it must not be able to stop an
@@ -43,11 +46,15 @@ def packaged_skills() -> dict[str, Path]:
         return found
 
     for module in pkgutil.iter_modules(xdog.__path__, "xdog."):
-        slug = module.name.rpartition(".")[2]
         try:
-            candidate = Path(str(files(module.name))) / SKILL_DIRNAME
-            if (candidate / "SKILL.md").is_file():
-                found[slug] = candidate
+            container = Path(str(files(module.name))) / SKILLS_DIRNAME
+            if not container.is_dir():
+                continue
+            for skill_dir in sorted(container.iterdir()):
+                if (skill_dir / "SKILL.md").is_file():
+                    # First package wins, so discovery order is not a silent
+                    # coin flip between two packages claiming the same name.
+                    found.setdefault(skill_dir.name, skill_dir)
         except (ImportError, TypeError, OSError, ModuleNotFoundError) as exc:
             logger.debug("skipping %s while looking for skills: %s", module.name, exc)
 

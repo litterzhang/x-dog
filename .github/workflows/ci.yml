@@ -68,7 +68,7 @@ jobs:
           need = [
               "xdog/flow/examples/agent_calculator.json",
               "xdog/flow/examples/depins_enrich/cycle.py",
-              "xdog/flow/skill/SKILL.md",
+              "xdog/flow/skills/flow-workflows/SKILL.md",
           ]
           missing = [n for n in need if n not in names]
           if missing:

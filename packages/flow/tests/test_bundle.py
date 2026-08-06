@@ -291,7 +291,7 @@ def test_wheel_declares_examples_and_skill_as_package_data() -> None:
     cfg = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     forced = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
     assert forced.get("examples") == "xdog/flow/examples"
-    assert forced.get("skill") == "xdog/flow/skill"
+    assert forced.get("skills") == "xdog/flow/skills"
     # the sdist must NOT remap them: the wheel is built from the sdist, and
     # moving the sources would leave the wheel build with nothing to include
     sdist = cfg["tool"]["hatch"]["build"]["targets"].get("sdist", {})

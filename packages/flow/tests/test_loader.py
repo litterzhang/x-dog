@@ -1300,8 +1300,12 @@ def test_fan_out_worker_in_loop_raises() -> None:
     def mut(d: dict) -> None:
         d["edges"].append({"from": "work", "to": "work", "loop": {"max": 2}, "map": {"res": "task"}})
 
-    with pytest.raises(WorkflowValidationError, match="bounded loop"):
-        validate_workflow(parse_workflow(_map_reduce_wf(mut)))
+    # The unguarded loop also earns a FlowWarning on the way to the error.
+    # Asserted rather than left to leak, so the suite stays quiet and a warning
+    # that stops being emitted is a failure instead of a silence nobody reads.
+    with pytest.warns(FlowWarning, match="no 'when' guard"):
+        with pytest.raises(WorkflowValidationError, match="bounded loop"):
+            validate_workflow(parse_workflow(_map_reduce_wf(mut)))
 
 
 def test_fan_in_concat_reducer_parses() -> None:

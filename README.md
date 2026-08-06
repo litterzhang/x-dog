@@ -217,7 +217,7 @@ xdog-flow test "$EXAMPLES" --allow-script-stub    # 11 suites, no network
 xdog-flow graph "$EXAMPLES/depins_enrich/depins_enrich.json"
 ```
 
-**示例随包分发**，不需要 clone。同目录下还有 `skill/SKILL.md` —— 让 coding agent
+**示例随包分发**，不需要 clone。同目录下还有 `skills/flow-workflows/SKILL.md` —— 让 coding agent
 照着写 flow 工作流的说明书。
 
 You can also run an example in your browser at

@@ -12,7 +12,7 @@ import pathlib
 import re
 
 _ROOT = pathlib.Path(__file__).parent.parent
-_SKILL = _ROOT / "skill"
+_SKILL = _ROOT / "skills" / "flow-workflows"
 _EXAMPLES = _ROOT / "examples"
 
 
