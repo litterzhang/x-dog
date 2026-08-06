@@ -61,8 +61,12 @@ jobs:
       - name: Lint
         run: uv run ruff check packages
 
+      # `flow` and `site` are strict-clean and stay that way. The other four
+      # carry type debt (claw alone has ~190 findings) — checking them here
+      # would fail every build, so they are left out until each is cleaned
+      # rather than silently downgrading the standard for the ones that pass.
       - name: Types
-        run: uv run mypy --strict -p xdog.flow
+        run: uv run mypy --strict -p xdog.flow -p xdog.site
 
       # The examples are executable artifacts, not decoration: this catches a
       # workflow whose companion suite stopped passing after a kernel change.

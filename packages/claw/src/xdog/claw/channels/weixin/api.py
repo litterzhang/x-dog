@@ -71,7 +71,9 @@ class WeixinApiClient:
 
     async def close(self) -> None:
         if self._client is not None and not self._client.is_closed:
-            await self._client.close()
+            # `aclose`, not `close`: httpx names the async one differently, and
+            # the sync spelling is simply absent from AsyncClient.
+            await self._client.aclose()
             self._client = None
 
     async def get_updates(

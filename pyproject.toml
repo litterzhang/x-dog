@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "x-dog"
-version = "0.57.6"
+version = "0.57.7"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -90,6 +90,7 @@ testpaths = [
     "packages/site/tests",
     "packages/claw/tests",
     "packages/coding/tests",
+    "packages/tui/tests",
 ]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib"

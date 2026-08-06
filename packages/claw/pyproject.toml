@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xdog-claw"
-version = "0.57.6"
+version = "0.57.7"
 description = "AI agent orchestration runtime with long-term memory"
 requires-python = ">=3.12"
 classifiers = [

@@ -299,8 +299,8 @@ class AgentSession:
         # Build a minimal RuntimeConfig for system prompt generation
         prompt = build_system_prompt(
             RuntimeConfig(
-                model=self.agent.state.model.id if self.agent.state.model else "unknown",
-                thinking_level=str(self.agent.state.thinking_level or "normal"),
+                model=self.agent.state.model or "unknown",
+                thinking_level=str(self.agent.options.thinking or "normal"),
                 allowed_tools=tuple(t.name for t in self.agent.state.tools),
                 custom_instructions=self.settings.custom_instructions,
                 extensions=(),

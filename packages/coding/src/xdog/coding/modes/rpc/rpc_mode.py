@@ -95,13 +95,11 @@ async def run_rpc_mode(session: AgentSession) -> int:
             if not model_id:
                 _emit({"type": "error", "message": "Missing 'model' field"})
                 continue
-            models = session.agent.state.models
-            new_model = models.get(model_id)
-            if new_model is None:
-                _emit({"type": "error", "message": f"Model not found: {model_id}"})
-            else:
-                session.set_model(new_model)
-                _emit({"type": "ok", "action": "set_model", "model": new_model.id})
+            # `set_model` takes the id: there is no registry on AgentState to
+            # look an object up in, and resolution happens when the provider is
+            # next called. Validating here would need a provider round trip.
+            session.set_model(model_id)
+            _emit({"type": "ok", "action": "set_model", "model": model_id})
 
         elif cmd_type == "set_thinking":
             level = cmd.get("level", "")
@@ -113,8 +111,8 @@ async def run_rpc_mode(session: AgentSession) -> int:
                 _emit({"type": "ok", "action": "set_thinking", "level": level})
 
         elif cmd_type == "status":
-            model_name = session.model.id if session.model else "unknown"
-            thinking = session.agent.state.thinking_level or "off"
+            model_name = session.model or "unknown"
+            thinking = session.agent.options.thinking or "off"
             _emit({
                 "type": "status",
                 "session_id": session.session_id,
