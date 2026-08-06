@@ -7,6 +7,15 @@ name = "xdog-tui"
 version = "0.57.1"
 description = "Terminal UI library with differential rendering"
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 authors = [{ name = "HugeMan" }]
 readme = "README.md"
 license = "AGPL-3.0-or-later"
