@@ -251,3 +251,28 @@ def test_bundle_is_a_uv_project(tmp_path: Path) -> None:
     # Every pinned requirement is declared, so pyproject and requirements.txt agree.
     for line in (out / "requirements.txt").read_text(encoding="utf-8").split():
         assert f'"{line}"' in text
+
+
+def test_vendored_licences_come_from_distribution_metadata() -> None:
+    """A pip-installed package keeps its licences in *.dist-info/licenses.
+
+    The first version of this lookup only walked up from the package directory,
+    which finds them in a source checkout and nowhere else — so it passed in
+    development and shipped licence-less bundles to everyone who installed from
+    PyPI. Assert against the metadata path directly.
+    """
+    from flow.bundle import _licence_files_for, _package_source_dir
+
+    found = _licence_files_for("ai", _package_source_dir("ai"))
+    assert found, "no licence located for the 'ai' package"
+    names = {path.name for path in found}
+    assert "LICENSE" in names, names
+    # whatever the layout, the file must actually be the AGPL text
+    assert "AFFERO" in found[0].read_text(encoding="utf-8", errors="replace").upper()
+
+
+def test_unknown_package_yields_no_licences_rather_than_raising() -> None:
+    """A missing licence is not fatal — a bundle without one is still runnable."""
+    from flow.bundle import _licence_files_for
+
+    assert _licence_files_for("no_such_package_xyz", Path("/nonexistent")) == []

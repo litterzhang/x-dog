@@ -30,9 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Only the libraries that make sense standalone. `xdog-site` is the
-        # website, `xdog-claw` and `xdog-coding` are not ready to publish.
-        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow]
+        # Everything except `xdog-site`, which is the website itself rather
+        # than a library anyone would install.
+        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow, xdog-claw, xdog-coding]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

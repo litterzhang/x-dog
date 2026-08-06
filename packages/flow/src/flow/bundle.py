@@ -65,24 +65,41 @@ def _copy_package(name: str, vendor_dir: Path) -> None:
         dst,
         ignore=shutil.ignore_patterns(*_SKIP_DIRS, "*.pyc"),
     )
-    for licence in _licence_files_for(src):
+    for licence in _licence_files_for(name, src):
         shutil.copy2(licence, dst / licence.name)
 
 
-def _licence_files_for(package_dir: Path) -> list[Path]:
-    """Licence files shipped alongside *package_dir*, nearest ancestor first.
+def _licence_files_for(name: str, package_dir: Path) -> list[Path]:
+    """Licence files for the importable package *name*, or an empty list.
 
-    A source checkout keeps them beside ``pyproject.toml`` (``src/<pkg>`` layout
-    puts that two levels up); an installed distribution keeps them in
-    ``*.dist-info/licenses``.  Missing licences are not an error — a bundle is
-    still useful — so this returns whatever it finds.
+    Two layouts, and the difference matters: an installed distribution keeps its
+    licences in ``*.dist-info/licenses`` — nowhere near the package directory —
+    while a source checkout keeps them beside ``pyproject.toml``, two levels up
+    from a ``src/<pkg>`` layout.  Walking up from the package directory finds
+    them only in the second case, which is exactly the case a developer tests
+    in and a pip-installed user is not.
+
+    Missing licences are not fatal — a bundle without them is still runnable —
+    but a bundle that vendors source without terms is one its recipient cannot
+    lawfully pass on, so try the metadata first.
     """
+    for dist in importlib.metadata.packages_distributions().get(name, []):
+        try:
+            files = importlib.metadata.files(dist) or []
+        except importlib.metadata.PackageNotFoundError:  # pragma: no cover - defensive
+            continue
+        found = [
+            resolved
+            for entry in files
+            if "licenses/" in str(entry).replace("\\", "/")
+            and (resolved := Path(str(entry.locate()))).is_file()
+        ]
+        if found:
+            return sorted(found)
+
+    # Source checkout: the licences sit beside pyproject.toml.
     for parent in (package_dir, *package_dir.parents[:3]):
-        found = sorted(
-            path
-            for path in parent.glob("LICENSE*")
-            if path.is_file()
-        )
+        found = sorted(path for path in parent.glob("LICENSE*") if path.is_file())
         if found:
             return found
     return []
