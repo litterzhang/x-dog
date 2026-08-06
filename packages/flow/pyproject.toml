@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xdog-flow"
-version = "0.57.9"
+version = "1.0.0"
 requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
