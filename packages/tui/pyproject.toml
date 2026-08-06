@@ -22,7 +22,7 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tui"]
+packages = ["src/xdog"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

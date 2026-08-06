@@ -1,4 +1,4 @@
-from tui.utils import string_width
+from xdog.tui.utils import string_width
 
 
 def test_regional_indicator_width():

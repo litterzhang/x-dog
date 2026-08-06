@@ -6,11 +6,11 @@ import asyncio
 from typing import Any
 
 import pytest
-from ai.types import AssistantMessage, DoneEvent, TextContent, Usage
-from ai.utils.event_stream import EventStream as AiEventStream
-from flow.errors import WorkflowBudgetExceeded
-from flow.executor import execute
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.ai.types import AssistantMessage, DoneEvent, TextContent, Usage
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
+from xdog.flow.errors import WorkflowBudgetExceeded
+from xdog.flow.executor import execute
+from xdog.flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -200,7 +200,7 @@ async def test_budget_exceeded_attributes() -> None:
 async def test_tokens_used_persisted_across_resume(tmp_path: object) -> None:
     """B2: the running token total is checkpointed, so a resumed run keeps counting
     from it — the budget spans resume instead of resetting to 0."""
-    from flow.checkpoint import JSONFileCheckpointStore
+    from xdog.flow.checkpoint import JSONFileCheckpointStore
 
     store = JSONFileCheckpointStore(tmp_path)  # type: ignore[arg-type]
     run_id = "resume-budget"

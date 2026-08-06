@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from flow.graph import to_ascii, to_mermaid
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
+from xdog.flow.graph import to_ascii, to_mermaid
+from xdog.flow.models import Condition, EdgeDef, NodeDef, WorkflowDef
 
 
 def _simple_wf() -> WorkflowDef:

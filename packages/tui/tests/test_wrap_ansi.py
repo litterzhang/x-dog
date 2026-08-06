@@ -1,4 +1,4 @@
-from tui.utils import string_width, wrap_text
+from xdog.tui.utils import string_width, wrap_text
 
 
 def test_wrap_ansi_preservation():

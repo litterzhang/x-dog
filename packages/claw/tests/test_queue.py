@@ -2,8 +2,8 @@
 import asyncio
 
 import pytest
-from claw.core.queue import MessageQueue
-from claw.core.types import QueueMode, UserInput
+from xdog.claw.core.queue import MessageQueue
+from xdog.claw.core.types import QueueMode, UserInput
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 """Tests for tui.components.cancellable_loader — loader with Escape cancellation."""
 
-from tui.components.cancellable_loader import CancellableLoader
-from tui.keys import KeyEvent
+from xdog.tui.components.cancellable_loader import CancellableLoader
+from xdog.tui.keys import KeyEvent
 
 
 def _make_loader() -> CancellableLoader:

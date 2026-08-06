@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from ai.core import AuthResult
-from ai.types import (
+from xdog.ai.core import AuthResult
+from xdog.ai.types import (
     EmbeddingObject,
     EmbeddingRequest,
     EmbeddingResponse,
@@ -16,7 +16,7 @@ from ai.types import (
     ModelCost,
     Usage,
 )
-from ai.vendors.copilot._model_sync import _model_from_dict, _model_to_dict, _parse_api_model
+from xdog.ai.vendors.copilot._model_sync import _model_from_dict, _model_to_dict, _parse_api_model
 
 
 def _make_embedding_api_model(**overrides: Any) -> dict[str, Any]:
@@ -74,7 +74,7 @@ def test_embedding_model_parsed_correctly():
 @pytest.mark.asyncio
 async def test_embed_request_and_response():
     """Verify HTTP request is correct and response is parsed."""
-    from ai.protocols.openai_completions import OpenAICompletionsProtocol
+    from xdog.ai.protocols.openai_completions import OpenAICompletionsProtocol
 
     captured: dict[str, Any] = {}
 
@@ -103,7 +103,7 @@ async def test_embed_usage_carries_cost():
     """Embedding usage goes through usage_with_cost like every other protocol."""
     from dataclasses import replace
 
-    from ai.protocols.openai_completions import OpenAICompletionsProtocol
+    from xdog.ai.protocols.openai_completions import OpenAICompletionsProtocol
 
     async def mock_post(self, url, *, json, headers, **kwargs):
         return httpx.Response(200, json=_make_api_response(),
@@ -125,7 +125,7 @@ async def test_embed_usage_carries_cost():
 @pytest.mark.asyncio
 async def test_embed_string_shorthand():
     """embed(provider, model, 'text') wraps string into EmbeddingRequest."""
-    from ai.providers.copilot import CopilotProvider
+    from xdog.ai.providers.copilot import CopilotProvider
 
     mock_embed = AsyncMock(return_value=EmbeddingResponse(
         data=(EmbeddingObject(embedding=(0.1,)),),
@@ -142,7 +142,7 @@ async def test_embed_string_shorthand():
 
     # Mock auth to passthrough
     async def _passthrough_auth(model, context=None):
-        from ai.core import AuthResult
+        from xdog.ai.core import AuthResult
         return AuthResult(api_key="k")
 
     with patch.object(p._get_vendor(), "resolve_auth", _passthrough_auth):
@@ -154,7 +154,7 @@ async def test_embed_string_shorthand():
 
 
 def test_openai_completions_supports_embed():
-    from ai.protocols.openai_completions import OpenAICompletionsProtocol
+    from xdog.ai.protocols.openai_completions import OpenAICompletionsProtocol
 
     proto = OpenAICompletionsProtocol()
     assert callable(proto.embed)

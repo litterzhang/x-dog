@@ -1,6 +1,6 @@
 """Tests for messages serialization (ai.types <-> dicts)."""
 
-from ai.types import (
+from xdog.ai.types import (
     AssistantMessage,
     TextContent,
     ThinkingContent,
@@ -8,7 +8,7 @@ from ai.types import (
     ToolResultMessage,
     UserMessage,
 )
-from coding.core.messages import dicts_to_messages, messages_to_dicts
+from xdog.coding.core.messages import dicts_to_messages, messages_to_dicts
 
 
 def test_message_serialization():

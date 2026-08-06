@@ -1,5 +1,5 @@
-from ai.types import Context, Model, UserMessage
-from ai.utils.overflow import estimate_context_tokens, is_context_overflow
+from xdog.ai.types import Context, Model, UserMessage
+from xdog.ai.utils.overflow import estimate_context_tokens, is_context_overflow
 
 
 def test_context_overflow_detection():

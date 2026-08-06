@@ -1,6 +1,6 @@
 """Tests verifying thinking_format cleanup in openai_completions.py and types.py."""
 
-from ai.types import OpenAICompletionsCompat
+from xdog.ai.types import OpenAICompletionsCompat
 
 
 def test_thinking_format_removed():

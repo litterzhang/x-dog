@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from coding.config import PlatformInfo, RuntimeConfig
-from coding.core.system_prompt import (
+from xdog.coding.config import PlatformInfo, RuntimeConfig
+from xdog.coding.core.system_prompt import (
     build_environment_section,
     build_system_prompt,
     build_tool_section,

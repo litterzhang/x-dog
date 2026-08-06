@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from flow.result import build_run_result, render_run_result
+from xdog.flow.result import build_run_result, render_run_result
 
 
 def test_build_run_result_success_shape() -> None:

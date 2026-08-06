@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from flow.builder.serialize import workflow_to_dict
-from flow.errors import WorkflowValidationError
-from flow.loader import (
+from xdog.flow.builder.serialize import workflow_to_dict
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.loader import (
     parse_workflow,
     validate_workflow,
     workflow_input_schema,
@@ -142,7 +142,7 @@ def test_workflow_input_schema_inferred_when_undeclared() -> None:
 
 def test_inference_uses_consumer_type_not_seed_value() -> None:
     """A string seed value feeding an integer port infers integer (consumer wins)."""
-    from flow.loader import infer_input_schema
+    from xdog.flow.loader import infer_input_schema
 
     # state topic="hi" (a string value) but the consumer port is integer.
     wf = parse_workflow(_wf(topic_port_type="integer"))
@@ -151,7 +151,7 @@ def test_inference_uses_consumer_type_not_seed_value() -> None:
 
 def test_inference_conflicting_consumers_omitted() -> None:
     """A key fed to two ports of different types can't be inferred — left untyped."""
-    from flow.loader import infer_input_schema
+    from xdog.flow.loader import infer_input_schema
 
     d = {
         "name": "conflict",
@@ -176,7 +176,7 @@ def test_inference_on_real_examples() -> None:
     """The shipped examples get a full inferred signature with zero declaration."""
     import pathlib
 
-    from flow.loader import load_workflow
+    from xdog.flow.loader import load_workflow
 
     root = pathlib.Path(__file__).parent.parent / "examples"
     tp = workflow_input_schema(load_workflow(root / "trip_planner.json"))["properties"]

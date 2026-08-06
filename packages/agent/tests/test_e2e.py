@@ -1,8 +1,8 @@
 import os
 
 import pytest
-from agent.agent import Agent
-from ai import Tool
+from xdog.agent.agent import Agent
+from xdog.ai import Tool
 
 
 def get_calculate_tool():
@@ -27,7 +27,7 @@ async def test_e2e_basic():
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set")
 
-    import ai
+    import xdog.ai as ai
     model = ai.provider("copilot").model("gpt-4o")
     agent = Agent(
         system_prompt="You are a helpful assistant. Keep your responses concise.",
@@ -52,7 +52,7 @@ async def test_e2e_tool_execution():
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set")
 
-    import ai
+    import xdog.ai as ai
     model = ai.provider("copilot").model("gpt-4o")
     agent = Agent(
         system_prompt="You are a helpful assistant. Always use the calculate tool for math.",

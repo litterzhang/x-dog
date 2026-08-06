@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from ai.protocols._transform_messages import (
+from xdog.ai.protocols._transform_messages import (
     context_to_openai,
     transform_messages,
 )
-from ai.types import (
+from xdog.ai.types import (
     AssistantMessage,
     Context,
     Model,

@@ -1,5 +1,5 @@
 """Tests for block chunker."""
-from claw.core.chunker import BlockChunker
+from xdog.claw.core.chunker import BlockChunker
 
 
 def test_splits_at_paragraph_boundary():

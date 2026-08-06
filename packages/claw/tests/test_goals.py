@@ -1,8 +1,8 @@
 """Tests for GoalTracker."""
 
 import pytest
-from claw.core.planning.goal_tracker import GoalTracker
-from claw.core.types import GoalStatus, TaskStatus
+from xdog.claw.core.planning.goal_tracker import GoalTracker
+from xdog.claw.core.types import GoalStatus, TaskStatus
 
 
 @pytest.fixture

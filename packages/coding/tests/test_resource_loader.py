@@ -1,7 +1,7 @@
 """Tests for the resource loader module."""
 
 
-from coding.core.resource_loader import (
+from xdog.coding.core.resource_loader import (
     discover_context_files,
     load_project_resources,
 )

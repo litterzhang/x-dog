@@ -1,4 +1,4 @@
-from tui.keys import (
+from xdog.tui.keys import (
     KeyEventType,
     is_key_release,
     is_key_repeat,

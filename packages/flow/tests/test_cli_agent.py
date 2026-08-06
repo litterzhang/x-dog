@@ -17,11 +17,11 @@ import types
 from typing import Any
 
 import pytest
-from flow.builder.serialize import workflow_to_dict
-from flow.codegen import generate
-from flow.errors import WorkflowValidationError
-from flow.executor import execute
-from flow.loader import parse_workflow, validate_workflow
+from xdog.flow.builder.serialize import workflow_to_dict
+from xdog.flow.codegen import generate
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.executor import execute
+from xdog.flow.loader import parse_workflow, validate_workflow
 
 
 def _cli_wf(**node_extra: Any) -> dict[str, Any]:
@@ -221,7 +221,7 @@ async def test_cli_runner_no_provider_needed(tmp_path: pathlib.Path, monkeypatch
 
 
 async def test_cli_runner_nonzero_exit_raises(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
-    from flow.errors import WorkflowExecutionError
+    from xdog.flow.errors import WorkflowExecutionError
 
     bad = """#!/usr/bin/env python3
 import sys
@@ -414,7 +414,7 @@ async def test_mcp_config_generated_with_env_interpolation(tmp_path: pathlib.Pat
 
 
 async def test_mcp_config_unset_env_fails_fast(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
-    from flow.errors import WorkflowExecutionError
+    from xdog.flow.errors import WorkflowExecutionError
 
     monkeypatch.setenv("FLOW_CLI_BIN_CLAUDE_CLI", _install_fake_cli(tmp_path, _FAKE_CLAUDE_MCP, name="fc_mcp2"))
     monkeypatch.delenv("NOPE_TOKEN", raising=False)
@@ -439,7 +439,7 @@ async def test_mcp_config_parity(tmp_path: pathlib.Path, monkeypatch: Any) -> No
 def test_claude_mcp_config_helper() -> None:
     import os as _os
 
-    from flow.runners import claude_mcp_config
+    from xdog.flow.runners import claude_mcp_config
 
     _os.environ["_FLOW_TEST_TOK"] = "xyz"
     cfg = claude_mcp_config((("gh", {"command": "npx", "env": {"K": "${_FLOW_TEST_TOK}"}}),))
@@ -448,7 +448,7 @@ def test_claude_mcp_config_helper() -> None:
 
 
 def test_codex_mcp_config_helper() -> None:
-    from flow.runners import codex_mcp_config
+    from xdog.flow.runners import codex_mcp_config
 
     toml = codex_mcp_config((("gh", {"command": "npx", "args": ["-y", "srv"]}),))
     assert "[mcp_servers.gh]" in toml
@@ -496,12 +496,12 @@ def test_sdk_module_still_imports_agent_ai() -> None:
         "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
     }
     src = generate(parse_workflow(d))
-    assert "import ai" in src and "from agent import Agent" in src
+    assert "from xdog import ai" in src and "from xdog.agent import Agent" in src
     assert "class ToolRegistry" in src
 
 
 def test_pure_cli_bundle_drops_ai_agent(tmp_path: pathlib.Path) -> None:
-    from flow.bundle import build_bundle
+    from xdog.flow.bundle import build_bundle
 
     out = build_bundle(parse_workflow(_cli_wf()), tmp_path / "bundle")
     vendor = out / "_vendor"

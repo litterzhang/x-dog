@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 
 def test_node_def_defaults() -> None:
@@ -117,8 +117,8 @@ def test_node_def_script_type() -> None:
     assert node.type == "script"
     assert node.run == "myscripts:prep"
     assert node.tools == ()
-    updated = dataclasses.replace(node, run="flow.tools:other")
-    assert updated.run == "flow.tools:other"
+    updated = dataclasses.replace(node, run="xdog.flow.tools:other")
+    assert updated.run == "xdog.flow.tools:other"
     assert node.run == "myscripts:prep"
 
 
@@ -160,7 +160,7 @@ def test_node_def_inputs_replace() -> None:
 
 
 def test_agent_output_schema_derived_from_multi_ports() -> None:
-    from flow.models import Port, agent_is_structured, agent_output_schema
+    from xdog.flow.models import Port, agent_is_structured, agent_output_schema
 
     node = NodeDef(
         id="n1",
@@ -176,14 +176,14 @@ def test_agent_output_schema_derived_from_multi_ports() -> None:
 
 
 def test_agent_single_string_port_is_plain_text() -> None:
-    from flow.models import Port, agent_is_structured
+    from xdog.flow.models import Port, agent_is_structured
 
     node = NodeDef(id="n1", type="agent", output_ports=(Port("answer"),))
     assert agent_is_structured(node) is False
 
 
 def test_agent_single_structured_port_uses_its_schema() -> None:
-    from flow.models import Port, agent_is_structured, agent_output_schema
+    from xdog.flow.models import Port, agent_is_structured, agent_output_schema
 
     plan = {"type": "object", "properties": {"x": {"type": "integer"}}}
     node = NodeDef(id="n1", type="agent", output_ports=(Port("plan", schema=plan),))

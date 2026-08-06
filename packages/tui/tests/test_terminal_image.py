@@ -2,7 +2,7 @@
 
 import struct
 
-from tui.terminal_image import (
+from xdog.tui.terminal_image import (
     encode_iterm2,
     encode_kitty,
     get_gif_dimensions,

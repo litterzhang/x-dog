@@ -5,11 +5,11 @@ import json
 
 import httpx
 import pytest
-from claw.channels.weixin.api import (
+from xdog.claw.channels.weixin.api import (
     get_updates,
     send_message,
 )
-from claw.channels.weixin.types import (
+from xdog.claw.channels.weixin.types import (
     MessageItem,
     MessageItemType,
     MessageState,

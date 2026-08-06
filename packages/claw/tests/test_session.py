@@ -1,6 +1,6 @@
 """Tests for transcript store (formerly SessionManager)."""
 import pytest
-from claw.core.persistence.transcript_store import TranscriptStore
+from xdog.claw.core.persistence.transcript_store import TranscriptStore
 
 
 @pytest.fixture

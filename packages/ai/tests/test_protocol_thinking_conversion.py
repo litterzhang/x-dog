@@ -1,8 +1,8 @@
 import json
 
-from ai.protocols.anthropic_messages import context_to_anthropic
-from ai.protocols.openai_responses import context_to_responses_input
-from ai.types import (
+from xdog.ai.protocols.anthropic_messages import context_to_anthropic
+from xdog.ai.protocols.openai_responses import context_to_responses_input
+from xdog.ai.types import (
     AssistantMessage,
     Context,
     Model,

@@ -14,13 +14,13 @@ import types
 from typing import Any
 
 import pytest
-from flow.builder.serialize import workflow_to_dict
-from flow.checkpoint import JSONFileCheckpointStore
-from flow.codegen import generate
-from flow.errors import WorkflowExecutionError
-from flow.executor import execute
-from flow.loader import parse_workflow
-from flow.models import _resolve_edge_ids, edge_identities
+from xdog.flow.builder.serialize import workflow_to_dict
+from xdog.flow.checkpoint import JSONFileCheckpointStore
+from xdog.flow.codegen import generate
+from xdog.flow.errors import WorkflowExecutionError
+from xdog.flow.executor import execute
+from xdog.flow.loader import parse_workflow
+from xdog.flow.models import _resolve_edge_ids, edge_identities
 
 
 def _count_loop_wf(loop_max: int = 10, exit_at: int = 5, crash_code: str = "") -> dict[str, Any]:

@@ -4,15 +4,15 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from claw.channels.weixin.channel import (
+from xdog.claw.channels.weixin.channel import (
     WeixinChannel,
     _body_from_item_list,
 )
-from claw.channels.weixin.context_tokens import (
+from xdog.claw.channels.weixin.context_tokens import (
     _token_store,
     get_context_token,
 )
-from claw.channels.weixin.types import (
+from xdog.claw.channels.weixin.types import (
     MessageItem,
     MessageItemType,
     MessageType,
@@ -20,7 +20,7 @@ from claw.channels.weixin.types import (
     TextItem,
     WeixinMessage,
 )
-from claw.core.types import UserInput
+from xdog.claw.core.types import UserInput
 
 
 def test_body_from_item_list_with_quoted_text():
@@ -150,7 +150,7 @@ async def test_connect_disconnect(tmp_path):
         token="test-token",
     )
 
-    with patch("claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
+    with patch("xdog.claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
         await ch.connect()
         assert ch._monitor_task is not None
 
@@ -185,7 +185,7 @@ async def test_user_id_map_persistence(tmp_path):
     await ch._on_inbound(msg)
 
     # Verify persisted
-    from claw.channels.weixin.channel import _load_user_id_map
+    from xdog.claw.channels.weixin.channel import _load_user_id_map
     loaded = _load_user_id_map(tmp_path, "test-acct")
     assert loaded["weixin:user1-im-wechat"] == "user1@im.wechat"
 
@@ -196,7 +196,7 @@ async def test_user_id_map_persistence(tmp_path):
         base_url="https://test.example.com",
         token="test-token",
     )
-    with patch("claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
+    with patch("xdog.claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
         await ch2.connect()
 
     assert ch2._user_id_map["weixin:user1-im-wechat"] == "user1@im.wechat"

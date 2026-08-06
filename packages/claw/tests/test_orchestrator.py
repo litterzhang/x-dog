@@ -2,12 +2,12 @@
 import asyncio
 
 import pytest
-from ai.types import AssistantMessage, DoneEvent, Model, ModelCost, StartEvent, TextContent
-from ai.utils.event_stream import EventStream
-from claw.channels.tui.channel import TuiChannel
-from claw.config import ClawConfig
-from claw.core.runtime.orchestrator import Orchestrator
-from claw.core.types import Group, GroupConfig, QueueMode, UserInput
+from xdog.ai.types import AssistantMessage, DoneEvent, Model, ModelCost, StartEvent, TextContent
+from xdog.ai.utils.event_stream import EventStream
+from xdog.claw.channels.tui.channel import TuiChannel
+from xdog.claw.config import ClawConfig
+from xdog.claw.core.runtime.orchestrator import Orchestrator
+from xdog.claw.core.types import Group, GroupConfig, QueueMode, UserInput
 
 _TEST_MODEL = Model(
     id="test/dummy", name="dummy", api="openai-completions",

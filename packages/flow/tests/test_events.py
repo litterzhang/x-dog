@@ -6,12 +6,12 @@ import asyncio
 from typing import Any
 
 import pytest
-from ai.types import AssistantMessage, DoneEvent, TextContent, Usage
-from ai.utils.event_stream import EventStream as AiEventStream
-from flow.codegen import generate
-from flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
-from flow.executor import execute
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.ai.types import AssistantMessage, DoneEvent, TextContent, Usage
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
+from xdog.flow.codegen import generate
+from xdog.flow.events import EventCallback, FlowEvent, NodeFailed, NodeFinished, NodeStarted
+from xdog.flow.executor import execute
+from xdog.flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Event dataclass tests

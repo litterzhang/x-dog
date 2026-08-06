@@ -1,5 +1,5 @@
 
-from claw.core.memory.long_term import LongTermMemory
+from xdog.claw.core.memory.long_term import LongTermMemory
 
 
 def test_append_adds_to_existing(tmp_path):

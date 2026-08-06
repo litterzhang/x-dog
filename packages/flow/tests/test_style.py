@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from flow.builder import style
-from tui import strip_ansi, visible_width
+from xdog.flow.builder import style
+from xdog.tui import strip_ansi, visible_width
 
 
 def test_fg_wraps_and_preserves_text() -> None:

@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from agent.core import AgentTool
-from flow.errors import WorkflowValidationError
-from flow.models import WorkflowDef
-from flow.tools import (
+from xdog.agent.core import AgentTool
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.models import WorkflowDef
+from xdog.flow.tools import (
     ToolRegistry,
     coerce_tool,
     default_registry,
@@ -110,7 +110,7 @@ def test_register_workflow_tools_uses_manifest_name() -> None:
 
 
 def test_describe_tools_includes_builtins() -> None:
-    from flow.tools import describe_tools
+    from xdog.flow.tools import describe_tools
 
     wf = WorkflowDef(name="w", provider="fake", entry="n", nodes=(), edges=())
     infos = describe_tools(wf)
@@ -123,7 +123,7 @@ def test_describe_tools_includes_builtins() -> None:
 
 
 def test_describe_tools_includes_custom_from_manifest() -> None:
-    from flow.tools import describe_tools
+    from xdog.flow.tools import describe_tools
 
     wf = WorkflowDef(
         name="w",
@@ -142,7 +142,7 @@ def test_describe_tools_includes_custom_from_manifest() -> None:
 
 
 def test_describe_tools_broken_ref_is_skipped_gracefully() -> None:
-    from flow.tools import describe_tools
+    from xdog.flow.tools import describe_tools
 
     wf = WorkflowDef(
         name="w",
@@ -163,16 +163,16 @@ def test_describe_tools_broken_ref_is_skipped_gracefully() -> None:
 
 def test_read_run_source_in_tree_module() -> None:
     """An importable module resolves via inspect (e.g. flow.codegen_tools)."""
-    from flow.tools import read_run_source
+    from xdog.flow.tools import read_run_source
 
-    src = read_run_source("flow.codegen_tools:next_task", None)
+    src = read_run_source("xdog.flow.codegen_tools:next_task", None)
     assert src is not None
     assert "def next_task" in src
 
 
 def test_read_run_source_from_subdir_without_import(tmp_path: Path) -> None:
     """A run: module in a subdir (scripts/) is read statically — no import runs."""
-    from flow.tools import read_run_source
+    from xdog.flow.tools import read_run_source
 
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -189,6 +189,6 @@ def test_read_run_source_from_subdir_without_import(tmp_path: Path) -> None:
 
 
 def test_read_run_source_missing_returns_none(tmp_path: Path) -> None:
-    from flow.tools import read_run_source
+    from xdog.flow.tools import read_run_source
 
     assert read_run_source("nonexistent:fn", tmp_path) is None

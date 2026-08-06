@@ -1,5 +1,5 @@
-from ai.types import Model, ModelCost, Usage
-from ai.utils.cost import calculate_cost
+from xdog.ai.types import Model, ModelCost, Usage
+from xdog.ai.utils.cost import calculate_cost
 
 
 def test_calculate_cost():

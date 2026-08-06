@@ -1,6 +1,6 @@
 """Tests for SimpleMemorySearch — keyword search over workspace files."""
 import pytest
-from claw.core.memory.simple_search import SimpleMemorySearch
+from xdog.claw.core.memory.simple_search import SimpleMemorySearch
 
 
 @pytest.fixture

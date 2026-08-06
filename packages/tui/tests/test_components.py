@@ -1,8 +1,8 @@
 
 # ---------- Editor kill ring & undo tests ----------
 
-from tui.components.editor import Editor
-from tui.keys import KeyEvent
+from xdog.tui.components.editor import Editor
+from xdog.tui.keys import KeyEvent
 
 
 def test_editor_kill_to_eol():

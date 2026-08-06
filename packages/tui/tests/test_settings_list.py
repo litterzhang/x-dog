@@ -1,8 +1,8 @@
 """Tests for tui.components.settings_list — settings list component."""
 
-from tui.components.settings_list import SettingItem, SettingsList, SettingsListTheme
-from tui.keys import KeyEvent
-from tui.utils import strip_ansi
+from xdog.tui.components.settings_list import SettingItem, SettingsList, SettingsListTheme
+from xdog.tui.keys import KeyEvent
+from xdog.tui.utils import strip_ansi
 
 
 def _make_items() -> list[SettingItem]:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from coding.cli.file_processor import process_file
+from xdog.coding.cli.file_processor import process_file
 
 
 def test_process_file_text(tmp_path: Path):
@@ -32,7 +32,7 @@ def test_process_file_binary(tmp_path: Path):
     assert "Binary file" in result["note"]
 
 def test_process_file_too_large(tmp_path: Path, monkeypatch):
-    import coding.cli.file_processor as fp
+    import xdog.coding.cli.file_processor as fp
     monkeypatch.setattr(fp, "MAX_FILE_SIZE", 10)
 
     p = tmp_path / "large.txt"

@@ -17,9 +17,9 @@ import types
 from typing import Any
 
 import pytest
-from flow.codegen import generate
-from flow.executor import execute
-from flow.loader import load_workflow, parse_workflow
+from xdog.flow.codegen import generate
+from xdog.flow.executor import execute
+from xdog.flow.loader import load_workflow, parse_workflow
 
 
 def _child() -> dict[str, Any]:
@@ -131,7 +131,7 @@ def test_path_subflow_child_is_valid_python_literal() -> None:
 def test_subflow_generated_module_imports_flow() -> None:
     """A subflow-using module imports flow (the accepted trade); it embeds the child."""
     src = generate(parse_workflow(_parent()))
-    assert "from flow.executor import execute" in src
+    assert "from xdog.flow.executor import execute" in src
     assert "_CHILD_review = {" in src
 
 
@@ -183,7 +183,7 @@ def test_subflow_path_ref_loads_and_runs(tmp_path: pathlib.Path) -> None:
     """A "subflow": "./child.json" path ref resolves, derives ports, and runs."""
     import json
 
-    from flow.loader import load_workflow
+    from xdog.flow.loader import load_workflow
 
     _write_child(tmp_path)
     parent = _parent("hi")
@@ -207,8 +207,8 @@ def test_subflow_path_ref_loads_and_runs(tmp_path: pathlib.Path) -> None:
 def test_subflow_path_ref_missing_file(tmp_path: pathlib.Path) -> None:
     import json
 
-    from flow.errors import WorkflowValidationError
-    from flow.loader import load_workflow
+    from xdog.flow.errors import WorkflowValidationError
+    from xdog.flow.loader import load_workflow
 
     parent = _parent()
     next(n for n in parent["nodes"] if n["id"] == "review")["subflow"] = "./nope.json"
@@ -222,8 +222,8 @@ def test_subflow_path_ref_cycle_rejected(tmp_path: pathlib.Path) -> None:
     """A -> B -> A subflow reference is caught at load time."""
     import json
 
-    from flow.errors import WorkflowValidationError
-    from flow.loader import load_workflow
+    from xdog.flow.errors import WorkflowValidationError
+    from xdog.flow.loader import load_workflow
 
     a = {"name": "a", "provider": "copilot", "entry": "s", "state": {"seed": "x"},
          "nodes": [{"id": "s", "type": "subflow", "subflow": "./b.json"}],
@@ -241,7 +241,7 @@ def test_subflow_path_ref_cycle_rejected(tmp_path: pathlib.Path) -> None:
 
 def test_subflow_path_ref_needs_base_dir() -> None:
     """A path ref cannot be resolved by bare parse_workflow (no base dir)."""
-    from flow.errors import WorkflowValidationError
+    from xdog.flow.errors import WorkflowValidationError
 
     parent = _parent()
     next(n for n in parent["nodes"] if n["id"] == "review")["subflow"] = "./x.json"

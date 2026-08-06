@@ -1,4 +1,4 @@
-from tui.stdin_buffer import is_complete_sequence
+from xdog.tui.stdin_buffer import is_complete_sequence
 
 
 def test_complete_csi_sequence():

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import flow
+import xdog.flow as flow
 
 
 def test_import() -> None:

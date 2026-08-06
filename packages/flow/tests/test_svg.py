@@ -17,8 +17,8 @@ from __future__ import annotations
 import shutil
 import xml.etree.ElementTree as ET
 
-from flow.graph import _to_svg_fallback, to_svg
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.graph import _to_svg_fallback, to_svg
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 _SVG_NS = "http://www.w3.org/2000/svg"
 _HAS_DOT = shutil.which("dot") is not None
@@ -147,7 +147,7 @@ def test_fallback_empty_workflow_is_valid() -> None:
 
 
 def test_ascii_diagram_boxes_and_edges() -> None:
-    from flow.graph import to_ascii_diagram
+    from xdog.flow.graph import to_ascii_diagram
 
     d = to_ascii_diagram(_wf())
     # every node appears inside a box
@@ -168,7 +168,7 @@ def test_ascii_diagram_boxes_and_edges() -> None:
 
 def test_ascii_diagram_labels_ports() -> None:
     """Sequential edges carrying a port mapping print the port name."""
-    from flow.graph import to_ascii_diagram
+    from xdog.flow.graph import to_ascii_diagram
 
     wf = WorkflowDef(
         name="ports",
@@ -187,7 +187,7 @@ def test_ascii_diagram_labels_ports() -> None:
 
 def test_ascii_diagram_omits_in_edges() -> None:
     """Edges from the reserved $in source are not drawn (they only add noise)."""
-    from flow.graph import to_ascii_diagram
+    from xdog.flow.graph import to_ascii_diagram
 
     wf = WorkflowDef(
         name="seeded",
@@ -202,7 +202,7 @@ def test_ascii_diagram_omits_in_edges() -> None:
 
 
 def test_ascii_diagram_empty() -> None:
-    from flow.graph import to_ascii_diagram
+    from xdog.flow.graph import to_ascii_diagram
 
     wf = WorkflowDef(name="e", provider="copilot", entry="", nodes=(), edges=())
     assert to_ascii_diagram(wf) == "(empty workflow)"
@@ -210,7 +210,7 @@ def test_ascii_diagram_empty() -> None:
 
 def test_ascii_diagram_places_same_layer_nodes_side_by_side() -> None:
     """A fan-out puts both branch nodes in the same layer, on the same rows."""
-    from flow.graph import to_ascii_diagram
+    from xdog.flow.graph import to_ascii_diagram
 
     wf = WorkflowDef(
         name="diamond",

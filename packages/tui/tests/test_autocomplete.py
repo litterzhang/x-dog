@@ -1,5 +1,5 @@
 
-from tui.autocomplete import (
+from xdog.tui.autocomplete import (
     AutocompleteEngine,
     CallbackCompletionProvider,
     CompletionItem,

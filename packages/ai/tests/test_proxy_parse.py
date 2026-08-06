@@ -14,8 +14,8 @@ proxy:
    least assert the proxy preserves the signature on parse.)
 """
 
-from ai.proxy import _parse_message, _parse_upstream_error
-from ai.types import (
+from xdog.ai.proxy import _parse_message, _parse_upstream_error
+from xdog.ai.types import (
     AssistantMessage,
     ThinkingContent,
     ToolCall,

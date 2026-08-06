@@ -1,6 +1,6 @@
 """Tests for the TUI footer's token accounting helpers."""
 
-from claw.channels.tui.tui_app import _context_usage_tokens
+from xdog.claw.channels.tui.tui_app import _context_usage_tokens
 
 
 def test_context_usage_includes_cache_buckets():

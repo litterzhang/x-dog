@@ -6,9 +6,9 @@ import warnings
 from pathlib import Path
 
 import pytest
-from flow.errors import FlowWarning, WorkflowValidationError
-from flow.loader import load_workflow, parse_workflow, validate_workflow
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.errors import FlowWarning, WorkflowValidationError
+from xdog.flow.loader import load_workflow, parse_workflow, validate_workflow
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -606,7 +606,7 @@ def _wf_with_script(node: dict) -> dict:
 
 
 def test_inline_script_parses_typed_io() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(
         {
@@ -641,7 +641,7 @@ def test_inline_script_parses_typed_io() -> None:
 
 
 def test_inline_bad_syntax_raises() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(
         _wf_with_script(
@@ -658,7 +658,7 @@ def test_inline_bad_syntax_raises() -> None:
 
 
 def test_inline_first_param_must_be_ctx() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(
         _wf_with_script(
@@ -676,7 +676,7 @@ def test_inline_first_param_must_be_ctx() -> None:
 
 
 def test_inline_params_must_match_inputs() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(
         _wf_with_script(
@@ -694,7 +694,7 @@ def test_inline_params_must_match_inputs() -> None:
 
 
 def test_script_code_and_run_both_set_raises() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(
         _wf_with_script(
@@ -712,7 +712,7 @@ def test_script_code_and_run_both_set_raises() -> None:
 
 
 def test_script_neither_code_nor_run_raises() -> None:
-    from flow.loader import parse_workflow, validate_workflow
+    from xdog.flow.loader import parse_workflow, validate_workflow
 
     wf = parse_workflow(_wf_with_script({"id": "x", "type": "script", "outputs": ["y"]}))
     with pytest.raises(WorkflowValidationError, match="must set 'code' or 'run'"):
@@ -1331,7 +1331,7 @@ def test_fan_in_concat_requires_array_worker_output() -> None:
 
 
 def test_fan_out_roundtrips() -> None:
-    from flow.builder.serialize import workflow_to_dict
+    from xdog.flow.builder.serialize import workflow_to_dict
 
     wf = parse_workflow(_map_reduce_wf())
     assert parse_workflow(workflow_to_dict(wf)) == wf

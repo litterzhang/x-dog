@@ -1,4 +1,4 @@
-from tui.kill_ring import KillRing
+from xdog.tui.kill_ring import KillRing
 
 
 def test_kill_ring_yank_pop():

@@ -47,13 +47,13 @@ from __future__ import annotations
 
 import pathlib
 
-from flow.builder.app import BuilderApp, build_app
-from flow.builder.io import dump_any
-from flow.loader import load_workflow
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
-from tui.keys import KeyEvent
-from tui.tui import Component
-from tui.utils import strip_ansi, visible_width
+from xdog.flow.builder.app import BuilderApp, build_app
+from xdog.flow.builder.io import dump_any
+from xdog.flow.loader import load_workflow
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.tui.keys import KeyEvent
+from xdog.tui.tui import Component
+from xdog.tui.utils import strip_ansi, visible_width
 
 
 def _write_wf(tmp: pathlib.Path, wf: WorkflowDef) -> pathlib.Path:
@@ -447,7 +447,7 @@ def test_multiline_field_does_not_corrupt_layout(tmp_path: pathlib.Path) -> None
     _type(app, "line one")
     # inject a real newline (as a loaded workflow would carry) via the action layer
     app.handle_input(KeyEvent(key="enter"))
-    from flow.builder import actions
+    from xdog.flow.builder import actions
 
     app._model = actions.set_field(app.model, "agent", "prompt", "line one\n\nline two")
     app.handle_input(KeyEvent(key="tab"))  # graph -> nodes: DETAILS shows the prompt
@@ -476,7 +476,7 @@ def _cgb_app(tmp_path: pathlib.Path) -> BuilderApp:
             NodeDef(
                 id="intake",
                 type="script",
-                run="flow.codegen_tools:next_task",
+                run="xdog.flow.codegen_tools:next_task",
                 input_ports=(Port("tasks"),),
                 output_ports=(Port("task"),),
             ),
@@ -491,7 +491,7 @@ def _cgb_app(tmp_path: pathlib.Path) -> BuilderApp:
             NodeDef(
                 id="verify",
                 type="script",
-                run="flow.codegen_tools:run_checks",
+                run="xdog.flow.codegen_tools:run_checks",
                 input_ports=(Port("target_path"),),
                 output_ports=(Port("report"),),
             ),
@@ -664,7 +664,7 @@ def test_details_pane_wraps_long_field(tmp_path: pathlib.Path) -> None:
     app = build_app(tmp_path / "wf.json")
     app.handle_input(KeyEvent(key="a"))  # agent node
     long_prompt = "word " * 60  # far wider than any pane
-    from flow.builder import actions
+    from xdog.flow.builder import actions
 
     app._model = actions.set_field(app.model, "agent", "prompt", long_prompt.strip())
     app.handle_input(KeyEvent(key="tab"))  # graph -> nodes: DETAILS pane
@@ -757,7 +757,7 @@ def _subflow_wf_path(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def _detail_for(app: BuilderApp, node_id: str) -> str:
-    from flow.builder import actions
+    from xdog.flow.builder import actions
 
     app._model = actions.select(app.model, node_id)  # type: ignore[attr-defined]
     return strip_ansi("\n".join(app._detail_lines()))  # type: ignore[attr-defined]
@@ -795,7 +795,7 @@ def test_graph_shows_inferred_signature(tmp_path: pathlib.Path) -> None:
 
 
 def test_schema_label_forms() -> None:
-    from flow.builder.app import _schema_label
+    from xdog.flow.builder.app import _schema_label
 
     assert _schema_label({"type": "string"}) == "string"
     assert _schema_label({"type": "array", "items": {"type": "integer"}}) == "array<integer>"

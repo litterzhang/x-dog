@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from coding.core.settings_manager import SettingsManager
+from xdog.coding.core.settings_manager import SettingsManager
 
 
 def test_settings_manager_hierarchy(tmp_path: Path):

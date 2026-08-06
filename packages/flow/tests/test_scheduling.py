@@ -12,14 +12,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import flow.scheduler.install as install_mod
 import pytest
-from flow.builder.serialize import workflow_to_dict
-from flow.errors import WorkflowValidationError
-from flow.loader import parse_workflow, validate_workflow
-from flow.models import ScheduleDef
-from flow.scheduler.install import Installer
-from flow.scheduler.systemd import (
+import xdog.flow.scheduler.install as install_mod
+from xdog.flow.builder.serialize import workflow_to_dict
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.loader import parse_workflow, validate_workflow
+from xdog.flow.models import ScheduleDef
+from xdog.flow.scheduler.install import Installer
+from xdog.flow.scheduler.systemd import (
     cron_to_oncalendar,
     render_listener_service,
     render_timer_crontab,
@@ -177,7 +177,7 @@ def test_listener_service_render() -> None:
 
 
 def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    import flow.cli as cli
+    import xdog.flow.cli as cli
 
     calls: list[tuple[str, object]] = []
 
@@ -222,7 +222,7 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
 
 
 def test_legacy_install_command_is_removed() -> None:
-    import flow.cli as cli
+    import xdog.flow.cli as cli
 
     with pytest.raises(SystemExit):
         cli.main(["install", "workflow.json"])
@@ -344,7 +344,7 @@ def test_install_dry_run_touches_nothing(tmp_path: Path) -> None:
 
 
 def _routes_two_http() -> list[Any]:
-    from flow.scheduler.listener import HookRoute
+    from xdog.flow.scheduler.listener import HookRoute
 
     return [
         HookRoute("triage", Path("/b/triage"), "new-ticket",
@@ -355,7 +355,7 @@ def _routes_two_http() -> list[Any]:
 
 
 def test_listener_routes_http_by_path_with_env() -> None:
-    from flow.scheduler.listener import Router
+    from xdog.flow.scheduler.listener import Router
 
     spawned: list[tuple[str, dict[str, str]]] = []
     r = Router(routes=_routes_two_http(), spawn=lambda b, e: spawned.append((str(b), dict(e))))
@@ -368,7 +368,7 @@ def test_listener_routes_http_by_path_with_env() -> None:
 
 
 def test_listener_two_workflows_share_one_router() -> None:
-    from flow.scheduler.listener import Router
+    from xdog.flow.scheduler.listener import Router
 
     spawned: list[str] = []
     r = Router(routes=_routes_two_http(), spawn=lambda b, e: spawned.append(str(b)))
@@ -379,7 +379,7 @@ def test_listener_two_workflows_share_one_router() -> None:
 
 
 def test_listener_empty_body_omits_inputs() -> None:
-    from flow.scheduler.listener import Router
+    from xdog.flow.scheduler.listener import Router
 
     seen: list[dict[str, str]] = []
     r = Router(routes=_routes_two_http(), spawn=lambda b, e: seen.append(dict(e)))
@@ -388,7 +388,7 @@ def test_listener_empty_body_omits_inputs() -> None:
 
 
 def test_listener_unknown_path_raises() -> None:
-    from flow.scheduler.listener import Router
+    from xdog.flow.scheduler.listener import Router
 
     r = Router(routes=_routes_two_http(), spawn=lambda b, e: None)
     with pytest.raises(KeyError, match="no hook workflow bound"):
@@ -396,7 +396,7 @@ def test_listener_unknown_path_raises() -> None:
 
 
 def test_listener_file_routing() -> None:
-    from flow.scheduler.listener import HookRoute, Router
+    from xdog.flow.scheduler.listener import HookRoute, Router
 
     seen: list[tuple[str, dict[str, str]]] = []
     routes = [HookRoute("ingest", Path("/b/ingest"), "file-in", {"type": "file", "dir": "/tmp/drop"})]
@@ -409,7 +409,7 @@ def test_listener_file_routing() -> None:
 
 def test_listener_from_registry_integration(tmp_path: Path) -> None:
     """The listener reads exactly the hook routes an install wrote (Phase 3 -> 4)."""
-    from flow.scheduler.listener import Router
+    from xdog.flow.scheduler.listener import Router
 
     inst, _ = _installer(tmp_path)
     inst.install(_hook_wf("deploy"))
@@ -423,7 +423,7 @@ def test_listener_from_registry_integration(tmp_path: Path) -> None:
 
 async def test_listener_signal_reaches_human_node(tmp_path: Path) -> None:
     """The delivered signal makes a human node proceed instead of pausing."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     # A workflow that pauses at a human node unless its signal is delivered.
     wf = parse_workflow({
@@ -480,7 +480,7 @@ def test_jitter_is_absent_unless_asked_for() -> None:
 
 
 def test_schedule_durations_round_trip_through_the_serializer() -> None:
-    from flow.builder.serialize import workflow_to_dict
+    from xdog.flow.builder.serialize import workflow_to_dict
 
     wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *", "timeout": "40m", "jitter": "15m"}))
     sched = workflow_to_dict(wf)["schedule"]
@@ -501,7 +501,7 @@ def test_install_python_is_selectable(monkeypatch: pytest.MonkeyPatch, capsys: p
     /usr/bin/python3 rarely has them, so a unit hard-wired to it fails on its very
     first firing — with nothing but a systemd status to explain why.
     """
-    from flow import cli
+    from xdog.flow import cli
 
     wf_path = "wf.json"
     monkeypatch.setattr(cli, "load_any", lambda _p: parse_workflow(_wf({"mode": "timer", "every": "15m"})))

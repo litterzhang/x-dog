@@ -7,10 +7,10 @@ import re
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from xdog_site import create_app
-from xdog_site.content.blog import get_articles
-from xdog_site.content.faq import FAQS
-from xdog_site.content.packages import PACKAGES
+from xdog.site import create_app
+from xdog.site.content.blog import get_articles
+from xdog.site.content.faq import FAQS
+from xdog.site.content.packages import PACKAGES
 
 
 @pytest.fixture
@@ -183,8 +183,8 @@ def test_flow_roadmap_has_phases(client: FlaskClient) -> None:
 
 
 def test_flow_docs_module_importable() -> None:
-    from xdog_site.content.docpages import render_page
-    from xdog_site.content.flow_docs import DOCS
+    from xdog.site.content.docpages import render_page
+    from xdog.site.content.flow_docs import DOCS
 
     # Features + Roadmap are Python; static pages are markdown.
     assert DOCS.features and DOCS.roadmap
@@ -255,7 +255,7 @@ def test_static_markdown_renders_tables(client: FlaskClient) -> None:
 
 def test_docpages_loader_unit() -> None:
     from markupsafe import Markup
-    from xdog_site.content.docpages import render_page
+    from xdog.site.content.docpages import render_page
 
     ref = render_page("ai", "reference")
     assert ref is not None
@@ -268,12 +268,12 @@ def test_docpages_loader_unit() -> None:
 
 
 def test_docs_content_modules_importable() -> None:
-    from xdog_site.content.agent import DOCS as AGENT_DOCS
-    from xdog_site.content.ai import DOCS as AI_DOCS
-    from xdog_site.content.claw import DOCS as CLAW_DOCS
-    from xdog_site.content.coding import DOCS as CODING_DOCS
-    from xdog_site.content.flow_docs import DOCS as FLOW_DOCS
-    from xdog_site.content.tui import DOCS as TUI_DOCS
+    from xdog.site.content.agent import DOCS as AGENT_DOCS
+    from xdog.site.content.ai import DOCS as AI_DOCS
+    from xdog.site.content.claw import DOCS as CLAW_DOCS
+    from xdog.site.content.coding import DOCS as CODING_DOCS
+    from xdog.site.content.flow_docs import DOCS as FLOW_DOCS
+    from xdog.site.content.tui import DOCS as TUI_DOCS
 
     for docs in (AI_DOCS, AGENT_DOCS, TUI_DOCS, CODING_DOCS, CLAW_DOCS, FLOW_DOCS):
         assert docs.features and docs.roadmap
@@ -303,7 +303,7 @@ def test_every_curated_example_actually_loads(client: FlaskClient) -> None:
     proves the path-referenced subflow resolves, which depends on the load path
     handing the examples directory to the loader as its base_dir.
     """
-    from xdog_site.blueprints.main import _HAVEFUN_STEMS
+    from xdog.site.blueprints.main import _HAVEFUN_STEMS
 
     assert _HAVEFUN_STEMS
     for stem in _HAVEFUN_STEMS:
@@ -320,7 +320,7 @@ def test_havefun_nav_is_a_collapsible_section_over_its_packages(client: FlaskCli
     The children are rendered from the route's own allowlist, so a nav link cannot
     drift into pointing at a name that would 404.
     """
-    from xdog_site.blueprints.main import HAVEFUN_PACKAGES
+    from xdog.site.blueprints.main import HAVEFUN_PACKAGES
 
     body = client.get("/").get_data(as_text=True)
     nav = body.split('<ul class="nav">', 1)[1]
@@ -395,10 +395,10 @@ def test_havefun_run_single_slot_then_429_and_status() -> None:
     """
     import time
 
-    from flow.cli import _dry_run_stream_fn_factory
-    from flow.loader import load_workflow
-    from xdog_site.blueprints.main import _examples_dir
-    from xdog_site.jobs import runner
+    from xdog.flow.cli import _dry_run_stream_fn_factory
+    from xdog.flow.loader import load_workflow
+    from xdog.site.blueprints.main import _examples_dir
+    from xdog.site.jobs import runner
 
     ex_dir = _examples_dir()
     assert ex_dir is not None
@@ -447,10 +447,10 @@ def test_havefun_status_includes_execution_log() -> None:
     """A run's status carries the captured execution log (per-node run lines)."""
     import time
 
-    from flow.cli import _dry_run_stream_fn_factory
-    from flow.loader import load_workflow
-    from xdog_site.blueprints.main import _examples_dir
-    from xdog_site.jobs import runner
+    from xdog.flow.cli import _dry_run_stream_fn_factory
+    from xdog.flow.loader import load_workflow
+    from xdog.site.blueprints.main import _examples_dir
+    from xdog.site.jobs import runner
 
     ex_dir = _examples_dir()
     assert ex_dir is not None
@@ -501,8 +501,8 @@ def test_sitemap_lists_only_urls_that_actually_resolve(client: FlaskClient) -> N
 
 def test_sitemap_tracks_the_registries_it_is_built_from(client: FlaskClient) -> None:
     """Adding a package or a post must not need anyone to remember the sitemap."""
-    from xdog_site.content.blog import get_articles
-    from xdog_site.content.packages import PACKAGES
+    from xdog.site.content.blog import get_articles
+    from xdog.site.content.packages import PACKAGES
 
     body = client.get("/sitemap.xml").get_data(as_text=True)
     for package in PACKAGES:

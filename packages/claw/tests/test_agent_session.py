@@ -2,19 +2,19 @@
 import asyncio
 
 import pytest
-from agent.tools import create_filesystem_tool
-from ai.types import (
+from xdog.agent.tools import create_filesystem_tool
+from xdog.ai.types import (
     AssistantMessage,
     DoneEvent,
     StartEvent,
     TextContent,
     ToolCall,
 )
-from ai.utils.event_stream import EventStream
-from claw.core.persistence.transcript_store import TranscriptStore
-from claw.core.prompt import init_workspace
-from claw.core.runtime.group import GroupRuntime
-from claw.core.types import Group, UserInput
+from xdog.ai.utils.event_stream import EventStream
+from xdog.claw.core.persistence.transcript_store import TranscriptStore
+from xdog.claw.core.prompt import init_workspace
+from xdog.claw.core.runtime.group import GroupRuntime
+from xdog.claw.core.types import Group, UserInput
 
 # ---------------------------------------------------------------------------
 # Mock stream_fn helpers
@@ -169,7 +169,7 @@ async def test_run_turn_includes_system_prompt(setup):
     sfn = make_capturing_stream_fn("ok")
     session = _make_session(ws, tmp_path, stream_fn=sfn)
     await session.run_turn(UserInput(group_id="g1", content="hi", sender="user"))
-    from ai.types import system_prompt_text
+    from xdog.ai.types import system_prompt_text
     prompt_text = system_prompt_text(sfn.captured["system_prompt"]) or ""
     assert "TestBot" in prompt_text
 

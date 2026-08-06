@@ -8,7 +8,7 @@ tests/test_submit_result.py.  These tests pin the argument parsing logic.
 import json
 
 import pytest
-from agent.cli import _parse_tool_ctx
+from xdog.agent.cli import _parse_tool_ctx
 
 
 def test_none_returns_empty_dict():

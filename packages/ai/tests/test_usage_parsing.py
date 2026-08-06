@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 
-from ai.protocols._message_builder import MessageBuilder
-from ai.protocols.anthropic_messages import _handle_sse_event
-from ai.protocols.openai_completions import _parse_chunk_usage
-from ai.types import Model
+from xdog.ai.protocols._message_builder import MessageBuilder
+from xdog.ai.protocols.anthropic_messages import _handle_sse_event
+from xdog.ai.protocols.openai_completions import _parse_chunk_usage
+from xdog.ai.types import Model
 
 
 def test_parse_chunk_usage_excludes_cached_tokens_from_input():

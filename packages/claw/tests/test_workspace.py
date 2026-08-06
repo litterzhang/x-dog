@@ -1,5 +1,5 @@
 """Tests for workspace management."""
-from claw.core.prompt import init_workspace, run_bootstrap, set_identity_name
+from xdog.claw.core.prompt import init_workspace, run_bootstrap, set_identity_name
 
 
 def test_init_workspace_does_not_overwrite_existing(tmp_path):

@@ -1,15 +1,15 @@
 import asyncio
 
 import pytest
-from ai.providers.testing import make_test_model, register_test_protocol
-from ai.types import Context, UserMessage
+from xdog.ai.providers.testing import make_test_model, register_test_protocol
+from xdog.ai.types import Context, UserMessage
 
 pytestmark = pytest.mark.asyncio
 
 
 def mock_stream_fn(model, context, options):
-    from ai.types import DoneEvent, TextDeltaEvent, TextDoneEvent
-    from ai.utils.event_stream import EventStream
+    from xdog.ai.types import AssistantMessage, DoneEvent, TextDeltaEvent, TextDoneEvent
+    from xdog.ai.utils.event_stream import EventStream
 
     async def generate():
         yield TextDeltaEvent(delta="Mock ")
@@ -19,12 +19,11 @@ def mock_stream_fn(model, context, options):
 
     stream_obj = EventStream.from_async_generator(generate())
     async def run_and_set():
-        import ai.types
         try:
             while not stream_obj.done:
                 await asyncio.sleep(0.01)
         finally:
-            stream_obj.set_result(ai.types.AssistantMessage(content=(), stop_reason="stop"))
+            stream_obj.set_result(AssistantMessage(content=(), stop_reason="stop"))
     asyncio.create_task(run_and_set())
     return stream_obj
 
@@ -36,7 +35,7 @@ def setup_test_protocol():
 
 
 async def test_stream_basic():
-    import ai
+    import xdog.ai as ai
     p = ai.provider("test")
     ctx = Context(messages=(UserMessage(content="Hello"),))
     result_stream = p.stream("stream-model", ctx)

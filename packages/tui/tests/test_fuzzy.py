@@ -1,4 +1,4 @@
-from tui.fuzzy import fuzzy_filter, fuzzy_match
+from xdog.tui.fuzzy import fuzzy_filter, fuzzy_match
 
 
 def test_fuzzy_match_partial():

@@ -16,7 +16,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from agent import (
+from xdog.agent import (
     AgentContext,
     AgentEvent,
     AgentLoopConfig,
@@ -28,8 +28,8 @@ from agent import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from agent.agent_loop import agent_loop, agent_loop_continue
-from ai.types import (
+from xdog.agent.agent_loop import agent_loop, agent_loop_continue
+from xdog.ai.types import (
     AssistantMessage,
     CostBreakdown,
     DoneEvent,
@@ -41,7 +41,7 @@ from ai.types import (
     Usage,
     UserMessage,
 )
-from ai.utils.event_stream import EventStream as AiEventStream
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
 # ---------------------------------------------------------------------------
 # Test helpers (matching TS test helpers)

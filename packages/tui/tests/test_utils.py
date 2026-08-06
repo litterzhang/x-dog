@@ -1,4 +1,4 @@
-from tui.utils import (
+from xdog.tui.utils import (
     extract_segments,
     slice_by_column,
     string_width,

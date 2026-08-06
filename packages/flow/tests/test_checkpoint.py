@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from flow.checkpoint import CheckpointInterceptor, JSONFileCheckpointStore, render_checkpoint_interceptor
-from flow.executor import ExecResult, execute
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.checkpoint import CheckpointInterceptor, JSONFileCheckpointStore, render_checkpoint_interceptor
+from xdog.flow.executor import ExecResult, execute
+from xdog.flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Checkpoint interception boundaries

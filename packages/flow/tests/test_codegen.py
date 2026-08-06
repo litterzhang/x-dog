@@ -19,10 +19,10 @@ import types
 import uuid
 from pathlib import Path
 
-from flow.codegen import generate
-from flow.events import NodeFinished, NodeStarted
-from flow.executor import ExecResult, execute
-from flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
+from xdog.flow.codegen import generate
+from xdog.flow.events import NodeFinished, NodeStarted
+from xdog.flow.executor import ExecResult, execute
+from xdog.flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 
 def _interp_out(result: ExecResult) -> dict[str, dict[str, str]]:
@@ -336,7 +336,7 @@ async def _run_generated(wf: WorkflowDef) -> dict[str, dict[str, str]]:
 
 async def test_generate_false_forward_edge_input_parity() -> None:
     """Generated input assembly ignores false forward edge mappings."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="conditional-inputs",
@@ -387,7 +387,7 @@ async def test_generate_false_forward_edge_input_parity() -> None:
 
 async def test_generate_multiple_loop_sources_and_join_parity() -> None:
     """Generated scheduler waits for all loop members before one reactivation."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="loop-join",
@@ -459,7 +459,7 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
     Regression for the bug where two conditionally-reached nodes in the same BFS
     wave were emitted as an unconditional ``asyncio.gather`` (both branches ran).
     """
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="cond-branch",
@@ -510,7 +510,7 @@ async def test_generate_conditional_branch_matches_runtime() -> None:
 
 async def test_generate_conditional_loop_matches_runtime() -> None:
     """A conditional back-edge loop must early-exit when its guard fails."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="cond-loop",
@@ -557,7 +557,7 @@ async def test_generate_conditional_loop_matches_runtime() -> None:
 
 async def test_generate_colliding_node_ids_stay_distinct() -> None:
     """Node ids that normalise to the same identifier must not shadow each other."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="collide",
@@ -601,7 +601,7 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
     before B finished.  The generated code must sequence A; B; C, matching the
     interpreter.  x=5 -> a=6, b=a*10=60, c=a+b=66.
     """
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     def sc(nid: str, code: str, out: str, inp: tuple[Port, ...]) -> NodeDef:
         return NodeDef(
@@ -646,7 +646,7 @@ async def test_generate_cross_dependency_orders_correctly() -> None:
 
 async def test_generate_escapes_initial_state_values() -> None:
     """initial_state values with backslashes/quotes/newlines must survive verbatim."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="escape",
@@ -682,7 +682,7 @@ def _sc(nid: str, code: str, out: str, inp: tuple[Port, ...] = ()) -> NodeDef:
 
 async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> None:
     """A fan-in node waits for ALL predecessors; a skipped branch skips it too."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="cond-fan-in",
@@ -727,7 +727,7 @@ async def test_generate_conditional_fan_in_skips_when_a_branch_is_skipped() -> N
 
 async def test_generate_conditional_skip_propagates_downstream() -> None:
     """When a guarded node is skipped, its unconditional successor is skipped too."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="cond-skip",
@@ -773,7 +773,7 @@ async def test_generate_conditional_skip_propagates_downstream() -> None:
 
 async def test_generate_conditional_branch_positive_path_runs_downstream() -> None:
     """The taken branch runs (n=4 -> even)."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="cond-pos",
@@ -1077,11 +1077,11 @@ async def test_generate_output_schema_parity_with_interpreter() -> None:
     """
     import types
 
-    import agent.helpers as _agent_helpers
-    import ai as _ai
-    from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
-    from ai.utils.event_stream import EventStream as AiEventStream
-    from flow.executor import execute
+    import xdog.agent.helpers as _agent_helpers
+    import xdog.ai as _ai
+    from xdog.ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
+    from xdog.ai.utils.event_stream import EventStream as AiEventStream
+    from xdog.flow.executor import execute
 
     result_obj = {"summary": "all good", "score": 42}
 
@@ -1244,7 +1244,7 @@ def _make_structured_wire_wf() -> WorkflowDef:
 
 async def test_structured_port_is_live_object_parity() -> None:
     """An ``object`` port carries a real dict through both engines (not a JSON string)."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = _make_structured_wire_wf()
 
@@ -1267,7 +1267,7 @@ async def test_nested_interpolation_in_prompt_parity() -> None:
     condition-free edge, but the interpolation grammar itself is exercised through
     a guard: the edge to ``gate`` fires only when ``{{plan.owner}}`` equals ``ada``.
     """
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="nested-interp",
@@ -1311,7 +1311,7 @@ async def test_nested_interpolation_in_prompt_parity() -> None:
 
 async def test_structured_initial_state_parity() -> None:
     """A structured ``$in`` seed (list/object) flows type-native through both engines."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="structured-seed",
@@ -1371,8 +1371,8 @@ def _multi_field_submit_stream_fn(result_obj: dict[str, object]) -> object:
     """Build a stub stream_fn that submits *result_obj* via submit_result once."""
     import asyncio as _asyncio
 
-    from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
-    from ai.utils.event_stream import EventStream as AiEventStream
+    from xdog.ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
+    from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
     def _fn(model_id: object, context: object, options: object = None) -> "AiEventStream[AssistantMessage]":
         stream: AiEventStream[AssistantMessage] = AiEventStream()
@@ -1403,9 +1403,9 @@ async def test_generate_multi_output_agent_parity() -> None:
     """
     import types
 
-    import agent.helpers as _agent_helpers
-    import ai as _ai
-    from flow.executor import execute
+    import xdog.agent.helpers as _agent_helpers
+    import xdog.ai as _ai
+    from xdog.flow.executor import execute
 
     result_obj: dict[str, object] = {"summary": "do it", "tasks": ["a", "b"], "cost": 42.5}
     wf = _make_multi_output_agent_wf()
@@ -1449,7 +1449,7 @@ async def test_generate_subfield_mapping_parity() -> None:
     ``plan.owner`` -> ``who`` and ``plan.tasks`` -> ``items``.  Both engines must
     resolve the sub-fields identically.
     """
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="subfield-map",
@@ -1489,7 +1489,7 @@ async def test_generate_subfield_mapping_parity() -> None:
 
 async def test_generate_derived_entry_multi_parallel_parity() -> None:
     """With no explicit entry, all $in-only nodes are entries and run in parallel."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="derived-entry",
@@ -1541,7 +1541,7 @@ async def test_generate_flow_inputs_override_parity() -> None:
     import json as _json
     import os
 
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="override",
@@ -1594,7 +1594,7 @@ async def test_generate_flow_inputs_override_parity() -> None:
 
 async def test_subfield_mapping_to_output_matches_runtime() -> None:
     """A JSONPath leaf can be projected directly into a named workflow output."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     wf = WorkflowDef(
         name="nested-output",
@@ -1657,7 +1657,7 @@ def test_generate_invalid_strict_loop_remains_syntactically_valid() -> None:
 
 async def test_generate_numeric_condition_parity() -> None:
     """A gte/lt loop-exit guard behaves identically in both engines."""
-    from flow.executor import execute
+    from xdog.flow.executor import execute
 
     # bump increments a counter; the back-edge loops while count < 3 (numeric lt),
     # so the loop runs until count reaches 3.
@@ -1740,8 +1740,8 @@ def test_sync_run_ref_script_works_in_both_engines(tmp_path: Path) -> None:
             ],
         }
 
-    from flow.executor import execute
-    from flow.loader import parse_workflow
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
 
     sys.path.insert(0, str(tmp_path))
     try:

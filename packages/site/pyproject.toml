@@ -24,10 +24,10 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
-xdog-site = "xdog_site.app:main"
+xdog-site = "xdog.site.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/xdog_site"]
+packages = ["src/xdog"]
 
 [tool.mypy]
 python_version = "3.12"

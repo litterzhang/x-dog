@@ -23,14 +23,14 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
-xdog-agent = "agent.cli:main"
+xdog-agent = "xdog.agent.cli:main"
 
 [[tool.mypy.overrides]]
 module = ["fastjsonschema"]
 ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent"]
+packages = ["src/xdog"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

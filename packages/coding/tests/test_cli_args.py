@@ -1,5 +1,5 @@
 from click.testing import CliRunner
-from coding.cli.args import cli
+from xdog.coding.cli.args import cli
 
 
 def test_cli_list_models():
@@ -9,7 +9,7 @@ def test_cli_list_models():
     assert result.exit_code == 0
 
 def test_cli_args_parsing(mocker):
-    mock_run = mocker.patch("coding.main.run_agent")
+    mock_run = mocker.patch("xdog.coding.main.run_agent")
 
     runner = CliRunner()
     result = runner.invoke(cli, ['-m', 'sonnet', '--thinking-level', 'deep', '--print', '-p', 'hello'])

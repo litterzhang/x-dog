@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from flow.conditions import evaluate
-from flow.errors import WorkflowValidationError
-from flow.interpolate import interpolate
-from flow.models import Condition
+from xdog.flow.conditions import evaluate
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.interpolate import interpolate
+from xdog.flow.models import Condition
 
 # ---------------------------------------------------------------------------
 # interpolate

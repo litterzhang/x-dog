@@ -1,6 +1,6 @@
 """Tests for memory tool."""
 import pytest
-from claw.core.tools.tool_memory import create_memory_tool
+from xdog.claw.core.tools.tool_memory import create_memory_tool
 
 
 @pytest.mark.asyncio

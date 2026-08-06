@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from flow.cli import main
+from xdog.flow.cli import main
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,7 +80,7 @@ def test_graph_mermaid(capsys: pytest.CaptureFixture[str]) -> None:
 async def test_run_dry_run(capsys: pytest.CaptureFixture[str]) -> None:
     """dry-run should complete without hitting any LLM and print JSON state."""
 
-    from flow.cli import _cmd_run
+    from xdog.flow.cli import _cmd_run
 
     await _cmd_run(_LINEAR, provider=None, dry_run=True)
     out = capsys.readouterr().out
@@ -132,34 +132,34 @@ _AGENT_CALC = str(Path(__file__).parent.parent / "examples" / "agent_calculator.
 
 
 def test_parse_inputs_basic() -> None:
-    from flow.cli import _parse_inputs
+    from xdog.flow.cli import _parse_inputs
 
     # values are parsed as JSON when possible, so numbers become type-native
     assert _parse_inputs(["a=3", "b=4"]) == {"a": 3, "b": 4}
 
 
 def test_parse_inputs_bare_word_stays_string() -> None:
-    from flow.cli import _parse_inputs
+    from xdog.flow.cli import _parse_inputs
 
     # a value that is not valid JSON is kept as the raw string
     assert _parse_inputs(["name=ada", "topic=ship it"]) == {"name": "ada", "topic": "ship it"}
 
 
 def test_parse_inputs_structured() -> None:
-    from flow.cli import _parse_inputs
+    from xdog.flow.cli import _parse_inputs
 
     assert _parse_inputs(['xs=[1, 2]', 'cfg={"a": 1}']) == {"xs": [1, 2], "cfg": {"a": 1}}
 
 
 def test_parse_inputs_value_with_equals() -> None:
-    from flow.cli import _parse_inputs
+    from xdog.flow.cli import _parse_inputs
 
     # value may contain '=' — split on the first only
     assert _parse_inputs(["note=x=y"]) == {"note": "x=y"}
 
 
 def test_parse_inputs_missing_equals_errors() -> None:
-    from flow.cli import _parse_inputs
+    from xdog.flow.cli import _parse_inputs
 
     with pytest.raises(SystemExit):
         _parse_inputs(["abc"])

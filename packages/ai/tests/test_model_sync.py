@@ -9,8 +9,8 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from ai.types import Model, ModelCost, OpenAICompletionsCompat, ThinkingBudgetRange
-from ai.vendors.copilot._model_sync import (
+from xdog.ai.types import Model, ModelCost, OpenAICompletionsCompat, ThinkingBudgetRange
+from xdog.ai.vendors.copilot._model_sync import (
     _model_from_dict,
     _model_to_dict,
     _read_cache,
@@ -76,8 +76,8 @@ def test_full_cache_round_trip():
 def test_cache_file_write_and_read(tmp_path: Path):
     models = (Model(id="copilot/t1", name="T1"), Model(id="copilot/t2", name="T2"))
     cache_file = tmp_path / "models_cache.json"
-    with patch("ai.vendors.copilot._model_sync._CACHE_FILE", cache_file), \
-         patch("ai.vendors.copilot._model_sync.data_dir", return_value=tmp_path):
+    with patch("xdog.ai.vendors.copilot._model_sync._CACHE_FILE", cache_file), \
+         patch("xdog.ai.vendors.copilot._model_sync.data_dir", return_value=tmp_path):
         _write_cache(models)
         result = _read_cache()
     assert result is not None
@@ -92,12 +92,12 @@ async def test_sync_returns_cached_when_fresh(tmp_path: Path):
     cache_file = tmp_path / "c.json"
     payload = {"timestamp": time.time(), "models": [_model_to_dict(Model(id="copilot/cached", name="C"))]}
     cache_file.write_text(json.dumps(payload))
-    with patch("ai.vendors.copilot._model_sync._CACHE_FILE", cache_file):
+    with patch("xdog.ai.vendors.copilot._model_sync._CACHE_FILE", cache_file):
         result = await sync_models(ttl=3600)
     assert result[0].id == "copilot/cached"
 
 def test_list_models_returns_generated_when_no_cache(tmp_path: Path):
-    with patch("ai.vendors.copilot._model_sync._CACHE_FILE", tmp_path / "nope.json"):
+    with patch("xdog.ai.vendors.copilot._model_sync._CACHE_FILE", tmp_path / "nope.json"):
         assert len(list_models()) > 0
 
 
@@ -112,7 +112,7 @@ def test_list_models_returns_stale_cache_over_fallback(tmp_path: Path):
     stale_ts = time.time() - (48 * 60 * 60)  # 48h old, well past the 24h TTL
     models = [_model_to_dict(Model(id=f"copilot/stale-{i}", name=f"S{i}")) for i in range(12)]
     cache_file.write_text(json.dumps({"timestamp": stale_ts, "models": models}))
-    with patch("ai.vendors.copilot._model_sync._CACHE_FILE", cache_file):
+    with patch("xdog.ai.vendors.copilot._model_sync._CACHE_FILE", cache_file):
         result = list_models()
     ids = {m.id for m in result}
     assert "copilot/stale-0" in ids  # the stale cache is used

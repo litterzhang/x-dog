@@ -1,9 +1,9 @@
 """Tests for the submit_result built-in tool (schema validation + ctx handoff)."""
 
 import pytest
-from agent.tools import create_submit_result_tool
-from agent.tools.registry import registered_tool_names
-from ai.types import TextContent
+from xdog.agent.tools import create_submit_result_tool
+from xdog.agent.tools.registry import registered_tool_names
+from xdog.ai.types import TextContent
 
 
 def _text(result) -> str:

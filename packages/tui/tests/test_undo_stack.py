@@ -1,4 +1,4 @@
-from tui.undo_stack import UndoStack
+from xdog.tui.undo_stack import UndoStack
 
 
 def test_undo_stack_push_undo_redo():

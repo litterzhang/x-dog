@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flow.frontier import (
+from xdog.flow.frontier import (
     build_frontier_spec,
     complete_batch,
     new_frontier_state,
@@ -10,7 +10,7 @@ from flow.frontier import (
     replay_completed,
     take_ready,
 )
-from flow.models import Condition, EdgeDef, NodeDef, WorkflowDef, edge_identities
+from xdog.flow.models import Condition, EdgeDef, NodeDef, WorkflowDef, edge_identities
 
 
 def _workflow(nodes: tuple[str, ...], edges: tuple[EdgeDef, ...], *, entry: str = "") -> WorkflowDef:

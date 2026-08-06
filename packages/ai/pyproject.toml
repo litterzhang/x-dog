@@ -27,10 +27,10 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
-xdog-ai = "ai.cli:main"
+xdog-ai = "xdog.ai.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai"]
+packages = ["src/xdog"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

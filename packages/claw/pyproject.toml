@@ -31,10 +31,10 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
-xdog-claw = "claw.cli:main"
+xdog-claw = "xdog.claw.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claw"]
+packages = ["src/xdog"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

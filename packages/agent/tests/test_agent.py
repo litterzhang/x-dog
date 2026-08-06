@@ -4,11 +4,11 @@ import asyncio
 from typing import Any
 
 import pytest
-from agent import AgentConfig
-from agent.agent import Agent
-from ai import AssistantMessage, CostBreakdown, TextContent, Usage, UserMessage
-from ai.types import DoneEvent, StartEvent
-from ai.utils.event_stream import EventStream as AiEventStream
+from xdog.agent import AgentConfig
+from xdog.agent.agent import Agent
+from xdog.ai import AssistantMessage, CostBreakdown, TextContent, Usage, UserMessage
+from xdog.ai.types import DoneEvent, StartEvent
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
 # ---------------------------------------------------------------------------
 # Helpers

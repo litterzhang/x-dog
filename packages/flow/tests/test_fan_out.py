@@ -18,11 +18,11 @@ import types
 from typing import Any
 
 import pytest
-from ai.types import AssistantMessage, DoneEvent, TextContent
-from ai.utils.event_stream import EventStream as AiEventStream
-from flow.codegen import generate
-from flow.executor import execute
-from flow.loader import parse_workflow
+from xdog.ai.types import AssistantMessage, DoneEvent, TextContent
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
+from xdog.flow.codegen import generate
+from xdog.flow.executor import execute
+from xdog.flow.loader import parse_workflow
 
 
 def _map_reduce(n: int, cap: int = 0, worker: str = "script", fan_cap: int = 0) -> dict[str, Any]:
@@ -159,8 +159,8 @@ async def test_fan_out_agent_worker() -> None:
 
 async def _run_generated(src: str) -> dict[str, Any]:
     """Exec a generated module with stubbed provider/stream and return its _RUNTIME."""
-    import agent.helpers as _agent_helpers
-    import ai as _ai
+    import xdog.agent.helpers as _agent_helpers
+    import xdog.ai as _ai
 
     def _stub_stream_fn(model_id: Any, context: Any, options: Any = None) -> AiEventStream[AssistantMessage]:
         msg = AssistantMessage(content=(TextContent(text="X"),))
@@ -255,7 +255,7 @@ async def test_fan_in_concat_can_feed_output_directly_with_parity() -> None:
     ]
     wf = parse_workflow(data)
 
-    from flow.loader import workflow_output_schema
+    from xdog.flow.loader import workflow_output_schema
 
     assert workflow_output_schema(wf)["properties"]["results"] == {
         "type": "array",
@@ -270,7 +270,7 @@ async def test_fan_in_concat_can_feed_output_directly_with_parity() -> None:
 
 def test_fan_in_list_output_schema_wraps_worker_value() -> None:
     """list publishes an aggregate array schema around the per-instance schema."""
-    from flow.loader import workflow_output_schema
+    from xdog.flow.loader import workflow_output_schema
 
     data = _map_reduce(2)
     data["nodes"] = data["nodes"][:2]
@@ -362,7 +362,7 @@ async def test_fan_cap_parity_holds(tmp_path: pathlib.Path) -> None:
 
 
 def test_fan_max_concurrency_roundtrips() -> None:
-    from flow.builder.serialize import workflow_to_dict
+    from xdog.flow.builder.serialize import workflow_to_dict
 
     wf = parse_workflow(_map_reduce(3, fan_cap=4))
     assert wf.fan_max_concurrency == 4

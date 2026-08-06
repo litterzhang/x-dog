@@ -1,8 +1,8 @@
 import asyncio
 
 import pytest
-from ai.types import TextDeltaEvent, TextDoneEvent
-from ai.utils.event_stream import EventStream
+from xdog.ai.types import TextDeltaEvent, TextDoneEvent
+from xdog.ai.utils.event_stream import EventStream
 
 pytestmark = pytest.mark.asyncio
 

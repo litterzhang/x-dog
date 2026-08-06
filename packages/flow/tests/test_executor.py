@@ -13,12 +13,12 @@ import asyncio
 from typing import Any
 
 import pytest
-from agent.agent import Agent
-from ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
-from ai.utils.event_stream import EventStream as AiEventStream
-from flow.errors import WorkflowExecutionError
-from flow.executor import ExecResult, execute
-from flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
+from xdog.agent.agent import Agent
+from xdog.ai.types import AssistantMessage, DoneEvent, TextContent, ToolCall
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
+from xdog.flow.errors import WorkflowExecutionError
+from xdog.flow.executor import ExecResult, execute
+from xdog.flow.models import IN_NODE_ID, OUT_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -794,8 +794,8 @@ async def test_script_node() -> None:
 
 async def test_agent_tools() -> None:
     """Agent node with tools=('echo',) receives the resolved tool."""
-    from agent.core import AgentTool, AgentToolResult
-    from ai.types import TextContent as TC
+    from xdog.agent.core import AgentTool, AgentToolResult
+    from xdog.ai.types import TextContent as TC
 
     tools_seen: list[tuple[AgentTool, ...]] = []
 
@@ -816,7 +816,7 @@ async def test_agent_tools() -> None:
         execute=_spy_execute,
     )
 
-    from flow.tools import ToolRegistry
+    from xdog.flow.tools import ToolRegistry
 
     registry = ToolRegistry()
     registry.register(spy_tool)
@@ -829,7 +829,7 @@ async def test_agent_tools() -> None:
             tools_seen.append(tuple(tools_arg))
         original_init(self, stream_fn, **kwargs)
 
-    import agent.agent as _agent_module
+    import xdog.agent.agent as _agent_module
 
     _agent_module.Agent.__init__ = _patching_init  # type: ignore[method-assign]
     try:
@@ -856,7 +856,7 @@ async def test_agent_custom_tool_from_manifest() -> None:
     """A workflow tool manifest is loaded from base_dir and reaches the agent."""
     from pathlib import Path
 
-    from agent.core import AgentTool
+    from xdog.agent.core import AgentTool
 
     fixtures = Path(__file__).parent / "fixtures"
     tools_seen: list[tuple[AgentTool, ...]] = []
@@ -869,7 +869,7 @@ async def test_agent_custom_tool_from_manifest() -> None:
             tools_seen.append(tuple(tools_arg))
         original_init(self, stream_fn, **kwargs)
 
-    import agent.agent as _agent_module
+    import xdog.agent.agent as _agent_module
 
     _agent_module.Agent.__init__ = _patching_init  # type: ignore[method-assign]
     try:
@@ -1279,7 +1279,7 @@ async def test_agent_retry_succeeds_after_failures() -> None:
     We patch Agent.prompt to raise on the first N invocations so the executor's
     retry loop sees real exceptions from the agent branch.
     """
-    import agent.agent as _agent_module
+    import xdog.agent.agent as _agent_module
 
     call_count: list[int] = [0]
     n_failures = 2

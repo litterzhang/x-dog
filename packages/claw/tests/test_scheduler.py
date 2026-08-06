@@ -2,8 +2,8 @@
 import time
 
 import pytest
-from claw.core.planning.task_scheduler import TaskScheduler
-from claw.core.types import ScheduledTask, TaskSchedule
+from xdog.claw.core.planning.task_scheduler import TaskScheduler
+from xdog.claw.core.types import ScheduledTask, TaskSchedule
 
 
 @pytest.fixture

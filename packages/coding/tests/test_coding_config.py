@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from coding.config import (
+from xdog.coding.config import (
     get_config_dir,
     get_data_dir,
     get_state_dir,

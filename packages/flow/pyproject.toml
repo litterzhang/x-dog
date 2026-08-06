@@ -26,10 +26,10 @@ Documentation = "https://xdog.942295.xyz"
 Issues = "https://github.com/litterzhang/x-dog/issues"
 
 [project.scripts]
-xdog-flow = "flow.cli:main"
+xdog-flow = "xdog.flow.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/flow"]
+packages = ["src/xdog"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -15,14 +15,14 @@ import pathlib
 import xml.etree.ElementTree as ET
 
 import pytest
-from flow.builder.svg_doc import (
+from xdog.flow.builder.svg_doc import (
     dump_workflow_svg,
     read_workflow_from_svg,
     workflow_to_svg_document,
 )
-from flow.errors import WorkflowValidationError
-from flow.loader import load_workflow, parse_workflow
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.loader import load_workflow, parse_workflow
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 # Workflow examples only: *.test.json siblings are test suites, not workflows.
 # Recursive: an example that ships sibling ``run:`` modules lives in its own

@@ -1,7 +1,7 @@
 import time
 from pathlib import Path
 
-from coding.core.session_manager import SessionManager
+from xdog.coding.core.session_manager import SessionManager
 
 
 def test_session_manager_crud(tmp_path: Path):

@@ -1,10 +1,10 @@
 """Tests for slash commands module."""
 
 import pytest
-from agent import AgentConfig
-from ai.types import AssistantMessage as _AM
-from ai.utils.event_stream import EventStream as _ES
-from coding.core.slash_commands import (
+from xdog.agent import AgentConfig
+from xdog.ai.types import AssistantMessage as _AM
+from xdog.ai.utils.event_stream import EventStream as _ES
+from xdog.coding.core.slash_commands import (
     execute_command,
     parse_slash_command,
 )
@@ -41,7 +41,7 @@ async def test_cmd_clear(agent_session):
 @pytest.mark.asyncio
 async def test_cmd_fork(agent_session):
     # Add some messages first
-    from ai.types import AssistantMessage, TextContent, UserMessage
+    from xdog.ai.types import AssistantMessage, TextContent, UserMessage
     msgs = [
         UserMessage(content="Hello"),
         AssistantMessage(content=(TextContent(text="Hi"),)),
@@ -62,10 +62,10 @@ async def test_cmd_compact(agent_session):
 @pytest.fixture
 def agent_session(tmp_path):
     """Create a minimal AgentSession for testing."""
-    from agent.agent import Agent
-    from coding.core.agent_session import AgentSession
-    from coding.core.session_manager import SessionManager
-    from coding.core.settings_manager import SettingsManager
+    from xdog.agent.agent import Agent
+    from xdog.coding.core.agent_session import AgentSession
+    from xdog.coding.core.session_manager import SessionManager
+    from xdog.coding.core.settings_manager import SettingsManager
 
     session_dir = tmp_path / "sessions"
     session_dir.mkdir()
@@ -87,10 +87,10 @@ def agent_session(tmp_path):
 @pytest.fixture
 def agent_session_with_models(tmp_path):
     """Create an AgentSession with a model name."""
-    from agent.agent import Agent
-    from coding.core.agent_session import AgentSession
-    from coding.core.session_manager import SessionManager
-    from coding.core.settings_manager import SettingsManager
+    from xdog.agent.agent import Agent
+    from xdog.coding.core.agent_session import AgentSession
+    from xdog.coding.core.session_manager import SessionManager
+    from xdog.coding.core.settings_manager import SettingsManager
 
     session_dir = tmp_path / "sessions"
     session_dir.mkdir()

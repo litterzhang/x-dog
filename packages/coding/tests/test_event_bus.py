@@ -1,6 +1,6 @@
 
 import pytest
-from coding.core.event_bus import EventBus
+from xdog.coding.core.event_bus import EventBus
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 
-from tui.terminal import ScreenBuffer
+from xdog.tui.terminal import ScreenBuffer
 
 
 def test_screen_buffer():

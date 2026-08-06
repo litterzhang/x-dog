@@ -1,7 +1,7 @@
 """Tests for the config selector."""
 
 
-from coding.cli.config_selector import _prompt_api_key, _prompt_provider, config_selector
+from xdog.coding.cli.config_selector import _prompt_api_key, _prompt_provider, config_selector
 
 
 def test_prompt_provider(monkeypatch):

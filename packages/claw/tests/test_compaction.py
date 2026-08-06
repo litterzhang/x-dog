@@ -1,9 +1,9 @@
 """Tests for compaction engine."""
-from claw.core.compaction import (
+from xdog.claw.core.compaction import (
     compact_transcript,
     estimate_tokens,
 )
-from claw.core.compaction.transcript import extract_file_ops, find_cut_point
+from xdog.claw.core.compaction.transcript import extract_file_ops, find_cut_point
 
 
 def test_estimate_tokens_includes_tool_calls():

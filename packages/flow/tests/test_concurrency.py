@@ -7,12 +7,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
-from flow.codegen import generate
-from flow.errors import WorkflowValidationError
-from flow.executor import execute
-from flow.loader import parse_workflow
-from flow.models import EdgeDef, NodeDef, WorkflowDef
-from flow.runtime import RuntimeContext
+from xdog.flow.codegen import generate
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.executor import execute
+from xdog.flow.loader import parse_workflow
+from xdog.flow.models import EdgeDef, NodeDef, WorkflowDef
+from xdog.flow.runtime import RuntimeContext
 
 # ---------------------------------------------------------------------------
 # Concurrency-measuring infrastructure

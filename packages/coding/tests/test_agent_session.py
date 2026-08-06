@@ -1,18 +1,18 @@
 """Tests for AgentSession wrapping agent.Agent."""
 
 import pytest
-from agent import AgentConfig
-from agent.agent import Agent
-from ai.types import (
+from xdog.agent import AgentConfig
+from xdog.agent.agent import Agent
+from xdog.ai.types import (
     AssistantMessage,
     TextContent,
     UserMessage,
 )
-from ai.types import AssistantMessage as _AM
-from ai.utils.event_stream import EventStream as _ES
-from coding.core.agent_session import AgentSession
-from coding.core.session_manager import SessionManager
-from coding.core.settings_manager import SettingsManager
+from xdog.ai.types import AssistantMessage as _AM
+from xdog.ai.utils.event_stream import EventStream as _ES
+from xdog.coding.core.agent_session import AgentSession
+from xdog.coding.core.session_manager import SessionManager
+from xdog.coding.core.settings_manager import SettingsManager
 
 
 def _noop_stream_fn(m, c, o): return _ES.empty(_AM(content=()))

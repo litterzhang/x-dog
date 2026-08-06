@@ -1,7 +1,7 @@
 """Tests for the interactive-mode footer context accounting."""
 
-from ai.types import AssistantMessage, Usage, UserMessage
-from coding.modes.interactive.interactive_mode import _context_tokens_from_messages
+from xdog.ai.types import AssistantMessage, Usage, UserMessage
+from xdog.coding.modes.interactive.interactive_mode import _context_tokens_from_messages
 
 
 def test_context_tokens_uses_latest_assistant_usage():

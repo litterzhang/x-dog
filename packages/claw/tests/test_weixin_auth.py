@@ -4,7 +4,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from claw.channels.weixin.auth import (
+from xdog.claw.channels.weixin.auth import (
     WeixinAccountData,
     save_account,
     start_qr_login,
@@ -58,7 +58,7 @@ async def test_start_qr_login_success():
     mock_resp = _make_mock_response(mock_response)
     mock_client = _make_mock_httpx_client(mock_resp)
 
-    with patch("claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
+    with patch("xdog.claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
         result = await start_qr_login(api_base_url="https://test.example.com")
 
     assert result.qrcode_url == "https://example.com/qr.png"
@@ -82,7 +82,7 @@ async def test_start_qr_login_failure():
     mock_client.__aenter__ = aenter
     mock_client.__aexit__ = aexit
 
-    with patch("claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
+    with patch("xdog.claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
         result = await start_qr_login(api_base_url="https://unreachable.example.com")
 
     assert not result.qrcode_url
@@ -101,7 +101,7 @@ async def test_wait_qr_login_confirmed():
     mock_resp = _make_mock_response(mock_status_response)
     mock_client = _make_mock_httpx_client(mock_resp)
 
-    with patch("claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
+    with patch("xdog.claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
         result = await wait_qr_login(
             api_base_url="https://test.example.com",
             qrcode="test-qr-code",
@@ -120,7 +120,7 @@ async def test_wait_qr_login_expired():
     mock_resp = _make_mock_response(mock_status_response)
     mock_client = _make_mock_httpx_client(mock_resp)
 
-    with patch("claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
+    with patch("xdog.claw.channels.weixin.auth.httpx.AsyncClient", return_value=mock_client):
         result = await wait_qr_login(
             api_base_url="https://test.example.com",
             qrcode="test-qr-code",

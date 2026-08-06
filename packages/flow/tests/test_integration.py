@@ -20,11 +20,11 @@ import tempfile
 import types
 from typing import Any
 
-from ai.types import AssistantMessage, DoneEvent, TextContent
-from ai.utils.event_stream import EventStream as AiEventStream
-from flow.codegen import generate
-from flow.executor import execute
-from flow.loader import load_workflow
+from xdog.ai.types import AssistantMessage, DoneEvent, TextContent
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
+from xdog.flow.codegen import generate
+from xdog.flow.executor import execute
+from xdog.flow.loader import load_workflow
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -97,7 +97,7 @@ async def test_agent_calculator_dryrun() -> None:
     """
     wf = load_workflow(_CALC)
 
-    from flow.tools import default_registry
+    from xdog.flow.tools import default_registry
 
     result = await execute(wf, stream_fn_factory=_dryrun_factory, tool_registry=default_registry())
 
@@ -164,8 +164,8 @@ async def test_generate_parity() -> None:
         asyncio.ensure_future(_push())
         return stream
 
-    import agent.helpers as _agent_helpers
-    import ai as _ai
+    import xdog.agent.helpers as _agent_helpers
+    import xdog.ai as _ai
 
     original_sfp = _agent_helpers.stream_fn_from_provider
     _agent_helpers.stream_fn_from_provider = lambda _provider: _stub_stream_fn  # type: ignore[assignment]

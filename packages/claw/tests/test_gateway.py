@@ -6,10 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from ai.types import AssistantMessage, DoneEvent, StartEvent, TextContent
-from ai.utils.event_stream import EventStream
-from claw.config import ClawConfig, GroupDef
-from claw.core.runtime.gateway import GatewayServer, _groups_from_config, read_pid
+from xdog.ai.types import AssistantMessage, DoneEvent, StartEvent, TextContent
+from xdog.ai.utils.event_stream import EventStream
+from xdog.claw.config import ClawConfig, GroupDef
+from xdog.claw.core.runtime.gateway import GatewayServer, _groups_from_config, read_pid
 
 
 def _make_test_stream_fn(text="test response"):
@@ -89,7 +89,7 @@ class TestGatewayServer:
         server = GatewayServer(gateway_config)
 
         # Mock the agent function to avoid pi_ai dependency
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -111,7 +111,7 @@ class TestGatewayServer:
         """Client can ping and receive pong."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -140,7 +140,7 @@ class TestGatewayServer:
         """Client can request gateway status."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -170,7 +170,7 @@ class TestGatewayServer:
         """Client can send a chat message and receive a response."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -200,7 +200,7 @@ class TestGatewayServer:
         """Message to unknown group returns error."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -229,7 +229,7 @@ class TestGatewayServer:
         """Invalid JSON from client returns error."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -256,7 +256,7 @@ class TestGatewayServer:
         """Client can reset a group session."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()
@@ -291,7 +291,7 @@ class TestGatewayServer:
         """Empty message content returns error."""
         server = GatewayServer(gateway_config)
 
-        with patch("claw.core.runtime.gateway._build_model_and_options") as mock_build:
+        with patch("xdog.claw.core.runtime.gateway._build_model_and_options") as mock_build:
             mock_build.return_value = (_TEST_MODEL_NAME, _make_test_stream_fn())
 
             await server.start()

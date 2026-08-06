@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flow.interpolate import interpolate, jsonpath_get
+from xdog.flow.interpolate import interpolate, jsonpath_get
 
 
 def test_bare_string_port() -> None:

@@ -1,5 +1,5 @@
 """Tests for compaction prompts and triggers."""
-from claw.core.compaction.prompts import should_compact
+from xdog.claw.core.compaction.prompts import should_compact
 
 
 def test_should_compact_threshold():

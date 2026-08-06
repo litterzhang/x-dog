@@ -18,10 +18,10 @@ import pathlib
 from typing import Any
 
 import pytest
-from flow.errors import WorkflowValidationError
-from flow.loader import parse_workflow
-from flow.testing import load_suite, run_case
-from flow.testing.match import first_difference, matches
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.loader import parse_workflow
+from xdog.flow.testing import load_suite, run_case
+from xdog.flow.testing.match import first_difference, matches
 
 
 # --------------------------------------------------------------------------
@@ -546,7 +546,7 @@ def test_suite_is_found_from_the_workflow_path(tmp_path: pathlib.Path) -> None:
 def test_missing_suite_is_a_clear_error(tmp_path: pathlib.Path) -> None:
     (tmp_path / "solo.json").write_text(json.dumps(_fan_workflow()), encoding="utf-8")
     with pytest.raises(WorkflowValidationError, match="no test suite at"):
-        from flow.testing import discover
+        from xdog.flow.testing import discover
 
         discover(tmp_path / "solo.json")
 

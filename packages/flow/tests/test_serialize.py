@@ -11,9 +11,9 @@ import json
 import pathlib
 
 import pytest
-from flow.builder.serialize import dump_workflow, workflow_to_dict
-from flow.loader import load_workflow, parse_workflow
-from flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.builder.serialize import dump_workflow, workflow_to_dict
+from xdog.flow.loader import load_workflow, parse_workflow
+from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 # Workflow examples only: *.test.json siblings are test suites, not workflows.
 # Recursive: an example that ships sibling ``run:`` modules lives in its own

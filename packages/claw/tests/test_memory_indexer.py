@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from claw.core.memory.indexer import (
+from xdog.claw.core.memory.indexer import (
     EmbeddingModel,
     MemoryIndexer,
 )

@@ -1,6 +1,6 @@
 import time
 
-from coding.core.timings import TimingCollector
+from xdog.coding.core.timings import TimingCollector
 
 
 def test_timing_collector_measure():

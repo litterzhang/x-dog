@@ -7,7 +7,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from agent import (
+from xdog.agent import (
     AfterToolCallContext,
     AfterToolCallResult,
     AgentContext,
@@ -21,8 +21,8 @@ from agent import (
     BeforeToolCallResult,
     ToolExecutionEndEvent,
 )
-from agent.agent_loop import agent_loop
-from ai import (
+from xdog.agent.agent_loop import agent_loop
+from xdog.ai import (
     AssistantMessage,
     CostBreakdown,
     Message,
@@ -31,8 +31,8 @@ from ai import (
     Usage,
     UserMessage,
 )
-from ai.types import DoneEvent, StreamOptions, ToolResultMessage
-from ai.utils.event_stream import EventStream as AiEventStream
+from xdog.ai.types import DoneEvent, StreamOptions, ToolResultMessage
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
 
 def create_assistant_message(

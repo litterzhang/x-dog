@@ -1,7 +1,7 @@
 import json
 
-from ai.proxy import stream_to_sse
-from ai.types import (
+from xdog.ai.proxy import stream_to_sse
+from xdog.ai.types import (
     AssistantMessage,
     DoneEvent,
     StartEvent,

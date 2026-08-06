@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, List
 
 import pytest
-from agent import (
+from xdog.agent import (
     AgentContext,
     AgentEndEvent,
     AgentEvent,
@@ -12,8 +12,8 @@ from agent import (
     AgentMessage,
     AgentStartEvent,
 )
-from agent.agent_loop import run_agent_loop, run_agent_loop_continue
-from ai.types import (
+from xdog.agent.agent_loop import run_agent_loop, run_agent_loop_continue
+from xdog.ai.types import (
     AssistantMessage,
     CostBreakdown,
     DoneEvent,
@@ -24,7 +24,7 @@ from ai.types import (
     Usage,
     UserMessage,
 )
-from ai.utils.event_stream import EventStream as AiEventStream
+from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
 
 def create_assistant_message(content, stop_reason="stop"):

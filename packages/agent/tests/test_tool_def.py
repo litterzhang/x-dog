@@ -2,7 +2,7 @@
 
 
 import pytest
-from agent.tool_def import Param, ToolDef, action
+from xdog.agent.tool_def import Param, ToolDef, action
 
 # ---------------------------------------------------------------------------
 # Type annotation inference

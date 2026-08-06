@@ -2,11 +2,11 @@
 
 
 import pytest
-from agent.tools import (
+from xdog.agent.tools import (
     create_bash_tool,
     create_filesystem_tool,
 )
-from ai.types import TextContent
+from xdog.ai.types import TextContent
 
 
 def _text(result) -> str:

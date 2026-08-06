@@ -1,5 +1,5 @@
-from tui.keybindings import KeybindingManager, KeybindingScope
-from tui.keys import KeyEvent
+from xdog.tui.keybindings import KeybindingManager, KeybindingScope
+from xdog.tui.keys import KeyEvent
 
 
 def test_keybinding_scope():

@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from agent.core import AgentTool, AgentToolResult
-from ai.types import TextContent
+from xdog.agent.core import AgentTool, AgentToolResult
+from xdog.ai.types import TextContent
 
 _PARAMS = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
 

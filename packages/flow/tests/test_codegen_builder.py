@@ -12,14 +12,14 @@ from __future__ import annotations
 import json
 import pathlib
 
-from flow.codegen_tools import (
+from xdog.flow.codegen_tools import (
     autofix_module,
     next_task,
     registry_with_filesystem,
     run_checks,
     verify_generated_module,
 )
-from flow.runtime import RuntimeContext
+from xdog.flow.runtime import RuntimeContext
 
 
 def _ctx() -> RuntimeContext:

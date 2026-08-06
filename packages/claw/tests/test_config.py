@@ -1,7 +1,7 @@
 """Tests for claw YAML configuration loading."""
 
 import pytest
-from claw.config import ClawConfig, GroupDef, load_config, save_config
+from xdog.claw.config import ClawConfig, GroupDef, load_config, save_config
 
 
 def test_default_config():

@@ -7,9 +7,9 @@ import sys
 import textwrap
 from pathlib import Path
 
-from flow.bundle import build_bundle
-from flow.loader import parse_workflow
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.bundle import build_bundle
+from xdog.flow.loader import parse_workflow
+from xdog.flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 IN = "$in"
 OUT = "$output"
@@ -54,17 +54,17 @@ def test_bundle_layout(tmp_path: Path) -> None:
     for name in ("workflow.py", "__main__.py", "requirements.txt", "README.md"):
         assert (out / name).is_file(), f"missing {name}"
     # An SDK-agent bundle vendors ai/agent.
-    assert (out / "_vendor" / "ai" / "__init__.py").is_file()
-    assert (out / "_vendor" / "agent" / "__init__.py").is_file()
-    assert sum(1 for _ in (out / "_vendor" / "ai").rglob("*.py")) > 10
-    assert sum(1 for _ in (out / "_vendor" / "agent").rglob("*.py")) > 5
+    assert (out / "_vendor" / "xdog" / "ai" / "__init__.py").is_file()
+    assert (out / "_vendor" / "xdog" / "agent" / "__init__.py").is_file()
+    assert sum(1 for _ in (out / "_vendor" / "xdog" / "ai").rglob("*.py")) > 10
+    assert sum(1 for _ in (out / "_vendor" / "xdog" / "agent").rglob("*.py")) > 5
 
 
 def test_bundle_script_only_drops_ai_agent(tmp_path: Path) -> None:
     """A pure-script (or pure-CLI) bundle vendors no ai/agent and trims requirements."""
     out = build_bundle(_script_wf(), tmp_path / "b")
-    assert not (out / "_vendor" / "ai").exists()
-    assert not (out / "_vendor" / "agent").exists()
+    assert not (out / "_vendor" / "xdog" / "ai").exists()
+    assert not (out / "_vendor" / "xdog" / "agent").exists()
     reqs = (out / "requirements.txt").read_text(encoding="utf-8")
     assert "httpx" not in reqs and "pydantic" not in reqs
     assert "jsonpath-ng" in reqs
@@ -261,9 +261,9 @@ def test_vendored_licences_come_from_distribution_metadata() -> None:
     development and shipped licence-less bundles to everyone who installed from
     PyPI. Assert against the metadata path directly.
     """
-    from flow.bundle import _licence_files_for, _package_source_dir
+    from xdog.flow.bundle import _licence_files_for, _package_source_dir
 
-    found = _licence_files_for("ai", _package_source_dir("ai"))
+    found = _licence_files_for("xdog.ai", _package_source_dir("xdog.ai"))
     assert found, "no licence located for the 'ai' package"
     names = {path.name for path in found}
     assert "LICENSE" in names, names
@@ -273,6 +273,6 @@ def test_vendored_licences_come_from_distribution_metadata() -> None:
 
 def test_unknown_package_yields_no_licences_rather_than_raising() -> None:
     """A missing licence is not fatal — a bundle without one is still runnable."""
-    from flow.bundle import _licence_files_for
+    from xdog.flow.bundle import _licence_files_for
 
     assert _licence_files_for("no_such_package_xyz", Path("/nonexistent")) == []

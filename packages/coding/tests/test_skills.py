@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from coding.core.skills import SkillRegistry
+from xdog.coding.core.skills import SkillRegistry
 
 
 def test_skill_registry_load(tmp_path: Path):

@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from flow.builder import actions
-from flow.builder.model import BuilderModel, empty_model, model_from_workflow
-from flow.builder.serialize import workflow_to_dict
-from flow.loader import parse_workflow
-from flow.models import Condition, EdgeDef, Port
+from xdog.flow.builder import actions
+from xdog.flow.builder.model import BuilderModel, empty_model, model_from_workflow
+from xdog.flow.builder.serialize import workflow_to_dict
+from xdog.flow.loader import parse_workflow
+from xdog.flow.models import Condition, EdgeDef, Port
 
 
 def _add_mapped_edge(

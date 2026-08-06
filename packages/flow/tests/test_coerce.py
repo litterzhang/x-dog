@@ -8,7 +8,7 @@ projection used when a value must become text.
 from __future__ import annotations
 
 import pytest
-from flow.coerce import port_str, to_python, to_state
+from xdog.flow.coerce import port_str, to_python, to_state
 
 
 def test_string_roundtrip() -> None:

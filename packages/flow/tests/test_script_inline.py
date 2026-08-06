@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pathlib
 
-from flow.executor import execute
-from flow.loader import load_workflow, parse_workflow
-from flow.models import NodeDef, WorkflowDef
+from xdog.flow.executor import execute
+from xdog.flow.loader import load_workflow, parse_workflow
+from xdog.flow.models import NodeDef, WorkflowDef
 
 
 def _run(wf: WorkflowDef, base_dir: pathlib.Path | None = None) -> dict[str, object]:

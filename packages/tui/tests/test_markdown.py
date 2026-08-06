@@ -1,4 +1,4 @@
-from tui.components.markdown import Markdown
+from xdog.tui.components.markdown import Markdown
 
 
 def test_markdown_caching():

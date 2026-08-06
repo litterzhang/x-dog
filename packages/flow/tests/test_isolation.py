@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from flow.codegen import generate
-from flow.errors import WorkflowValidationError
-from flow.executor import execute
-from flow.loader import parse_workflow
-from flow.models import EdgeDef, NodeDef, Port, WorkflowDef
+from xdog.flow.codegen import generate
+from xdog.flow.errors import WorkflowValidationError
+from xdog.flow.executor import execute
+from xdog.flow.loader import parse_workflow
+from xdog.flow.models import EdgeDef, NodeDef, Port, WorkflowDef
 
 # A no-op stream_fn_factory for script-only workflows (no agent nodes run).
 _NOOP_FACTORY: Any = lambda _model: None  # noqa: E731

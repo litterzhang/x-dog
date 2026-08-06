@@ -1,4 +1,4 @@
-from coding.core.prompt_templates import (
+from xdog.coding.core.prompt_templates import (
     COMPACTION_SUMMARY_TEMPLATE,
     CUSTOM_INSTRUCTIONS_SECTION,
     ENVIRONMENT_SECTION,
