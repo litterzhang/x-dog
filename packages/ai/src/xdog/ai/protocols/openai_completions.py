@@ -476,16 +476,16 @@ def stream(
         except Exception as exc:
             output.stop_reason = "error"
             output.error_message = str(exc)
-            error_msg = output.snapshot()
+            error_snapshot = output.snapshot()
 
             yield ErrorEvent(
                 error=str(exc),
                 stop_reason=output.stop_reason,
-                message=error_msg,
+                message=error_snapshot,
             )
 
             if not result_future.done():
-                result_future.set_result(error_msg)
+                result_future.set_result(error_snapshot)
 
     return EventStream.from_async_generator(_generate(), result_future)
 

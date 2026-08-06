@@ -84,7 +84,7 @@ class FilesystemTool(ToolDef):
             }),
             replace_all=Param("boolean", description="Replace all occurrences"))
     async def edit(self, ctx, path: str, old_string: str = "", new_string: str = "",
-                   edits: list = None, replace_all: bool = False):
+                   edits: list[Any] | None = None, replace_all: bool = False) -> str:
         error = validate_path(path)
         if error:
             return error

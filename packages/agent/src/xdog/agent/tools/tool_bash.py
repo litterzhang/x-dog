@@ -18,6 +18,16 @@ from xdog.agent.tools._utils import (
 from xdog.ai.types import TextContent
 
 
+async def _noop() -> None:
+    """Stand-in when a stream is absent.
+
+    `create_subprocess_exec` types stdout/stderr as optional, and they
+    really are None when the pipe was not requested — reading one
+    unconditionally would raise rather than simply produce no output.
+    """
+    return None
+
+
 def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
     """Create a tool that executes bash commands with stateful CWD tracking.
 
@@ -82,8 +92,8 @@ def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(
-                        _read_stream(proc.stdout, stdout_lines),
-                        _read_stream(proc.stderr, stderr_lines),
+                        _read_stream(proc.stdout, stdout_lines) if proc.stdout else _noop(),
+                        _read_stream(proc.stderr, stderr_lines) if proc.stderr else _noop(),
                     ),
                     timeout=timeout_s,
                 )

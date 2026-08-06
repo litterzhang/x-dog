@@ -122,7 +122,9 @@ class Runtime(BaseProvider):
     ) -> EventStream[AssistantMessage]:
         """Stream a response. Model can be 'provider/model' or short name if one provider active."""
         p, short = self._route(model)
-        return p.stream(short, context, options)
+        # Providers declare `Context`, not `Context | None`: passing None
+        # through reached them and failed on attribute access deeper in.
+        return p.stream(short, context or Context(), options)
 
     async def complete(
         self,
@@ -132,7 +134,7 @@ class Runtime(BaseProvider):
     ) -> AssistantMessage:
         """Complete a response. Same routing as stream."""
         p, short = self._route(model)
-        return await p.complete(short, context, options)
+        return await p.complete(short, context or Context(), options)
 
     # -- Embedding / Web search -----------------------------------------------
 
