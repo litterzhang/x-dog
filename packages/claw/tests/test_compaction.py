@@ -19,13 +19,25 @@ def test_find_cut_point():
     assert find_cut_point([{"content": "short"}], target_tokens=10_000) == 0
 
 def test_extract_file_ops():
+    # A transcript entry is now the agent's lossless dict: content is a list of
+    # typed parts, and a tool call is one of them rather than a sibling key.
     turns = [
         {
             "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {"name": "filesystem", "arguments": {"action": "read", "path": "/a.py"}},
-                {"name": "filesystem", "arguments": {"action": "write", "path": "/b.py"}},
+            "content": [
+                {"type": "text", "text": ""},
+                {
+                    "type": "toolCall",
+                    "id": "t1",
+                    "name": "filesystem",
+                    "arguments": {"action": "read", "path": "/a.py"},
+                },
+                {
+                    "type": "toolCall",
+                    "id": "t2",
+                    "name": "filesystem",
+                    "arguments": {"action": "write", "path": "/b.py"},
+                },
             ],
         },
     ]

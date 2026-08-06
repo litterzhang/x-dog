@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from xdog.claw.core.persistence.transcript_convert import TOOL_RESULT_ROLE, entry_tool_calls
+
 _PREVIOUS_SUMMARY_TAG = "previous-summary"
 
 _PREVIOUS_SUMMARY_RE = re.compile(
@@ -75,7 +77,7 @@ def extract_file_ops(turns: list[dict[str, Any]]) -> str:
     for turn in turns:
         if turn.get("role") != "assistant":
             continue
-        for tc in turn.get("tool_calls", []):
+        for tc in entry_tool_calls(turn):
             name = tc.get("name", "")
             args = tc.get("arguments", {})
             if isinstance(args, str):
@@ -121,11 +123,11 @@ def compact_transcript(
     # Boundary fix: walk forward to a valid start
     while cut < len(turns):
         role = turns[cut].get("role", "")
-        if role == "tool":
+        if role == TOOL_RESULT_ROLE:
             cut += 1
-        elif role == "assistant" and turns[cut].get("tool_calls"):
+        elif role == "assistant" and entry_tool_calls(turns[cut]):
             cut += 1
-            while cut < len(turns) and turns[cut].get("role") == "tool":
+            while cut < len(turns) and turns[cut].get("role") == TOOL_RESULT_ROLE:
                 cut += 1
         else:
             break

@@ -1,7 +1,18 @@
-"""Transcript ↔ Message conversion helpers.
+"""Transcript ↔ Message conversion, plus usage estimation.
 
-Pure functions for converting between JSONL transcript dicts and
-``agent.AgentMessage`` types. No class state, no I/O.
+The conversion is `xdog.agent.messages`. claw used to have its own, which
+flattened message content to a string — dropping every image, every thinking
+block including its signature, and all but the first part of a tool result. A
+restored session was quietly a different conversation from the saved one, and
+for extended reasoning the lost signature broke the chain outright.
+
+So a transcript entry is now the agent's own lossless dict with claw's per-entry
+metadata alongside it: `timestamp` on every entry and `usage` on assistant turns.
+The parser tolerates the extra keys, so the two sit together without a wrapper.
+
+Reading an entry's text or its tool calls means looking inside `content`, which
+is a list of typed parts rather than a string — `entry_text` and
+`entry_tool_calls` do that, and are the only things that should.
 """
 from __future__ import annotations
 
@@ -9,120 +20,17 @@ import time
 from typing import Any
 
 from xdog.agent import AgentMessage
+from xdog.agent.messages import dicts_to_messages, messages_to_dicts
 from xdog.ai.types import (
     AssistantMessage,
     TextContent,
-    ToolCall,
     ToolResultMessage,
     UserMessage,
 )
 
-
-def transcript_to_messages(transcript: list[dict[str, Any]]) -> list[AgentMessage]:
-    """Convert session transcript dicts to Message types.
-
-    Validates that every ToolResultMessage has a matching ToolCall in the
-    preceding AssistantMessage. Orphaned tool results are silently dropped.
-    """
-    messages: list[AgentMessage] = []
-    for turn in transcript:
-        role = turn.get("role", "")
-        content = turn.get("content", "")
-
-        if role == "user":
-            messages.append(UserMessage(content=content))
-        elif role == "assistant":
-            parts: list[Any] = []
-            if content:
-                parts.append(TextContent(text=content))
-            for tc in turn.get("tool_calls", []):
-                parts.append(ToolCall(
-                    id=tc.get("id", ""),
-                    name=tc.get("name", ""),
-                    arguments=tc.get("arguments", {}),
-                ))
-            if parts:
-                messages.append(AssistantMessage(content=tuple(parts)))
-        elif role == "tool":
-            tool_call_id = turn.get("tool_call_id", "")
-            if _has_matching_tool_call(messages, tool_call_id):
-                messages.append(ToolResultMessage(
-                    tool_call_id=tool_call_id,
-                    tool_name=turn.get("name", ""),
-                    content=(TextContent(text=content),),
-                ))
-        elif role == "system":
-            if content:
-                messages.append(UserMessage(content=content))
-    return messages
-
-
-def _has_matching_tool_call(messages: list[AgentMessage], tool_call_id: str) -> bool:
-    if not tool_call_id:
-        return False
-    for msg in reversed(messages):
-        if isinstance(msg, AssistantMessage):
-            for part in msg.content:
-                if isinstance(part, ToolCall) and part.id == tool_call_id:
-                    return True
-            return False
-    return False
-
-
-def messages_to_transcript(messages: tuple[AgentMessage, ...] | list[AgentMessage]) -> list[dict[str, Any]]:
-    """Convert Message types to transcript dicts for JSONL persistence."""
-    transcript: list[dict[str, Any]] = []
-    for msg in messages:
-        if isinstance(msg, UserMessage):
-            if isinstance(msg.content, str):
-                content_str = msg.content
-            else:
-                content_str = " ".join(
-                    p.text for p in msg.content if isinstance(p, TextContent)
-                )
-            transcript.append({"role": "user", "content": content_str, "timestamp": time.time()})
-        elif isinstance(msg, AssistantMessage):
-            text_parts = []
-            tool_calls = []
-            for part in msg.content:
-                if isinstance(part, TextContent):
-                    text_parts.append(part.text)
-                elif isinstance(part, ToolCall):
-                    tool_calls.append({
-                        "id": part.id,
-                        "name": part.name,
-                        "arguments": dict(part.arguments) if hasattr(part.arguments, 'items') else part.arguments,
-                    })
-            entry: dict[str, Any] = {
-                "role": "assistant",
-                "content": "\n".join(text_parts),
-                "timestamp": time.time(),
-            }
-            if tool_calls:
-                entry["tool_calls"] = tool_calls
-            if msg.usage and msg.usage.total_tokens > 0:
-                entry["usage"] = {
-                    "input": msg.usage.input,
-                    "output": msg.usage.output,
-                    "cache_read": msg.usage.cache_read,
-                    "cache_write": msg.usage.cache_write,
-                }
-            transcript.append(entry)
-        elif isinstance(msg, ToolResultMessage):
-            text = ""
-            if msg.content:
-                for result_part in msg.content:
-                    if isinstance(result_part, TextContent):
-                        text = result_part.text
-                        break
-            transcript.append({
-                "role": "tool",
-                "tool_call_id": msg.tool_call_id,
-                "name": msg.tool_name,
-                "content": text,
-                "timestamp": time.time(),
-            })
-    return transcript
+#: The role a tool result carries in the lossless format. claw's old format
+#: said "tool"; anything still comparing against that silently never matches.
+TOOL_RESULT_ROLE = "toolResult"
 
 
 def extract_final_text(
@@ -176,3 +84,51 @@ def estimate_turn_usage(
     total["input"] = max(1, input_chars // 4) if input_chars else 0
 
     return total
+
+
+def messages_to_transcript(
+    messages: tuple[AgentMessage, ...] | list[AgentMessage],
+) -> list[dict[str, Any]]:
+    """Lossless message dicts, with claw's per-entry metadata alongside."""
+    entries = messages_to_dicts(list(messages))
+    for message, entry in zip(messages, entries, strict=True):
+        entry["timestamp"] = time.time()
+        usage = getattr(message, "usage", None)
+        if isinstance(message, AssistantMessage) and usage and usage.total_tokens > 0:
+            entry["usage"] = {
+                "input": usage.input,
+                "output": usage.output,
+                "cache_read": usage.cache_read,
+                "cache_write": usage.cache_write,
+            }
+    return entries
+
+
+def transcript_to_messages(transcript: list[dict[str, Any]]) -> list[AgentMessage]:
+    """Rebuild messages from a transcript. claw's own keys are ignored."""
+    return dicts_to_messages(list(transcript))
+
+
+def entry_text(entry: dict[str, Any]) -> str:
+    """The displayable text of an entry, joined across its text parts."""
+    content = entry.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        part.get("text", "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
+    )
+
+
+def entry_tool_calls(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The tool calls an assistant entry made."""
+    content = entry.get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        part for part in content
+        if isinstance(part, dict) and part.get("type") == "toolCall"
+    ]

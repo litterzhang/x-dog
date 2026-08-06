@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -47,6 +48,7 @@ from xdog.agent.events import (
     ToolExecutionStartEvent,
     TurnEndEvent,
 )
+from xdog.agent.messages import dicts_to_messages, messages_to_dicts
 from xdog.agent.types import (
     AfterToolCallFn,
     AgentLoopConfig,
@@ -265,6 +267,65 @@ class Agent:
     def clear_messages(self) -> None:
         """Clear the message history."""
         self._update_state(messages=())
+
+    # -- Session dump / restore ----------------------------------------------
+
+    def dump(self) -> dict[str, Any]:
+        """This agent's resumable context, as plain JSON — its session.
+
+        An `Agent` instance *is* a session, so this is a projection of the state
+        it already owns rather than a second copy kept in step with it. What
+        comes back is what `restore` needs and nothing more: the history, what
+        the agent was told, which model, and the value half of its options.
+
+        Two things are deliberately absent. `StreamOptions.cancel` is an
+        `asyncio.Event` — a live handle, not a value. Tools are callables handed
+        in at construction; a caller that restores a session supplies its own,
+        and flow re-resolves them per node regardless.
+        """
+        prompt = self._state.system_prompt
+        options = self._options
+        return {
+            "messages": messages_to_dicts(list(self._state.messages)),
+            "system_prompt": (
+                prompt
+                if isinstance(prompt, str) or prompt is None
+                else [{"text": b.text, "cache": b.cache} for b in prompt]
+            ),
+            "model": self._state.model,
+            "thinking": options.thinking,
+            "temperature": options.temperature,
+            "max_tokens": options.max_tokens,
+        }
+
+    def restore(self, session: Mapping[str, Any]) -> None:
+        """Adopt a dumped session.
+
+        Absent keys leave the corresponding state untouched, so a partial dump
+        is a partial restore rather than a silent reset to defaults.
+        """
+        if "messages" in session:
+            self.replace_messages(dicts_to_messages(list(session["messages"] or [])))
+
+        if "system_prompt" in session:
+            raw_prompt = session["system_prompt"]
+            self.set_system_prompt(
+                tuple(SystemPromptBlock(text=b["text"], cache=b.get("cache", False)) for b in raw_prompt)
+                if isinstance(raw_prompt, list)
+                else raw_prompt
+            )
+
+        if session.get("model"):
+            self.set_model(str(session["model"]))
+
+        option_keys = ("thinking", "temperature", "max_tokens")
+        if any(key in session for key in option_keys):
+            self.set_options(
+                replace(
+                    self._options,
+                    **{key: session[key] for key in option_keys if key in session},
+                )
+            )
 
     def reset(self) -> None:
         """Reset the agent to a clean state (messages, error, streaming)."""

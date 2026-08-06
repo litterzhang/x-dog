@@ -18,6 +18,7 @@ from xdog.ai.types import SystemPromptBlock
 from xdog.claw.core.compaction.flush_runner import FlushRunner
 from xdog.claw.core.compaction.summarizer import Summarizer
 from xdog.claw.core.memory.manager import MemoryManager
+from xdog.claw.core.persistence.transcript_convert import TOOL_RESULT_ROLE, entry_text
 from xdog.claw.core.persistence.transcript_store import TranscriptStore
 from xdog.claw.core.planning.goal_manager import GoalManager
 from xdog.claw.core.prompt import build_system_prompt, init_workspace, workspace_path
@@ -296,9 +297,9 @@ class GroupRuntime:
             info["turn_count"] = meta.turn_count
             transcript = self.transcript_store.load_transcript(meta.session_id)
             info["history"] = [
-                {"role": t["role"], "content": t.get("content", ""), "channel": t.get("channel", "")}
+                {"role": t["role"], "content": entry_text(t), "channel": t.get("channel", "")}
                 for t in transcript
-                if t.get("role") in ("user", "assistant") and t.get("content")
+                if t.get("role") in ("user", "assistant") and entry_text(t)
             ]
             info["usage"] = _sum_transcript_usage(transcript)
         if self.model:
@@ -328,8 +329,13 @@ def _sum_transcript_usage(transcript: list[dict[str, Any]]) -> dict[str, int]:
             total["cache_read"] += usage.get("cache_read", 0)
             total["cache_write"] += usage.get("cache_write", 0)
     if not has_any:
-        input_chars = sum(len(e.get("content", "")) for e in transcript if e.get("role") in ("user", "tool"))
-        output_chars = sum(len(e.get("content", "")) for e in transcript if e.get("role") == "assistant")
+        input_chars = sum(
+            len(entry_text(e)) for e in transcript
+            if e.get("role") in ("user", TOOL_RESULT_ROLE)
+        )
+        output_chars = sum(
+            len(entry_text(e)) for e in transcript if e.get("role") == "assistant"
+        )
         total["input"] = max(1, input_chars // 4) if input_chars else 0
         total["output"] = max(1, output_chars // 4) if output_chars else 0
     return total
