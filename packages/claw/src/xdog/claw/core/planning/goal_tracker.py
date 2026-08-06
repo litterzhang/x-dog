@@ -13,6 +13,7 @@ import time
 from dataclasses import asdict, replace
 from dataclasses import fields as dc_fields
 from pathlib import Path
+from typing import Any
 
 from xdog.claw.core.types import (
     Goal,
@@ -34,7 +35,7 @@ def _short_hex_id(prefix: str) -> str:
     return f"{prefix}-{os.urandom(2).hex()}"
 
 
-def _load_verification(data: dict | None) -> Verification:
+def _load_verification(data: dict[str, Any] | None) -> Verification:
     """Deserialize a Verification from JSON dict. Returns default if missing."""
     if not data:
         return Verification()
@@ -45,7 +46,7 @@ def _load_verification(data: dict | None) -> Verification:
     )
 
 
-def _load_verification_run(data: dict | None) -> VerificationRun | None:
+def _load_verification_run(data: dict[str, Any] | None) -> VerificationRun | None:
     """Deserialize a VerificationRun from JSON dict. Returns None if missing."""
     if not data:
         return None
@@ -56,7 +57,7 @@ def _load_verification_run(data: dict | None) -> VerificationRun | None:
     )
 
 
-def _load_goal_task(data: dict) -> GoalTask:
+def _load_goal_task(data: dict[str, Any]) -> GoalTask:
     """Deserialize a GoalTask from JSON dict with verification fields."""
     v_data = data.pop("verification", None)
     vr_data = data.pop("last_verification_run", None)
@@ -353,7 +354,7 @@ class GoalTracker:
 
     def _save(self) -> None:
         self._goals_file.parent.mkdir(parents=True, exist_ok=True)
-        goals_data: dict = {}
+        goals_data: dict[str, Any] = {}
         for gid, goal in self._goals.items():
             d = asdict(goal)
             goals_data[gid] = d

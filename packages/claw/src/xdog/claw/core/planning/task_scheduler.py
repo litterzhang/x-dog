@@ -74,7 +74,7 @@ class TaskScheduler:
                 base_dt = datetime.datetime.fromtimestamp(task.last_run, tz=datetime.timezone.utc)
                 cron = croniter(sched.cron, base_dt)
                 next_fire = cron.get_next(float)
-                return now >= next_fire
+                return bool(now >= next_fire)
             except ImportError:
                 # croniter not installed — fallback to simple 60s check
                 return (now - task.last_run) >= 60

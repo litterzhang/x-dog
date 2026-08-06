@@ -9,6 +9,7 @@ import base64
 import logging
 import os
 import struct
+from typing import Any
 
 import httpx
 from xdog.claw.channels.weixin.types import (
@@ -48,7 +49,7 @@ def build_headers(token: str) -> dict[str, str]:
     return headers
 
 
-def _build_base_info() -> dict:
+def _build_base_info() -> dict[str, Any]:
     return {"channel_version": CHANNEL_VERSION}
 
 
@@ -151,7 +152,7 @@ class WeixinApiClient:
         ilink_user_id: str,
         context_token: str = "",
         timeout_ms: int = DEFAULT_API_TIMEOUT_MS,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Fetch bot config for a user (includes typing_ticket)."""
         url = f"{_ensure_trailing_slash(self._base_url)}ilink/bot/getconfig"
         headers = build_headers(self._token)

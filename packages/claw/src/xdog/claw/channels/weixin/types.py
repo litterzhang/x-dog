@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Any
 
 
 class MessageType(IntEnum):
@@ -143,7 +144,7 @@ class BaseInfo:
     channel_version: str = ""
 
 
-def _parse_cdn_media(raw: dict) -> CDNMedia | None:
+def _parse_cdn_media(raw: dict[str, Any]) -> CDNMedia | None:
     if not raw:
         return None
     return CDNMedia(
@@ -153,13 +154,13 @@ def _parse_cdn_media(raw: dict) -> CDNMedia | None:
     )
 
 
-def _parse_text_item(raw: dict | None) -> TextItem | None:
+def _parse_text_item(raw: dict[str, Any] | None) -> TextItem | None:
     if not raw:
         return None
     return TextItem(text=raw.get("text", ""))
 
 
-def _parse_image_item(raw: dict | None) -> ImageItem | None:
+def _parse_image_item(raw: dict[str, Any] | None) -> ImageItem | None:
     if not raw:
         return None
     return ImageItem(
@@ -175,7 +176,7 @@ def _parse_image_item(raw: dict | None) -> ImageItem | None:
     )
 
 
-def _parse_voice_item(raw: dict | None) -> VoiceItem | None:
+def _parse_voice_item(raw: dict[str, Any] | None) -> VoiceItem | None:
     if not raw:
         return None
     return VoiceItem(
@@ -188,7 +189,7 @@ def _parse_voice_item(raw: dict | None) -> VoiceItem | None:
     )
 
 
-def _parse_file_item(raw: dict | None) -> FileItem | None:
+def _parse_file_item(raw: dict[str, Any] | None) -> FileItem | None:
     if not raw:
         return None
     return FileItem(
@@ -199,7 +200,7 @@ def _parse_file_item(raw: dict | None) -> FileItem | None:
     )
 
 
-def _parse_video_item(raw: dict | None) -> VideoItem | None:
+def _parse_video_item(raw: dict[str, Any] | None) -> VideoItem | None:
     if not raw:
         return None
     return VideoItem(
@@ -214,7 +215,7 @@ def _parse_video_item(raw: dict | None) -> VideoItem | None:
     )
 
 
-def _parse_ref_message(raw: dict | None) -> RefMessage | None:
+def _parse_ref_message(raw: dict[str, Any] | None) -> RefMessage | None:
     if not raw:
         return None
     mi = raw.get("message_item")
@@ -224,7 +225,7 @@ def _parse_ref_message(raw: dict | None) -> RefMessage | None:
     )
 
 
-def _parse_message_item(raw: dict) -> MessageItem:
+def _parse_message_item(raw: dict[str, Any]) -> MessageItem:
     return MessageItem(
         type=raw.get("type", 0),
         create_time_ms=raw.get("create_time_ms", 0),
@@ -240,7 +241,7 @@ def _parse_message_item(raw: dict) -> MessageItem:
     )
 
 
-def parse_weixin_message(raw: dict) -> WeixinMessage:
+def parse_weixin_message(raw: dict[str, Any]) -> WeixinMessage:
     """Parse a raw JSON dict into a WeixinMessage."""
     raw_items = raw.get("item_list") or []
     items = tuple(_parse_message_item(i) for i in raw_items)
@@ -262,7 +263,7 @@ def parse_weixin_message(raw: dict) -> WeixinMessage:
     )
 
 
-def parse_get_updates_resp(raw: dict) -> GetUpdatesResp:
+def parse_get_updates_resp(raw: dict[str, Any]) -> GetUpdatesResp:
     """Parse a raw JSON dict into a GetUpdatesResp."""
     raw_msgs = raw.get("msgs") or []
     msgs = tuple(parse_weixin_message(m) for m in raw_msgs)
@@ -276,7 +277,7 @@ def parse_get_updates_resp(raw: dict) -> GetUpdatesResp:
     )
 
 
-def send_message_req_to_dict(req: SendMessageReq) -> dict:
+def send_message_req_to_dict(req: SendMessageReq) -> dict[str, Any]:
     """Serialize a SendMessageReq to a JSON-ready dict."""
     if req.msg is None:
         return {"msg": None}
@@ -286,12 +287,12 @@ def send_message_req_to_dict(req: SendMessageReq) -> dict:
     if msg.item_list:
         item_list = []
         for item in msg.item_list:
-            d: dict = {"type": item.type}
+            d: dict[str, Any] = {"type": item.type}
             if item.text_item is not None:
                 d["text_item"] = {"text": item.text_item.text}
             item_list.append(d)
 
-    result: dict = {
+    result: dict[str, Any] = {
         "msg": {
             "from_user_id": msg.from_user_id,
             "to_user_id": msg.to_user_id,

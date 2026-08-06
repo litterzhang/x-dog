@@ -201,7 +201,7 @@ class Orchestrator:
             return None
         return runtime.get_new_session_id()
 
-    def pop_goal_notifications(self, group_id: str) -> list:
+    def pop_goal_notifications(self, group_id: str) -> list[Any]:
         """Pop pending goal notifications for a group."""
         runtime = self._runtimes.get(group_id)
         if not runtime:

@@ -11,6 +11,7 @@ import datetime
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 
 from xdog.claw.core.types import SessionMeta
 
@@ -22,9 +23,9 @@ class TranscriptStore:
         self._sessions_dir = Path(sessions_dir)
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
         self._index_file = self._sessions_dir / "sessions.json"
-        self._index: dict[str, dict] = self._load_index()
+        self._index: dict[str, dict[str, Any]] = self._load_index()
 
-    def _load_index(self) -> dict[str, dict]:
+    def _load_index(self) -> dict[str, dict[str, Any]]:
         if self._index_file.exists():
             try:
                 with open(self._index_file, "r", encoding="utf-8") as f:
@@ -84,7 +85,7 @@ class TranscriptStore:
         """Archive current session, start a new one."""
         return self.create_session(group_id)
 
-    def append_turn(self, session_id: str, turn: dict) -> None:
+    def append_turn(self, session_id: str, turn: dict[str, Any]) -> None:
         """Append a turn to the JSONL file."""
         transcript_file = self._sessions_dir / f"{session_id}.jsonl"
         with open(transcript_file, "a", encoding="utf-8") as f:

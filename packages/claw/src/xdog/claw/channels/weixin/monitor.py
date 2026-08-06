@@ -49,7 +49,7 @@ def _load_get_updates_buf(state_dir: Path, account_id: str) -> str:
     try:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("get_updates_buf", "")
+            return str(data.get("get_updates_buf", ""))
     except Exception:
         pass
     return ""

@@ -32,7 +32,7 @@ class BlockChunker:
                     # This might break syntax but is a fallback for huge blocks
                     # Better logic might involve line splitting
                     lines = part.splitlines(keepends=True)
-                    current_block = []
+                    current_block: list[str] = []
                     current_length = 0
 
                     for line in lines:
@@ -60,7 +60,7 @@ class BlockChunker:
                 # Regular text part: split by paragraph boundaries
                 paragraphs = re.split(r'(\n\n+)', part)
 
-                current_paragraph = []
+                current_paragraph: list[str] = []
                 for p in paragraphs:
                     if not p:
                         continue

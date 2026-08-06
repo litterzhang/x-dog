@@ -1,6 +1,8 @@
 """Todo tool — ephemeral progress checklist. Uses ToolDef framework."""
 from __future__ import annotations
 
+from typing import Any
+
 from xdog.agent.tool_def import Param, ToolDef, action
 
 _VALID_STATUSES = frozenset({"pending", "in_progress", "completed"})
@@ -20,7 +22,7 @@ class TodoTool(ToolDef):
                 },
                 "required": ["id", "content", "status"],
             }))
-    async def write(self, ctx, todos: list):
+    async def write(self, ctx: dict[str, Any], todos: list[Any]) -> str:
         if not isinstance(todos, list) or not todos:
             return "Error: todos must be a non-empty array."
         if len(todos) > 50:

@@ -417,7 +417,7 @@ _MAX_RESULT_DISPLAY = 200
 _NOISE_LINE_RE = re.compile(r'^[\s.Fsx\-=\[\]%\d/]+$')
 
 
-def _emit_tool_start(on_text_delta: Any, tool_name: str, args: dict) -> None:
+def _emit_tool_start(on_text_delta: Any, tool_name: str, args: dict[str, Any]) -> None:
     """Emit a tool call marker into the text stream."""
     arg_parts: list[str] = []
     for k, v in args.items():

@@ -12,6 +12,7 @@ import re
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from xdog.claw.channels.base import Channel
 from xdog.claw.channels.weixin.api import WeixinApiClient
@@ -101,7 +102,7 @@ def _load_user_id_map(state_dir: Path, account_id: str) -> dict[str, str]:
     path = _user_id_map_file(state_dir, account_id)
     try:
         if path.exists():
-            raw: dict = json.loads(path.read_text(encoding="utf-8"))
+            raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
             return {k: v for k, v in raw.items() if isinstance(v, str)}
     except Exception:
         pass
@@ -150,7 +151,7 @@ class _TypingTicketCache:
             if resp.get("ret", -1) == 0 and ticket:
                 self._cache[user_id] = (ticket, now)
                 logger.debug("Cached typing_ticket for user %s", user_id)
-                return ticket
+                return str(ticket)
         except Exception:
             logger.debug("Failed to fetch typing_ticket for %s", user_id)
 
@@ -172,7 +173,7 @@ class _TypingIndicator:
         self._api = api_client
         self._user_id = user_id
         self._ticket = ticket
-        self._keepalive_task: asyncio.Task | None = None
+        self._keepalive_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """Send typing=1 and begin keepalive loop."""
@@ -226,7 +227,7 @@ class WeixinChannel(Channel):
         self._base_url = base_url
         self._token = token
         self._cancel_event = asyncio.Event()
-        self._monitor_task: asyncio.Task | None = None
+        self._monitor_task: asyncio.Task[Any] | None = None
         self._api_client = WeixinApiClient(base_url, token)
         self._typing_tickets = _TypingTicketCache(self._api_client)
         # Reverse map: group_id → real weixin user_id (persisted to disk)

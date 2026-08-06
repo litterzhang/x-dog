@@ -9,6 +9,9 @@ calls the tracker/manager directly during planning.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 from xdog.agent.tool_def import Param, ToolDef, action
 from xdog.claw.core.types import (
     GoalStatus,
@@ -23,7 +26,7 @@ _TASK_STATUS_MAP = {
 }
 
 
-def _tracker(ctx: dict):
+def _tracker(ctx: dict[str, Any]):
     """Get GoalTracker — prefer GoalManager's tracker, fall back to standalone."""
     manager = ctx.get("_goal_manager")
     if manager is not None:
@@ -51,7 +54,7 @@ def _format_goal(goal) -> str:
     return "\n".join(lines)
 
 
-def _parse_task_input(tasks: list) -> tuple[list[str], list[list[int]]]:
+def _parse_task_input(tasks: Sequence[Any]) -> tuple[list[str], list[list[int]]]:
     """Parse task input that can be strings or objects with depends_on.
 
     Returns (descriptions, dep_indices) where dep_indices[i] is a list
@@ -83,7 +86,7 @@ def _parse_task_input(tasks: list) -> tuple[list[str], list[list[int]]]:
 
 
 def _apply_task_dependencies(
-    ctx: dict, goal, dep_indices: list[list[int]],
+    ctx: dict[str, Any], goal, dep_indices: list[list[int]],
 ) -> None:
     """Resolve index-based depends_on to real task IDs and update tracker."""
     from dataclasses import replace as dc_replace
@@ -124,9 +127,9 @@ class GoalTool(ToolDef):
             verification_conditions=Param("array", items={"type": "string"},
                 description="Conditions for LLM evaluation. Use for subjective/complex checks. "
                 "Can be combined with verification_script — script runs first."))
-    async def create(self, ctx, title: str, goal_description: str, tasks: list,
+    async def create(self, ctx: dict[str, Any], title: str, goal_description: str, tasks: Sequence[Any],
                      verification_script: str = "",
-                     verification_conditions: list | None = None):
+                     verification_conditions: Sequence[Any] | None = None) -> str:
         if not verification_script and not verification_conditions:
             return "Error: at least one of verification_script or verification_conditions is required"
 
@@ -170,7 +173,7 @@ class GoalTool(ToolDef):
 
     @action("list", description="List goals with progress",
             status=Param("string", default="active", enum=["active", "completed", "abandoned", "all"]))
-    async def list(self, ctx, status: str = "active"):
+    async def list(self, ctx: dict[str, Any], status: str = "active") -> str:
         goals = _tracker(ctx).list_goals(status_filter=status)
         if not goals:
             return f"No {status} goals found."
@@ -187,8 +190,8 @@ class GoalTool(ToolDef):
                 description="complete (task done) or skip (task not needed)"),
             summary=Param("string", description="Required when task_status=complete"),
             notes=Param("string"))
-    async def update_task(self, ctx, goal_id: str, task_id: str, task_status: str,
-                          summary: str = "", notes: str = ""):
+    async def update_task(self, ctx: dict[str, Any], goal_id: str, task_id: str, task_status: str,
+                          summary: str = "", notes: str = "") -> str:
         resolved = _TASK_STATUS_MAP.get(task_status)
         if resolved is None:
             return f"Error: task_status must be one of: {', '.join(_TASK_STATUS_MAP)}"
@@ -220,8 +223,8 @@ class GoalTool(ToolDef):
             task_description=Param("string", required=True, description="Task description"),
             depends_on=Param("array", items={"type": "string"},
                 description="Task IDs that must complete before this task can start"))
-    async def add_task(self, ctx, goal_id: str, task_description: str,
-                       depends_on: list | None = None):
+    async def add_task(self, ctx: dict[str, Any], goal_id: str, task_description: str,
+                       depends_on: Sequence[Any] | None = None) -> str:
         goal = _tracker(ctx).add_task(
             goal_id, task_description,
             depends_on=tuple(depends_on or ()),
@@ -233,7 +236,7 @@ class GoalTool(ToolDef):
 
     @action("abandon_goal", description="Abandon a goal",
             goal_id=Param("string", required=True), summary=Param("string"))
-    async def abandon_goal(self, ctx, goal_id: str, summary: str = ""):
+    async def abandon_goal(self, ctx: dict[str, Any], goal_id: str, summary: str = "") -> str:
         goal = _tracker(ctx).update_goal_status(
             goal_id, GoalStatus.ABANDONED, summary=summary,
         )

@@ -1,6 +1,8 @@
 """Skill tool — create, patch, remove, list, load skills (procedural memory)."""
 from __future__ import annotations
 
+from typing import Any
+
 from xdog.agent.skills import render_skill_body
 from xdog.agent.tool_def import Param, ToolDef, action
 
@@ -17,8 +19,8 @@ class SkillTool(ToolDef):
             skill_description=Param("string", description="One-line description"),
             scope=Param("string", description="'shared' (all groups, default) or 'group' (this group only)",
                         enum=["shared", "group"]))
-    async def create(self, ctx, slug: str, skill_name: str, content: str,
-                     skill_description: str = "", scope: str = "shared"):
+    async def create(self, ctx: dict[str, Any], slug: str, skill_name: str, content: str,
+                     skill_description: str = "", scope: str = "shared") -> str:
         manager = ctx["_skill_manager"]
         skill = manager.save_skill(slug, content, name=skill_name,
                                    description=skill_description, scope=scope)
@@ -27,7 +29,7 @@ class SkillTool(ToolDef):
     @action("patch", description="Append content to an existing skill (token-efficient)",
             slug=Param("string", required=True, description="Skill slug"),
             patch=Param("string", required=True, description="Content to append"))
-    async def patch(self, ctx, slug: str, patch: str):
+    async def patch(self, ctx: dict[str, Any], slug: str, patch: str) -> str:
         manager = ctx["_skill_manager"]
         skill = manager.patch_skill(slug, patch)
         if skill is None:
@@ -36,14 +38,14 @@ class SkillTool(ToolDef):
 
     @action("remove", description="Delete a skill",
             slug=Param("string", required=True, description="Skill slug"))
-    async def remove(self, ctx, slug: str):
+    async def remove(self, ctx: dict[str, Any], slug: str) -> str:
         manager = ctx["_skill_manager"]
         if manager.remove_skill(slug):
             return f"Skill removed: {slug}"
         return f"Skill not found: {slug}"
 
     @action("list", description="List all available skills with descriptions")
-    async def list(self, ctx):
+    async def list(self, ctx: dict[str, Any]) -> str:
         manager = ctx["_skill_manager"]
         skills = manager.list_skills()
         if not skills:
@@ -56,7 +58,7 @@ class SkillTool(ToolDef):
 
     @action("load", description="Load the full content of a skill",
             slug=Param("string", required=True, description="Skill slug"))
-    async def load(self, ctx, slug: str):
+    async def load(self, ctx: dict[str, Any], slug: str) -> str:
         manager = ctx["_skill_manager"]
         skill = manager.load_skill(slug)
         if skill is None:

@@ -279,7 +279,7 @@ class GroupRuntime:
     def has_running_goals(self) -> bool:
         return self.goal_manager.has_active_goals()
 
-    def pop_goal_notifications(self) -> list:
+    def pop_goal_notifications(self) -> list[Any]:
         return self.goal_manager.pop_notifications()
 
     # -- Status queries --------------------------------------------------------

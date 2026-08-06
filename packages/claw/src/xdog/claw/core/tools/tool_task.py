@@ -5,11 +5,12 @@ import json
 import time
 import uuid
 from pathlib import Path as _Path
+from typing import Any
 
 from xdog.agent.tool_def import Param, ToolDef, action
 
 
-def _tasks_file(ctx: dict) -> _Path:
+def _tasks_file(ctx: dict[str, Any]) -> _Path:
     """Resolve tasks file path from ctx, falling back to config."""
     tasks_file = ctx.get("tasks_file")
     if tasks_file:
@@ -22,7 +23,7 @@ def _tasks_file(ctx: dict) -> _Path:
     return _Path(load_config().tasks_file)
 
 
-def _load_tasks(ctx: dict) -> list[dict]:
+def _load_tasks(ctx: dict[str, Any]) -> list[dict]:
     tf = _tasks_file(ctx)
     if not tf.exists():
         return []
@@ -33,7 +34,7 @@ def _load_tasks(ctx: dict) -> list[dict]:
         return []
 
 
-def _save_tasks(ctx: dict, tasks: list[dict]) -> None:
+def _save_tasks(ctx: dict[str, Any], tasks: list[dict]) -> None:
     tf = _tasks_file(ctx)
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps({"tasks": tasks}, indent=2) + "\n", encoding="utf-8")
@@ -47,7 +48,7 @@ class TaskTool(ToolDef):
             group_id=Param("string", description="Target group"),
             cron=Param("string", required=True, description="Cron expression"),
             prompt=Param("string", required=True, description="What to do"))
-    async def schedule(self, ctx, cron: str, prompt: str, group_id: str = ""):
+    async def schedule(self, ctx: dict[str, Any], cron: str, prompt: str, group_id: str = "") -> str:
         tasks = _load_tasks(ctx)
         task = {
             "id": f"task-{uuid.uuid4().hex[:8]}",
@@ -64,7 +65,7 @@ class TaskTool(ToolDef):
 
     @action("cancel", description="Cancel a task by ID",
             task_id=Param("string", required=True, description="Task ID to cancel"))
-    async def cancel(self, ctx, task_id: str):
+    async def cancel(self, ctx: dict[str, Any], task_id: str) -> str:
         tasks = _load_tasks(ctx)
         before = len(tasks)
         tasks = [t for t in tasks if t.get("id") != task_id]
@@ -74,7 +75,7 @@ class TaskTool(ToolDef):
         return f"Task {task_id} cancelled."
 
     @action("list", description="List all scheduled tasks")
-    async def list(self, ctx):
+    async def list(self, ctx: dict[str, Any]) -> str:
         tasks = _load_tasks(ctx)
         if not tasks:
             return "No scheduled tasks."

@@ -7,7 +7,6 @@ from xdog.claw.core.prompt.workspace import (  # noqa: F401
     workspace_path,
 )
 
-
 # Explicit re-export: without `__all__` a strict checker treats these as
 # private to this module and rejects every import of them elsewhere.
 __all__ = [

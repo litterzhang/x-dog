@@ -33,6 +33,7 @@ import queue
 import random
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 _RST = "\x1b[0m"
 
 
-def _fg(hex_color: str) -> "callable":
+def _fg(hex_color: str) -> Callable[[str], str]:
     """Return a function that applies foreground color.
 
     Uses \\x1b[39m (fg-only reset) instead of \\x1b[0m (full reset),
@@ -66,7 +67,7 @@ def _fg(hex_color: str) -> "callable":
     return apply
 
 
-def _bg(hex_color: str) -> "callable":
+def _bg(hex_color: str) -> Callable[[str], str]:
     """Return a function that applies background color.
 
     Uses \\x1b[49m (bg-only reset) instead of \\x1b[0m (full reset),
@@ -509,7 +510,7 @@ class _SelectList:
 
 
 class CustomEditor(Component):
-    """Input editor with borders, slash command select list, and Ctrl+C/D/Escape.
+    """Input editor with borders, slash command select list[Any], and Ctrl+C/D/Escape.
 
     Matches OpenClaw's CustomEditor which extends pi-tui's Editor:
     - onSubmit, onEscape, onCtrlC, onCtrlD callbacks
@@ -1233,7 +1234,7 @@ class ChatApp:
 
     # ── Response handling (matching OpenClaw's event handler patterns) ─
 
-    def _handle_response(self, msg: dict) -> None:
+    def _handle_response(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
 
         if msg_type == "pong":
@@ -1546,7 +1547,7 @@ class ChatApp:
     def _reconnect_delay(self, attempt: int) -> float:
         """Exponential backoff delay (matching OpenClaw's baseDelayMs * 2^(attempt-1))."""
         delay = self._RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
-        return min(delay, self._RECONNECT_MAX_DELAY)
+        return float(min(delay, self._RECONNECT_MAX_DELAY))
 
     def _set_reconnect_status(self, attempt: int) -> None:
         """Update UI status during reconnect attempts."""

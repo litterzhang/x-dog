@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from xdog.claw.config import ClawConfig, get_config_path, get_state_dir, load_config
@@ -40,7 +41,7 @@ def _update_config_weixin(config_file: Path, account_id: str) -> None:
 
     config_file.parent.mkdir(parents=True, exist_ok=True)
 
-    existing: dict = {}
+    existing: dict[str, Any] = {}
     if config_file.exists():
         try:
             raw = yaml.safe_load(config_file.read_text(encoding="utf-8"))
@@ -134,7 +135,7 @@ def onboard(config_path: str | None) -> None:
     click.echo("Step 2: Primary Model")
     click.echo("-" * 30)
 
-    models: list = []
+    models: list[Any] = []
     try:
         import xdog.ai as ai
         runtime = ai.load()

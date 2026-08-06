@@ -78,8 +78,8 @@ class GatewayServer:
         self._pid_path = Path(config.pid_file)
         self._server: asyncio.Server | None = None
         self._orchestrator: Orchestrator | None = None
-        self._scheduler_task: asyncio.Task | None = None
-        self._client_tasks: set[asyncio.Task] = set()
+        self._scheduler_task: asyncio.Task[Any] | None = None
+        self._client_tasks: set[asyncio.Task[Any]] = set()
         self._client_counter = 0
         self._shutdown_event = asyncio.Event()
 
