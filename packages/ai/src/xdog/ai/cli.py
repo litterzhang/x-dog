@@ -264,7 +264,7 @@ async def _cmd_chat(
             user_input = messages.pop(0)
 
         # Build context
-        history: list = []
+        history: list[Any] = []
         for role, content in conversation:
             if role == "user":
                 history.append(UserMessage(content=content))

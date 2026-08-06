@@ -122,7 +122,7 @@ class EventStream(Generic[T]):
     def __aiter__(self) -> AsyncIterator[AssistantMessageEvent]:
         return self._iterate()
 
-    async def _iterate(self) -> AsyncIterator[AssistantMessageEvent]:  # type: ignore[override]
+    async def _iterate(self) -> AsyncIterator[AssistantMessageEvent]:
         try:
             if self._iterator is not None:
                 async for event in self._iterator:
@@ -190,7 +190,7 @@ class EventStream(Generic[T]):
 
         async def _empty_iter() -> AsyncIterator[AssistantMessageEvent]:
             return
-            yield  # type: ignore[misc]  # make it an async generator
+            yield  # make it an async generator
 
         try:
             loop = asyncio.get_running_loop()

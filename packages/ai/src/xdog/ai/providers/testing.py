@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from xdog.ai.core import AuthResult, BaseProtocol, BaseProvider
 from xdog.ai.types import (
@@ -26,7 +26,7 @@ class _TestProtocol(BaseProtocol):
     :class:`StreamOptions` directly — no internal bridging needed.
     """
 
-    def __init__(self, stream_fn: Callable, protocol_id: str = _TEST_API) -> None:
+    def __init__(self, stream_fn: Callable[..., Any], protocol_id: str = _TEST_API) -> None:
         self._stream_fn = stream_fn
         self._protocol_id = protocol_id
 
@@ -51,7 +51,7 @@ class _TestProtocol(BaseProtocol):
 class TestProvider(BaseProvider):
     """Test provider for unit tests."""
 
-    def __init__(self, stream_fn: Callable) -> None:
+    def __init__(self, stream_fn: Callable[..., Any]) -> None:
         self._stream_fn = stream_fn
         self._models: dict[str, Model] = {}
         self._protocol = _TestProtocol(stream_fn)
@@ -123,7 +123,7 @@ _test_providers: dict[str, TestProvider] = {}
 
 
 def register_test_protocol(
-    stream_fn: Callable,
+    stream_fn: Callable[..., Any],
     *,
     protocol_id: str = _TEST_API,
 ) -> None:

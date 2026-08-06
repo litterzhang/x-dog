@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from xdog.ai.core import AuthResult, BaseVendor
 
@@ -115,7 +115,7 @@ class _TokenManager:
         from xdog.ai.paths import auth_file, data_dir
         f = auth_file()
         data_dir().mkdir(parents=True, exist_ok=True)
-        existing: dict = {}
+        existing: dict[str, Any] = {}
         if f.exists():
             try:
                 existing = json.loads(f.read_text(encoding="utf-8"))
@@ -150,7 +150,7 @@ async def _login_github(domain: str = "github.com") -> str:
     return token
 
 
-async def _exchange_copilot_token(github_token: str) -> dict:
+async def _exchange_copilot_token(github_token: str) -> dict[str, Any]:
     import httpx
 
     # A generous timeout: httpx defaults to 5s, which the GitHub Copilot token
