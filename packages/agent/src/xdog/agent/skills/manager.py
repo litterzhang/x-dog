@@ -183,6 +183,7 @@ def _load_skill_from_dir(skill_dir: Path, *, slug: str = "", packaged: bool = Fa
         updated=meta.get("updated", ""),
         path=skill_file,
         packaged=packaged,
+        scope="turn" if meta.get("scope", "").strip().lower() == "turn" else "session",
     )
 
 
@@ -379,4 +380,5 @@ def _without_body(skill: Skill) -> Skill:
         updated=skill.updated,
         path=skill.path,
         packaged=skill.packaged,
+        scope=skill.scope,
     )

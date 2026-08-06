@@ -415,3 +415,58 @@ def test_our_own_shipped_skill_conforms() -> None:
     assert 0 < len(meta.get("description", "")) <= 1024
     assert set(meta) <= set(SPEC_FIELDS) | {"created", "updated"}
     assert len(body.splitlines()) < 500, "the standard recommends under 500 lines"
+
+
+# -- Declared lifetime --
+
+
+def test_scope_defaults_to_session(tmp_path: Path) -> None:
+    """A skill that says nothing stays until it is unloaded.
+
+    The safe default, because the dangerous mistake is asymmetric: silently
+    dropping a guardrail costs correctness, keeping a finished procedure around
+    costs tokens.
+    """
+    shared = tmp_path / "shared"
+    _mk(shared, "s", "---\nname: s\ndescription: d\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None
+    assert skill.scope == "session"
+    assert skill.expires_after_turn is False
+
+
+def test_an_author_can_declare_a_turn_scoped_skill(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "once", "---\nname: once\ndescription: d\nmetadata:\n  scope: turn\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("once")
+    assert skill is not None
+    assert skill.expires_after_turn is True
+
+
+def test_scope_survives_the_listing_projection(tmp_path: Path) -> None:
+    """`list_skills` strips bodies; it must not strip the lifetime with them."""
+    shared = tmp_path / "shared"
+    _mk(shared, "once", "---\nname: once\ndescription: d\nmetadata:\n  scope: turn\n---\n\nbody")
+
+    listed = SkillManager(shared_dir=shared, packaged={}).list_skills()
+    assert [s.expires_after_turn for s in listed] == [True]
+
+
+@pytest.mark.parametrize("declared", ["TURN", " turn ", "Turn"])
+def test_scope_is_read_case_and_space_insensitively(tmp_path: Path, declared: str) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "s", f'---\nname: s\ndescription: d\nmetadata:\n  scope: "{declared}"\n---\n\nb')
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None and skill.expires_after_turn is True
+
+
+def test_an_unrecognised_scope_falls_back_to_session(tmp_path: Path) -> None:
+    """Anything we do not understand must not silently mean "expire"."""
+    shared = tmp_path / "shared"
+    _mk(shared, "s", "---\nname: s\ndescription: d\nmetadata:\n  scope: forever\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None and skill.expires_after_turn is False

@@ -129,7 +129,37 @@ class AgentSession:
         # Persist after turn
         self._persist()
 
+        self._expire_turn_scoped_skills()
+
         return last_assistant
+
+    def _expire_turn_scoped_skills(self) -> None:
+        """Retire skills their author declared as lasting one turn.
+
+        Declared, not inferred. A timer cannot tell a one-shot procedure from a
+        guardrail, and "unused for N turns" is unmeasurable anyway — there is no
+        way to observe whether the model followed an instruction. Only the
+        author knows which kind they wrote, so only the author gets to say.
+        """
+        if not self._active_skills:
+            return
+        try:
+            from xdog.coding.core.slash_commands import skill_manager
+
+            manager = skill_manager()
+            expired = {
+                slug
+                for slug in self._active_skills
+                if (skill := manager.load_skill(slug)) is not None and skill.expires_after_turn
+            }
+        except Exception:
+            logger.debug("could not expire turn-scoped skills", exc_info=True)
+            return
+
+        if expired:
+            self._active_skills = self._active_skills - expired
+            self._rebuild_system_prompt()
+            logger.debug("expired turn-scoped skills: %s", sorted(expired))
 
     def steer(self, message: str) -> None:
         """Queue a steering interrupt for the current turn."""
@@ -344,7 +374,11 @@ def _skills_context(active: frozenset[str] = frozenset()) -> str:
     if bodies:
         sections.append(
             "# Active skills\n\n"
-            "The user activated these; follow them. They stay until /unload.\n\n"
+            "The user activated these; follow them.\n\n"
+            "You cannot deactivate a skill — there is no tool for it, by design. "
+            "Skills are often constraints rather than conveniences, and the party "
+            "being constrained should not hold the release. If one looks finished "
+            "or irrelevant, say so and suggest `/unload <name>`; the user decides.\n\n"
             + "\n\n".join(bodies)
         )
     return "\n\n".join(sections)

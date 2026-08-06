@@ -284,3 +284,106 @@ def test_an_unreadable_skills_directory_does_not_break_the_system_prompt(
 
     monkeypatch.setattr(slash_commands, "skill_manager", _boom)
     assert _skills_context(frozenset({"flow"})) == ""
+
+
+# -- Declared lifetime, and who is allowed to end it --
+
+
+class FakeExpiringSession:
+    """Enough of AgentSession to exercise the expiry step in isolation."""
+
+    def __init__(self, active: set[str]) -> None:
+        self._active_skills = frozenset(active)
+        self.rebuilds = 0
+
+    def _rebuild_system_prompt(self) -> None:
+        self.rebuilds += 1
+
+
+def _expire(session: Any) -> None:
+    from xdog.coding.core.agent_session import AgentSession
+
+    AgentSession._expire_turn_scoped_skills(session)
+
+
+def _write_scoped(shared: Path, slug: str, scope: str) -> None:
+    d = shared / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {slug}\ndescription: d\nmetadata:\n  scope: {scope}\n---\n\nbody",
+        encoding="utf-8",
+    )
+
+
+def test_a_turn_scoped_skill_retires_itself(skills: Path) -> None:
+    _write_scoped(skills, "once", "turn")
+    session = FakeExpiringSession({"once"})
+
+    _expire(session)
+
+    assert session._active_skills == frozenset()
+    assert session.rebuilds == 1
+
+
+def test_a_session_scoped_skill_stays(skills: Path) -> None:
+    """The guardrail case: it must survive turns nobody used it in."""
+    _write_scoped(skills, "guard", "session")
+    session = FakeExpiringSession({"guard"})
+
+    _expire(session)
+
+    assert session._active_skills == {"guard"}
+    assert session.rebuilds == 0, "no prompt rebuild when nothing changed"
+
+
+def test_expiry_only_touches_the_skills_that_declared_it(skills: Path) -> None:
+    _write_scoped(skills, "once", "turn")
+    _write_scoped(skills, "guard", "session")
+    session = FakeExpiringSession({"once", "guard"})
+
+    _expire(session)
+
+    assert session._active_skills == {"guard"}
+
+
+def test_expiry_survives_a_skill_that_vanished_mid_session(skills: Path) -> None:
+    """The user may delete a skill file while it is active."""
+    session = FakeExpiringSession({"deleted-since"})
+
+    _expire(session)
+
+    assert session._active_skills == {"deleted-since"}, "unknown means keep, not drop"
+
+
+def test_expiry_survives_an_unreadable_skills_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom() -> Any:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(slash_commands, "skill_manager", _boom)
+    session = FakeExpiringSession({"flow"})
+
+    _expire(session)
+
+    assert session._active_skills == {"flow"}
+
+
+def test_the_model_is_told_it_may_suggest_but_not_unload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Layer three. A skill is often a constraint, and the constrained party
+    should not hold the release — so there is no tool, and the prompt says so."""
+    from xdog.coding.core.agent_session import _skills_context
+
+    shared = tmp_path / "skills"
+    shared.mkdir(parents=True)
+    _write(shared, "guard", "Always run the tests before deploying.")
+    manager = SkillManager(shared_dir=shared, packaged={})
+    monkeypatch.setattr(slash_commands, "skill_manager", lambda: manager)
+
+    prompt = _skills_context(frozenset({"guard"}))
+
+    assert "cannot deactivate" in prompt
+    assert "/unload" in prompt
+    assert "the user decides" in prompt.lower()
