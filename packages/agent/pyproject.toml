@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xdog-agent"
-version = "0.57.4"
+version = "0.57.5"
 description = "Agent runtime with tool calling and state management"
 requires-python = ">=3.12"
 classifiers = [
