@@ -470,3 +470,65 @@ def test_an_unrecognised_scope_falls_back_to_session(tmp_path: Path) -> None:
 
     skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
     assert skill is not None and skill.expires_after_turn is False
+
+
+# -- Bundled files have to be findable --
+
+
+def test_the_skill_directory_is_stated_so_relative_paths_resolve(tmp_path: Path) -> None:
+    from xdog.agent.skills import render_skill_body
+
+    shared = tmp_path / "shared"
+    _mk(shared, "s", "---\nname: s\ndescription: d\n---\n\nSee `examples/x.json`.")
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None
+
+    rendered = render_skill_body(skill)
+
+    assert str(shared / "s") in rendered
+    assert "See `examples/x.json`." in rendered
+
+
+@pytest.mark.parametrize("variable", ["${SKILL_DIR}", "${CLAUDE_SKILL_DIR}"])
+def test_skill_dir_variables_are_substituted(tmp_path: Path, variable: str) -> None:
+    """`CLAUDE_SKILL_DIR` too, so a skill written for that client works here."""
+    from xdog.agent.skills import render_skill_body
+
+    shared = tmp_path / "shared"
+    _mk(shared, "s", f"---\nname: s\ndescription: d\n---\n\nRun {variable}/scripts/go.sh")
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None
+
+    rendered = render_skill_body(skill)
+
+    assert variable not in rendered
+    assert f"{shared / 's'}/scripts/go.sh" in rendered
+
+
+def test_rendering_a_skill_with_no_path_changes_nothing() -> None:
+    from xdog.agent.skills import Skill, render_skill_body
+
+    detached = Skill(name="s", slug="s", content="body ${SKILL_DIR}")
+    assert render_skill_body(detached) == "body ${SKILL_DIR}"
+
+
+def test_every_file_our_shipped_skill_points_at_actually_exists() -> None:
+    """The bug this whole module exists for.
+
+    SKILL.md says "read the closest example and copy its shape" and ships
+    twelve of them. Every one of those paths was unresolvable, because nothing
+    told the model where they were — a failure that yields a confused agent
+    rather than an error, which is how it survived being written and packaged.
+    """
+    import re
+
+    from xdog.agent.skills.manager import _parse_frontmatter
+
+    skill_dir = _flow_skill_dir()
+    _, body = _parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+
+    referenced = set(re.findall(r"`((?:examples|scripts|references|assets)/[\w./-]+)`", body))
+    assert referenced, "expected the skill to point at its bundled files"
+
+    missing = sorted(p for p in referenced if not (skill_dir / p).exists())
+    assert not missing, f"SKILL.md references files that are not shipped: {missing}"

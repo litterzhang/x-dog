@@ -355,6 +355,7 @@ def _skills_context(active: frozenset[str] = frozenset()) -> str:
     read is not a reason to start without a system prompt.
     """
     try:
+        from xdog.agent.skills import render_skill_body
         from xdog.coding.core.slash_commands import skill_manager
 
         manager = skill_manager()
@@ -363,7 +364,7 @@ def _skills_context(active: frozenset[str] = frozenset()) -> str:
         for slug in sorted(active):
             skill = manager.load_skill(slug)
             if skill is not None:
-                bodies.append(f"## Active skill: {skill.name}\n\n{skill.content}")
+                bodies.append(f"## Active skill: {skill.name}\n\n{render_skill_body(skill)}")
     except Exception:
         logger.debug("could not build the skills section of the system prompt", exc_info=True)
         return ""

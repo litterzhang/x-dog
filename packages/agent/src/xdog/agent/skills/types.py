@@ -38,3 +38,8 @@ class Skill:
     @property
     def expires_after_turn(self) -> bool:
         return self.scope == "turn"
+
+    @property
+    def directory(self) -> Path | None:
+        """The skill's own directory — what its relative paths resolve against."""
+        return self.path.parent if self.path is not None else None
