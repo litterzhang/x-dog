@@ -226,7 +226,7 @@ async def _cmd_chat(
                 content_parts.extend(session.pending_images)
                 session.pending_images.clear()
                 stream = await agent.prompt(
-                    __import__("ai.types", fromlist=["UserMessage"]).UserMessage(
+                    __import__("xdog.ai.types", fromlist=["UserMessage"]).UserMessage(
                         content=tuple(content_parts)
                     )
                 )

@@ -94,7 +94,7 @@ def _parse_inputs(pairs: list[str]) -> dict[str, object]:
     return out
 
 
-_EVENT_LOG = logging.getLogger("flow.events")
+_EVENT_LOG = logging.getLogger("xdog.flow.events")
 
 
 def _log_event(event: FlowEvent) -> None:

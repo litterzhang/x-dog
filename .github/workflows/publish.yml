@@ -58,7 +58,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      - run: uv run pytest packages/flow/tests packages/site/tests -q
+      - run: uv run pytest -q
       - run: uv run ruff check packages
       - run: uv run mypy --strict -p xdog.flow
 

@@ -18,8 +18,32 @@ jobs:
           enable-cache: true
       - run: uv sync
 
+      # The cheapest possible check, and the one that was missing: every
+      # distribution we upload must at least import. `ruff` cannot catch a
+      # module path that does not resolve, and nothing else in CI touched
+      # claw or coding — so `xdog-claw` shipped to PyPI for several releases
+      # with `import claw.core.memory` left over from the namespace move,
+      # raising ModuleNotFoundError on the very first import.
+      - name: Every published package imports
+        run: |
+          uv run python - <<'PY'
+          import importlib, sys
+          mods = ["xdog.ai", "xdog.agent", "xdog.tui", "xdog.flow",
+                  "xdog.flow.cli", "xdog.claw.core", "xdog.coding.core.skills"]
+          bad = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+                  print(f"ok   {m}")
+              except Exception as exc:
+                  bad.append(f"{m}: {type(exc).__name__}: {exc}")
+                  print(f"FAIL {m}: {exc}")
+          if bad:
+              sys.exit("unimportable module(s): " + "; ".join(bad))
+          PY
+
       - name: Tests
-        run: uv run pytest packages/flow/tests packages/site/tests -q
+        run: uv run pytest -q
 
       - name: Lint
         run: uv run ruff check packages

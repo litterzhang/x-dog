@@ -1685,11 +1685,13 @@ wheels = [
 
 [[package]]
 name = "x-dog"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "." }
 dependencies = [
     { name = "xdog-agent" },
     { name = "xdog-ai" },
+    { name = "xdog-claw" },
+    { name = "xdog-coding" },
     { name = "xdog-flow" },
     { name = "xdog-site" },
 ]
@@ -1707,6 +1709,8 @@ dev = [
 requires-dist = [
     { name = "xdog-agent", editable = "packages/agent" },
     { name = "xdog-ai", editable = "packages/ai" },
+    { name = "xdog-claw", editable = "packages/claw" },
+    { name = "xdog-coding", editable = "packages/coding" },
     { name = "xdog-flow", editable = "packages/flow" },
     { name = "xdog-site", editable = "packages/site" },
 ]
@@ -1722,7 +1726,7 @@ dev = [
 
 [[package]]
 name = "xdog-agent"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/agent" }
 dependencies = [
     { name = "fastjsonschema" },
@@ -1737,7 +1741,7 @@ requires-dist = [
 
 [[package]]
 name = "xdog-ai"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/ai" }
 dependencies = [
     { name = "httpx" },
@@ -1763,7 +1767,7 @@ provides-extras = ["openai", "all"]
 
 [[package]]
 name = "xdog-claw"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/claw" }
 dependencies = [
     { name = "aiosqlite" },
@@ -1807,7 +1811,7 @@ provides-extras = ["search", "all"]
 
 [[package]]
 name = "xdog-coding"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/coding" }
 dependencies = [
     { name = "pyyaml" },
@@ -1826,7 +1830,7 @@ requires-dist = [
 
 [[package]]
 name = "xdog-flow"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/flow" }
 dependencies = [
     { name = "fastjsonschema" },
@@ -1868,7 +1872,7 @@ requires-dist = [
 
 [[package]]
 name = "xdog-tui"
-version = "0.57.3"
+version = "0.57.4"
 source = { editable = "packages/tui" }
 dependencies = [
     { name = "wcwidth" },
