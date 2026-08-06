@@ -34,12 +34,10 @@ _IMPORT_NAME = {
     "pillow": "PIL",
 }
 
-#: Imports that may go undeclared, with the reason.
-_ALLOWED = {
-    # Generated demonstration output that ships as data. Nothing imports it, and
-    # it needs pytest only if a reader chooses to run it.
-    ("flow", "pytest"),
-}
+#: Imports that may go undeclared, with the reason. Empty is the right state:
+#: the one entry this had was pytest inside `examples_gen`, an orphan that
+#: shipped in the wheel and that nothing imported — deleted rather than excused.
+_ALLOWED: set[tuple[str, str]] = set()
 
 
 def _declared(pyproject: dict) -> set[str]:
