@@ -24,10 +24,18 @@ _EXAMPLES = sorted(
 )
 
 
-@pytest.mark.parametrize("example", _EXAMPLES, ids=lambda p: p.name)
-def test_roundtrip_examples(example: pathlib.Path) -> None:
-    wf = load_workflow(example)
-    assert parse_workflow(workflow_to_dict(wf)) == wf
+def test_roundtrip_examples() -> None:
+    """Every shipped example survives dict round-tripping.
+
+    One test over the corpus rather than one per file: a broken example is
+    still named, because failures are collected and reported together.
+    """
+    broken = [
+        example.name
+        for example in _EXAMPLES
+        if parse_workflow(workflow_to_dict(load_workflow(example))) != load_workflow(example)
+    ]
+    assert not broken, f"examples that do not round-trip: {broken}"
 
 
 def _rich_workflow() -> WorkflowDef:

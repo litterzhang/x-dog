@@ -85,23 +85,24 @@ def _ruff_clean(src: str) -> tuple[bool, str]:
         tmp.unlink(missing_ok=True)
 
 
-def test_generate_linear_contains_node_functions() -> None:
+def test_generate_linear_is_correct_and_clean() -> None:
+    """Five assertions, one `generate()` call — they were five tests.
+
+    `_ruff_clean` compiles the source before linting it, so a separate
+    "it compiles" test was strictly subsumed by this one.
+    """
     src = generate(_make_linear_wf())
+
     assert "async def node_step1(provider" in src
     assert "async def node_step2(provider" in src
-
-
-def test_generate_linear_contains_main_guard() -> None:
-    src = generate(_make_linear_wf())
     assert '__name__ == "__main__"' in src or "__name__ == '__main__'" in src
+    # initial_state is emitted via repr() (proper escaping), so keys/values are
+    # single-quoted Python literals.
+    assert "'topic'" in src and "'testing'" in src
+    # The provider literal is the FLOW_PROVIDER default (override-aware).
+    assert 'ai.provider(os.environ.get("FLOW_PROVIDER") or "anthropic")' in src
 
-
-def test_generate_linear_compiles() -> None:
-    compile(generate(_make_linear_wf()), "<generated>", "exec")
-
-
-def test_generate_linear_ruff_clean() -> None:
-    ok, msg = _ruff_clean(generate(_make_linear_wf()))
+    ok, msg = _ruff_clean(src)
     assert ok, f"ruff failed:\n{msg}"
 
 
@@ -135,19 +136,6 @@ async def test_generated_interceptor_saves_once_per_frontier_batch() -> None:
     assert len(snapshots) == 2
     assert set(snapshots[0]["completed"]) == {"a"}  # type: ignore[arg-type]
     assert set(snapshots[1]["completed"]) == {"a", "b"}  # type: ignore[arg-type]
-
-
-def test_generate_linear_state_seed() -> None:
-    src = generate(_make_linear_wf())
-    # initial_state is emitted via repr() (proper escaping), so keys/values are
-    # single-quoted Python literals.
-    assert "'topic'" in src
-    assert "'testing'" in src
-
-
-def test_generate_linear_provider_name() -> None:
-    # The provider literal is the FLOW_PROVIDER default (override-aware).
-    assert 'ai.provider(os.environ.get("FLOW_PROVIDER") or "anthropic")' in generate(_make_linear_wf())
 
 
 def _make_parallel_wf() -> WorkflowDef:

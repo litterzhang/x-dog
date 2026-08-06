@@ -65,11 +65,19 @@ def _rich() -> WorkflowDef:
     )
 
 
-@pytest.mark.parametrize("example", _EXAMPLES, ids=lambda p: p.name)
-def test_roundtrip_examples_through_svg(example: pathlib.Path) -> None:
-    wf = load_workflow(example)
-    doc = workflow_to_svg_document(wf)
-    assert parse_workflow(read_workflow_from_svg(doc)) == wf
+def test_roundtrip_examples_through_svg() -> None:
+    """Every shipped example survives an SVG round trip.
+
+    Kept as a whole corpus rather than trimmed: five of these examples contain
+    `<`, `>` or `&`, so this pass really does exercise XML escaping that the
+    plain dict round-trip does not.
+    """
+    broken = []
+    for example in _EXAMPLES:
+        wf = load_workflow(example)
+        if parse_workflow(read_workflow_from_svg(workflow_to_svg_document(wf))) != wf:
+            broken.append(example.name)
+    assert not broken, f"examples that do not survive SVG: {broken}"
 
 
 def test_roundtrip_rich_case() -> None:
