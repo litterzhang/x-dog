@@ -73,6 +73,7 @@ class EmbeddingModel:
         """Batch-encode *texts* into float vectors."""
         self._load()
         if self._use_api:
+            assert self._embed_fn is not None  # _use_api implies it was set
             return [await self._embed_fn(t) for t in texts]
         embeddings = self._model.encode(texts, show_progress_bar=False)
         return [row.tolist() for row in embeddings]

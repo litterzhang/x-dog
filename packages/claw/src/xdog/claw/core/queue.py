@@ -1,7 +1,7 @@
 """Message queue with per-group concurrency and user-message priority."""
 import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable
 
 from xdog.claw.core.types import GroupInput, QueueMode
 
@@ -32,8 +32,8 @@ class MessageQueue:
         self,
         message: GroupInput,
         mode: QueueMode = QueueMode.COLLECT,
-        on_steer: Optional[Callable] = None,
-        on_follow_up: Optional[Callable] = None,
+        on_steer: Callable[..., Any] | None = None,
+        on_follow_up: Callable[..., Any] | None = None,
         *,
         max_queued: int = 0,
     ):
@@ -48,7 +48,7 @@ class MessageQueue:
             # default to collect
             self._append(message, max_queued)
 
-    def _append(self, message: GroupInput, max_queued: int = 0):
+    def _append(self, message: GroupInput, max_queued: int = 0) -> None:
         gid = message.group_id
         if gid not in self._queues:
             self._queues[gid] = []

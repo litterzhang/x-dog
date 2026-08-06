@@ -18,7 +18,7 @@ from xdog.ai.types import (
 )
 
 
-def transcript_to_messages(transcript: list[dict]) -> list[AgentMessage]:
+def transcript_to_messages(transcript: list[dict[str, Any]]) -> list[AgentMessage]:
     """Convert session transcript dicts to Message types.
 
     Validates that every ToolResultMessage has a matching ToolCall in the
@@ -69,9 +69,9 @@ def _has_matching_tool_call(messages: list[AgentMessage], tool_call_id: str) -> 
     return False
 
 
-def messages_to_transcript(messages: tuple[AgentMessage, ...] | list[AgentMessage]) -> list[dict]:
+def messages_to_transcript(messages: tuple[AgentMessage, ...] | list[AgentMessage]) -> list[dict[str, Any]]:
     """Convert Message types to transcript dicts for JSONL persistence."""
-    transcript: list[dict] = []
+    transcript: list[dict[str, Any]] = []
     for msg in messages:
         if isinstance(msg, UserMessage):
             if isinstance(msg.content, str):

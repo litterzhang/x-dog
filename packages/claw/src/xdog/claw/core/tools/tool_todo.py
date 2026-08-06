@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from xdog.agent.core import AgentTool
 from xdog.agent.tool_def import Param, ToolDef, action
 
 _VALID_STATUSES = frozenset({"pending", "in_progress", "completed"})
@@ -43,5 +44,5 @@ class TodoTool(ToolDef):
         return "\n".join(lines)
 
 
-def create_todo_tool():
+def create_todo_tool() -> AgentTool:
     return TodoTool().build()
