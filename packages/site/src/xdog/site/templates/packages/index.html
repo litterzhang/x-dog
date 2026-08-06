@@ -12,6 +12,7 @@
           <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
           &nbsp;|&nbsp;
           <span>{% if pkg.cli %}<code>{{ pkg.cli }}</code>{% else %}library{% endif %}</span>
+          &nbsp;|&nbsp;<a href="{{ pkg.pypi_url }}" title="on PyPI"><code>{{ pkg.dist }}</code></a>
         </header>
         <div class="card-content">
           <div class="inner">

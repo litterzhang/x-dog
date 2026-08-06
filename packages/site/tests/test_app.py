@@ -509,3 +509,26 @@ def test_sitemap_tracks_the_registries_it_is_built_from(client: FlaskClient) -> 
         assert f"<loc>https://xdog.942295.xyz/packages/{package.name}</loc>" in body
     for article in get_articles():
         assert f"/blog/{article.slug}</loc>" in body
+
+
+def test_home_shows_how_to_install_from_pypi(client: FlaskClient) -> None:
+    """The front page has to answer "how do I get this" without a detour."""
+    body = client.get("/").get_data(as_text=True)
+    assert "pip install xdog-flow" in body
+    assert "https://pypi.org/project/xdog-ai/" in body
+    # the namespace is surprising enough to be worth stating where people land
+    assert "import xdog.flow" in body
+
+
+def test_every_package_links_to_its_pypi_project(client: FlaskClient) -> None:
+    """A package page that does not say how to install it is a dead end.
+
+    The distribution name is derived (`xdog-<name>`), so this also catches a
+    package renamed on one side and not the other.
+    """
+    from xdog.site.content.packages import PACKAGES
+
+    for pkg in PACKAGES:
+        body = client.get(f"/packages/{pkg.name}").get_data(as_text=True)
+        assert f"https://pypi.org/project/xdog-{pkg.name}/" in body, pkg.name
+        assert f"xdog-{pkg.name}" in body, pkg.name

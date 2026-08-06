@@ -27,6 +27,15 @@ class Package:
     def readme_url(self) -> str:
         return f"{_GITHUB}/tree/main/packages/{self.name}"
 
+    @property
+    def dist(self) -> str:
+        """The name to `pip install` — derived, so it cannot drift from reality."""
+        return f"xdog-{self.name}"
+
+    @property
+    def pypi_url(self) -> str:
+        return f"https://pypi.org/project/xdog-{self.name}/"
+
 
 PACKAGES: tuple[Package, ...] = (
     Package(
@@ -47,7 +56,7 @@ PACKAGES: tuple[Package, ...] = (
             "Copilot auth via GitHub device code; model catalog sync with offline fallback",
             "Pure-Python message/type model — no vendor SDK leaks into your code",
         ),
-        install="uv run xdog-ai --help",
+        install="pip install xdog-ai",
     ),
     Package(
         name="agent",
@@ -66,7 +75,7 @@ PACKAGES: tuple[Package, ...] = (
             "Built-in tools: filesystem, bash, current_time, web_search, submit_result",
             "Context compaction keeps long sessions within the model window",
         ),
-        install="uv run xdog-agent --help",
+        install="pip install xdog-agent",
     ),
     Package(
         name="tui",
@@ -100,7 +109,7 @@ PACKAGES: tuple[Package, ...] = (
             "Composes the agent runtime with the tui rendering engine",
             "Filesystem and shell tools for real repository work",
         ),
-        install="uv run xdog-coding",
+        install="pip install xdog-coding",
     ),
     Package(
         name="claw",
@@ -117,7 +126,7 @@ PACKAGES: tuple[Package, ...] = (
             "Orchestration layer above the single-agent loop",
             "Configurable runtime for multi-agent patterns",
         ),
-        install="uv run xdog --help",
+        install="pip install xdog-claw",
     ),
     Package(
         name="flow",
@@ -138,7 +147,7 @@ PACKAGES: tuple[Package, ...] = (
             "Dynamic fan-out, subflows, checkpoints, human signals, and local scheduling",
             "Interactive TUI today; local Workflow JSON Web UI is the next product surface",
         ),
-        install="uv run xdog-flow --help",
+        install="pip install xdog-flow",
     ),
 )
 

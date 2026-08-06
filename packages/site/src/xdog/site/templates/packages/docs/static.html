@@ -11,6 +11,7 @@
 {% block content_nav %}
 {% if page == "overview" %}
 <a href="{{ pkg.readme_url }}" class="btn btn-ghost btn-primary btn-small">Source &amp; README &rarr;</a>
+<a href="{{ pkg.pypi_url }}" class="btn btn-ghost btn-default btn-small">PyPI: {{ pkg.dist }} &rarr;</a>
 <a href="{{ url_for('main.packages') }}" class="btn btn-ghost btn-default btn-small">&larr; All packages</a>
 {% else %}
 <a href="{{ url_for('main.package_detail', name=pkg.name) }}" class="btn btn-ghost btn-default btn-small">&larr; {{ pkg.name }} overview</a>

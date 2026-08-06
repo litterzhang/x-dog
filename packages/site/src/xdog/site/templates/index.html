@@ -13,6 +13,28 @@
   </p>
 </section>
 
+<section>
+  <h2>Install</h2>
+  <p>
+    Published on PyPI. Requires Python 3.12+ — nothing else: no server, no
+    database, no account.
+  </p>
+  <pre><code>pip install xdog-flow</code></pre>
+  <p>
+    That pulls in <a href="https://pypi.org/project/xdog-ai/"><code>xdog-ai</code></a>,
+    <a href="https://pypi.org/project/xdog-agent/"><code>xdog-agent</code></a> and
+    <a href="https://pypi.org/project/xdog-tui/"><code>xdog-tui</code></a>, and puts
+    <code>xdog-flow</code> and <code>xdog-ai</code> on your PATH.
+  </p>
+  <pre><code>xdog-ai login copilot
+xdog-flow validate my_workflow.json
+xdog-flow run my_workflow.json</code></pre>
+  <p>
+    Every package shares the <code>xdog</code> namespace
+    (<code>import xdog.flow</code>), so they install side by side.
+  </p>
+</section>
+
 {% for title, pkgs in layers %}
 <section>
   <h2>{{ title }}</h2>
@@ -22,6 +44,7 @@
         <header class="card-header">
           <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
           {% if pkg.cli %}&nbsp;|&nbsp;<span><code>{{ pkg.cli }}</code></span>{% endif %}
+          &nbsp;|&nbsp;<a href="{{ pkg.pypi_url }}" title="on PyPI"><code>{{ pkg.dist }}</code></a>
         </header>
         <div class="card-content">
           <div class="inner">
