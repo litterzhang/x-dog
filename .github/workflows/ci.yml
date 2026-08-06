@@ -28,8 +28,9 @@ jobs:
         run: |
           uv run python - <<'PY'
           import importlib, sys
-          mods = ["xdog.ai", "xdog.agent", "xdog.tui", "xdog.flow",
-                  "xdog.flow.cli", "xdog.claw.core", "xdog.coding.core.skills"]
+          mods = ["xdog.ai", "xdog.agent", "xdog.agent.skills", "xdog.tui",
+                  "xdog.flow", "xdog.flow.cli", "xdog.claw.core",
+                  "xdog.coding.core.slash_commands"]
           bad = []
           for m in mods:
               try:
