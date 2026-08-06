@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from xdog.agent import AgentConfig, AgentTool, StreamFn
 from xdog.agent.skills import SkillManager
+from xdog.ai.types import SystemPromptBlock
 from xdog.claw.core.compaction.flush_runner import FlushRunner
 from xdog.claw.core.compaction.summarizer import Summarizer
 from xdog.claw.core.memory.manager import MemoryManager
@@ -214,7 +215,9 @@ class GroupRuntime:
 
     # -- System prompt ---------------------------------------------------------
 
-    def build_system_prompt(self, goals_summary: str = "", bootstrap_content: str | None = None):
+    def build_system_prompt(
+        self, goals_summary: str = "", bootstrap_content: str | None = None
+    ) -> tuple[SystemPromptBlock, ...]:
         return build_system_prompt(
             self.workspace_dir,
             tools=self.tools,
@@ -230,7 +233,7 @@ class GroupRuntime:
 
     # -- Session lifecycle -----------------------------------------------------
 
-    def get_or_create_session(self):
+    def get_or_create_session(self) -> Any:
         from xdog.claw.core.runtime.session import AgentSession
 
         group_id = self.group.id
@@ -313,7 +316,7 @@ class GroupRuntime:
         self._session_last_active = 0.0
 
 
-def _sum_transcript_usage(transcript: list[dict]) -> dict[str, int]:
+def _sum_transcript_usage(transcript: list[dict[str, Any]]) -> dict[str, int]:
     total = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     has_any = False
     for entry in transcript:

@@ -61,12 +61,14 @@ jobs:
       - name: Lint
         run: uv run ruff check packages
 
-      # `flow`, `site`, `tui` and `coding` are strict-clean and stay that way.
-      # `claw`, `agent` and `ai` still carry type debt — checking them here
-      # would fail every build, so they are left out until each is cleaned
-      # rather than silently downgrading the standard for the ones that pass.
+      # Six of seven packages are strict-clean and stay that way. `agent` (36)
+      # and `ai` (35) still carry type debt — checking them here would fail
+      # every build, so they are left out until each is cleaned rather than
+      # silently downgrading the standard for the ones that pass.
       - name: Types
-        run: uv run mypy --strict -p xdog.flow -p xdog.site -p xdog.tui -p xdog.coding
+        run: >
+          uv run mypy --strict
+          -p xdog.flow -p xdog.site -p xdog.tui -p xdog.coding -p xdog.claw
 
       # The examples are executable artifacts, not decoration: this catches a
       # workflow whose companion suite stopped passing after a kernel change.

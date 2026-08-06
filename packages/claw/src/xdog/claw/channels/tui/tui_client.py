@@ -33,7 +33,8 @@ async def _send_request(
         return {"type": "error", "message": "Connection closed by gateway"}
 
     try:
-        return json.loads(response_line.decode("utf-8").strip())
+        parsed: dict[str, Any] = json.loads(response_line.decode("utf-8").strip())
+        return parsed
     except (json.JSONDecodeError, UnicodeDecodeError):
         return {"type": "error", "message": "Invalid response from gateway"}
 

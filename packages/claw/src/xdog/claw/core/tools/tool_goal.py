@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from xdog.agent.core import AgentTool
 from xdog.agent.tool_def import Param, ToolDef, action
 from xdog.claw.core.types import (
     GoalStatus,
@@ -26,7 +27,7 @@ _TASK_STATUS_MAP = {
 }
 
 
-def _tracker(ctx: dict[str, Any]):
+def _tracker(ctx: dict[str, Any]) -> Any:
     """Get GoalTracker — prefer GoalManager's tracker, fall back to standalone."""
     manager = ctx.get("_goal_manager")
     if manager is not None:
@@ -38,7 +39,7 @@ def _tracker(ctx: dict[str, Any]):
     return get_tracker(goals_file)
 
 
-def _format_goal(goal) -> str:
+def _format_goal(goal: Any) -> str:
     lines = [f"{goal.title} [{goal.id}] — {goal.status}"]
     for t in goal.tasks:
         icon = {"completed": "[x]", "in_progress": "[>]", "skipped": "[-]"}.get(t.status, "[ ]")
@@ -86,7 +87,7 @@ def _parse_task_input(tasks: Sequence[Any]) -> tuple[list[str], list[list[int]]]
 
 
 def _apply_task_dependencies(
-    ctx: dict[str, Any], goal, dep_indices: list[list[int]],
+    ctx: dict[str, Any], goal: Any, dep_indices: list[list[int]],
 ) -> None:
     """Resolve index-based depends_on to real task IDs and update tracker."""
     from dataclasses import replace as dc_replace
@@ -250,5 +251,5 @@ class GoalTool(ToolDef):
         return f"abandon_goal: {_format_goal(goal)}"
 
 
-def create_goal_tool():
+def create_goal_tool() -> AgentTool:
     return GoalTool().build()

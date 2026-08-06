@@ -36,7 +36,7 @@ class MessageQueue:
         on_follow_up: Callable[..., Any] | None = None,
         *,
         max_queued: int = 0,
-    ):
+    ) -> None:
         if mode == QueueMode.STEER:
             if on_steer:
                 await on_steer(message)

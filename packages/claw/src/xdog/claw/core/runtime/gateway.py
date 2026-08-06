@@ -16,18 +16,31 @@ from pathlib import Path
 from typing import Any
 
 from xdog.agent import AgentConfig
-from xdog.ai.types import StreamOptions
+from xdog.ai.types import StreamOptions, ThinkingLevel
 from xdog.claw.config import ClawConfig
 from xdog.claw.core.runtime.orchestrator import Orchestrator
 from xdog.claw.core.types import Group, UserInput
 
 logger = logging.getLogger(__name__)
 
+_THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def _as_thinking_level(raw: str | None) -> ThinkingLevel | None:
+    """Narrow a configured string to a level the provider accepts.
+
+    Group config comes from a file, so anything can be in there; an unknown
+    value used to be forwarded verbatim instead of falling back."""
+    for level in _THINKING_LEVELS:
+        if raw == level:
+            return level
+    return None
+
 # Maximum bytes per JSON-line message from client (1 MB)
 _MAX_LINE_LENGTH = 1_048_576
 
 
-def _build_model_and_options(config: ClawConfig):
+def _build_model_and_options(config: ClawConfig) -> tuple[str, Any]:
     """Resolve the global model name and stream_fn from config.
 
     Returns ``(model_name, stream_fn)``.
@@ -56,7 +69,7 @@ def _groups_from_config(config: ClawConfig) -> list[Group]:
             agent_config=AgentConfig(
                 model=gdef.model_id,
                 options=StreamOptions(
-                    thinking=gdef.thinking_level or None,
+                    thinking=_as_thinking_level(gdef.thinking_level),
                     temperature=gdef.temperature,
                     max_tokens=gdef.max_tokens,
                 ),

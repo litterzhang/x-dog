@@ -29,7 +29,8 @@ class TranscriptStore:
         if self._index_file.exists():
             try:
                 with open(self._index_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    loaded: dict[str, dict[str, Any]] = json.load(f)
+                    return loaded
             except json.JSONDecodeError:
                 pass
         return {}
@@ -91,7 +92,7 @@ class TranscriptStore:
         with open(transcript_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(turn) + "\n")
 
-    def load_transcript(self, session_id: str) -> list[dict]:
+    def load_transcript(self, session_id: str) -> list[dict[str, Any]]:
         """Load all turns from a session."""
         transcript_file = self._sessions_dir / f"{session_id}.jsonl"
         if not transcript_file.exists():
@@ -170,7 +171,7 @@ class TranscriptStore:
         elapsed = (now - last).total_seconds()
         return elapsed >= idle_seconds
 
-    def replace_transcript(self, session_id: str, turns: list[dict]) -> None:
+    def replace_transcript(self, session_id: str, turns: list[dict[str, Any]]) -> None:
         """Replace the entire transcript for a session (used after compaction)."""
         transcript_file = self._sessions_dir / f"{session_id}.jsonl"
         with open(transcript_file, "w", encoding="utf-8") as f:
@@ -179,14 +180,14 @@ class TranscriptStore:
 
     # -- Branching ---------------------------------------------------------------
 
-    def save_branch(self, session_id: str, branch_id: str, transcript: list[dict]) -> None:
+    def save_branch(self, session_id: str, branch_id: str, transcript: list[dict[str, Any]]) -> None:
         """Save a conversation branch as a JSONL snapshot."""
         branch_file = self._sessions_dir / f"{session_id}_branch_{branch_id}.jsonl"
         with open(branch_file, "w", encoding="utf-8") as f:
             for turn in transcript:
                 f.write(json.dumps(turn) + "\n")
 
-    def load_branch(self, session_id: str, branch_id: str) -> list[dict] | None:
+    def load_branch(self, session_id: str, branch_id: str) -> list[dict[str, Any]] | None:
         """Load a conversation branch. Returns None if not found."""
         branch_file = self._sessions_dir / f"{session_id}_branch_{branch_id}.jsonl"
         if not branch_file.exists():

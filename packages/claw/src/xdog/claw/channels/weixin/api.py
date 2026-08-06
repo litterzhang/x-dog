@@ -167,7 +167,8 @@ class WeixinApiClient:
             client = await self._get_client(timeout_s)
             resp = await client.post(url, json=body, headers=headers, timeout=timeout_s)
             resp.raise_for_status()
-            return resp.json()
+            config: dict[str, Any] = resp.json()
+            return config
         except Exception:
             logger.debug("getConfig: request failed (non-critical)")
             return {}

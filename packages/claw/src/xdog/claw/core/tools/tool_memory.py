@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from xdog.agent.core import AgentTool
 from xdog.agent.tool_def import Param, ToolDef, action
 from xdog.claw.core.memory.types import MemoryChunk
 
@@ -95,5 +96,5 @@ class MemoryTool(ToolDef):
         return f"Unknown target: {target}"
 
 
-def create_memory_tool():
+def create_memory_tool() -> AgentTool:
     return MemoryTool().build()

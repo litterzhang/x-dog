@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path as _Path
 from typing import Any
 
+from xdog.agent.core import AgentTool
 from xdog.agent.tool_def import Param, ToolDef, action
 
 
@@ -23,7 +24,7 @@ def _tasks_file(ctx: dict[str, Any]) -> _Path:
     return _Path(load_config().tasks_file)
 
 
-def _load_tasks(ctx: dict[str, Any]) -> list[dict]:
+def _load_tasks(ctx: dict[str, Any]) -> list[dict[str, Any]]:
     tf = _tasks_file(ctx)
     if not tf.exists():
         return []
@@ -34,7 +35,7 @@ def _load_tasks(ctx: dict[str, Any]) -> list[dict]:
         return []
 
 
-def _save_tasks(ctx: dict[str, Any], tasks: list[dict]) -> None:
+def _save_tasks(ctx: dict[str, Any], tasks: list[dict[str, Any]]) -> None:
     tf = _tasks_file(ctx)
     tf.parent.mkdir(parents=True, exist_ok=True)
     tf.write_text(json.dumps({"tasks": tasks}, indent=2) + "\n", encoding="utf-8")
@@ -96,5 +97,5 @@ class TaskTool(ToolDef):
         return "\n".join(lines)
 
 
-def create_task_tool():
+def create_task_tool() -> AgentTool:
     return TaskTool().build()

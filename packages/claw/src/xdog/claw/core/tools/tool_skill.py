@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from xdog.agent.core import AgentTool
 from xdog.agent.skills import render_skill_body
 from xdog.agent.tool_def import Param, ToolDef, action
 
@@ -70,5 +71,5 @@ class SkillTool(ToolDef):
         return f"# {skill.name}\n\n{render_skill_body(skill)}"
 
 
-def create_skill_tool():
+def create_skill_tool() -> AgentTool:
     return SkillTool().build()

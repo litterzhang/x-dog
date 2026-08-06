@@ -126,7 +126,7 @@ class AgentSession:
     # -- Helpers ---------------------------------------------------------------
 
     @property
-    def _store(self):
+    def _store(self) -> Any:
         """Shortcut to the transcript store."""
         return self._runtime.transcript_store
 
@@ -210,7 +210,8 @@ class AgentSession:
         return True
 
     def list_branches(self) -> list[str]:
-        return self._store.list_branches(self._meta.session_id)
+        branches: list[str] = self._store.list_branches(self._meta.session_id)
+        return branches
 
     # -- Turn execution --------------------------------------------------------
 

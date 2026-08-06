@@ -43,8 +43,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, TypeVar, get_type_hints
 
 from xdog.agent.core import AgentTool, AgentToolResult

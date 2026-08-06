@@ -155,9 +155,10 @@ class Orchestrator:
         is_user = isinstance(message, UserInput)
         async with self._queue.acquire(group_id, is_user=is_user):
             session = runtime.get_or_create_session()
-            return await session.run_turn(
+            result: TurnResult | None = await session.run_turn(
                 message, on_text_delta=on_text_delta,
             )
+            return result
 
     # -- Channel delivery ------------------------------------------------------
 

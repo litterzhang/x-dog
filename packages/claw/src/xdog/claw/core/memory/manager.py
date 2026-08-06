@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from xdog.agent.core import EmbedFn
 from xdog.claw.core.memory.daily_log import DailyLog
 from xdog.claw.core.memory.long_term import LongTermMemory
 from xdog.claw.core.memory.simple_search import SimpleMemorySearch
@@ -39,7 +40,7 @@ class MemoryManager:
         data_dir: Path,
         group_id: str,
         *,
-        embed_fn: Callable[..., Awaitable[Any]] | None = None,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         self.workspace_dir = workspace_dir
         self.daily_log = DailyLog(workspace_dir / "memory")
