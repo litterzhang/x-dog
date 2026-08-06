@@ -31,10 +31,32 @@ from xdog.agent.skills.types import Skill
 logger = logging.getLogger(__name__)
 
 
+#: Fields the open Agent Skills standard defines. Its reference validator
+#: rejects a file carrying anything else, so our own bookkeeping has to live
+#: inside `metadata`, which the standard reserves for exactly that.
+SPEC_FIELDS = ("name", "description", "license", "compatibility", "metadata", "allowed-tools")
+
+#: `name`: 1–64 chars of [a-z0-9-], no leading/trailing hyphen, no doubled hyphen.
+_NAME_RE = re.compile(r"^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$")
+
+
+def is_valid_skill_name(name: str) -> bool:
+    """Whether a name satisfies the standard, and so is portable to other clients."""
+    return bool(_NAME_RE.match(name))
+
+
 def _slugify(name: str) -> str:
-    """Convert a name to a filesystem-safe slug."""
+    """Convert a name to a slug the standard will accept.
+
+    Not merely filesystem-safe: the standard constrains `name` to 1–64
+    characters of ``[a-z0-9-]`` with no leading, trailing or doubled hyphen,
+    and its validator rejects the file otherwise. Lowercasing and swapping
+    spaces for hyphens satisfies the common case and quietly produces
+    ``-weird-``, ``a--b`` or a ID-character name for the rest.
+    """
     slug = re.sub(r"[^a-zA-Z0-9\s-]", "", name.lower())
     slug = re.sub(r"[\s]+", "-", slug.strip())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")[:64].rstrip("-")
     return slug or "untitled"
 
 
@@ -77,8 +99,18 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
         return {}, body
 
     meta: dict[str, str] = {}
+    nested: dict[str, str] = {}
     for key, value in loaded.items():
         if value is None:
+            continue
+        if isinstance(value, dict):
+            # `metadata` is the standard's slot for application fields. Lift its
+            # string entries so callers read `created` the same way whether it
+            # was written there or, by an older version of this code, at the top
+            # level. Collected separately so it can never shadow a real field.
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, (str, int, float, bool)):
+                    nested[str(sub_key)] = str(sub_value).strip()
             continue
         if isinstance(value, str):
             meta[str(key)] = value.strip()
@@ -86,6 +118,9 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             meta[str(key)] = ", ".join(str(v) for v in value)
         else:
             meta[str(key)] = str(value)
+
+    for key, value in nested.items():
+        meta.setdefault(key, value)
 
     return meta, body
 
@@ -99,14 +134,21 @@ def _build_frontmatter(name: str, description: str, created: str, updated: str) 
     with no metadata at all — it round-trips only as long as nobody writes a
     colon. The dumper quotes when it has to and leaves prose alone when it
     doesn't.
+
+    ``created`` and ``updated`` are ours, not the standard's, so they go under
+    ``metadata`` — the field the standard reserves for exactly this. Written at
+    the top level they are unknown keys, and the reference validator rejects
+    the whole file over them, which would make every skill an agent writes here
+    unusable in any other client.
     """
-    fields = {"name": name, "created": created, "updated": updated}
+    fields: dict[str, object] = {"name": name}
     if description:
         fields["description"] = description
+    fields["metadata"] = {"created": created, "updated": updated}
     # sort_keys=False to keep name first, where a human skimming expects it.
     # allow_unicode so a Chinese description is not mangled into escapes.
     dumped = yaml.safe_dump(
-        {k: fields[k] for k in ("name", "description", "created", "updated") if k in fields},
+        fields,
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,

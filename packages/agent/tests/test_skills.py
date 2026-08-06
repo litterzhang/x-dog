@@ -8,6 +8,7 @@ skill on disk lands in the prompt.
 """
 from pathlib import Path
 
+import pytest
 from xdog.agent.skills import SkillManager
 
 
@@ -304,3 +305,75 @@ def test_every_real_skill_on_this_machine_parses_the_same_as_pyyaml() -> None:
         for key, value in reference.items():
             if isinstance(value, str):
                 assert ours.get(key) == value.strip(), f"{path}: {key}"
+
+
+# -- Conformance with the open Agent Skills standard --
+
+
+def test_what_we_write_carries_no_fields_outside_the_standard() -> None:
+    """The reference validator rejects a file with unknown top-level keys, so
+    one stray bookkeeping field makes every skill we write unportable."""
+    import yaml
+    from xdog.agent.skills.manager import SPEC_FIELDS, _build_frontmatter
+
+    block = _build_frontmatter("s", "d", "2026-01-01", "2026-08-06")
+    loaded = yaml.safe_load(block.strip("-\n"))
+
+    assert set(loaded) <= set(SPEC_FIELDS), f"non-standard keys: {set(loaded) - set(SPEC_FIELDS)}"
+    assert loaded["metadata"] == {"created": "2026-01-01", "updated": "2026-08-06"}
+
+
+def test_dates_still_round_trip_through_metadata(tmp_path: Path) -> None:
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
+    m.save_skill("s", "body", name="s", description="d")
+    first = m.load_skill("s")
+    assert first is not None and first.created
+
+    updated = m.save_skill("s", "new body", name="s")
+    assert updated.created == first.created, "created survives an update"
+
+
+def test_dates_written_at_the_top_level_by_older_versions_are_still_read(
+    tmp_path: Path,
+) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "legacy", "---\nname: legacy\ncreated: 2020-01-01\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("legacy")
+    assert skill is not None
+    assert skill.created == "2020-01-01"
+
+
+def test_metadata_cannot_shadow_a_real_field(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "s", "---\nname: real\nmetadata:\n  name: impostor\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
+    assert skill is not None
+    assert skill.name == "real"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["My Skill", "  -weird-  ", "a--b", "x" * 80, "!!!", "-", "a b  c", "UPPER--CASE-"],
+)
+def test_generated_slugs_always_satisfy_the_name_rules(raw: str) -> None:
+    """1–64 chars of [a-z0-9-], no leading, trailing or doubled hyphen.
+
+    An agent naming its own skill will produce all of these; a slug that
+    violates the rules is rejected by other clients, not by us, so nothing
+    here would catch it.
+    """
+    from xdog.agent.skills.manager import _slugify, is_valid_skill_name
+
+    slug = _slugify(raw)
+    assert is_valid_skill_name(slug), f"{raw!r} produced invalid name {slug!r}"
+
+
+def test_a_saved_skill_is_named_after_its_directory(tmp_path: Path) -> None:
+    """The standard requires frontmatter `name` to match the parent directory."""
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
+    saved = m.save_skill("", "body", name="My Great Skill")
+
+    assert saved.slug == "my-great-skill"
+    assert (tmp_path / "shared" / "my-great-skill" / "SKILL.md").exists()
