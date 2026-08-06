@@ -52,3 +52,8 @@ plan.txt
 
 # Claude Code session state and agent worktrees — never publish these.
 .claude/
+
+# Personal scratch files kept in the working tree, deliberately not tracked.
+/cli_agent_workflow.json
+/cli_agent_workflow.py
+/essay_writer.py
