@@ -40,6 +40,18 @@ xdog-flow = "xdog.flow.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/xdog"]
 
+# The examples are executable artifacts and the skill is how a coding agent
+# learns to author a workflow — both are useless to anyone who installed from
+# PyPI if they only exist in the repository. They land inside the package so
+# `importlib.resources.files("xdog.flow")` can find them rather than the caller
+# guessing at a path.
+[tool.hatch.build.targets.wheel.force-include]
+"examples" = "xdog/flow/examples"
+"skill" = "xdog/flow/skill"
+
+[tool.hatch.build]
+exclude = ["**/__pycache__", "**/*.pyc"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

@@ -276,3 +276,23 @@ def test_unknown_package_yields_no_licences_rather_than_raising() -> None:
     from xdog.flow.bundle import _licence_files_for
 
     assert _licence_files_for("no_such_package_xyz", Path("/nonexistent")) == []
+
+
+def test_wheel_declares_examples_and_skill_as_package_data() -> None:
+    """A wheel without them leaves a pip user with nothing to run or imitate.
+
+    Asserted against the build config rather than the installed tree: in this
+    workspace every package is installed editable, so `xdog/flow/examples` only
+    exists once a wheel has actually been built. CI checks the built artifact
+    itself; this catches the mapping being dropped from pyproject.
+    """
+    import tomllib
+
+    cfg = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    forced = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert forced.get("examples") == "xdog/flow/examples"
+    assert forced.get("skill") == "xdog/flow/skill"
+    # the sdist must NOT remap them: the wheel is built from the sdist, and
+    # moving the sources would leave the wheel build with nothing to include
+    sdist = cfg["tool"]["hatch"]["build"]["targets"].get("sdist", {})
+    assert "force-include" not in sdist, "remapping in the sdist breaks the wheel build"

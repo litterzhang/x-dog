@@ -209,6 +209,17 @@ Or edit one in the interactive terminal builder · 或用交互式终端编辑�
 xdog-flow build my_workflow.json
 ```
 
+**The examples ship with the package** — no clone needed:
+
+```bash
+EXAMPLES=$(python -c "import importlib.resources as r; print(r.files('xdog.flow') / 'examples')")
+xdog-flow test "$EXAMPLES" --allow-script-stub    # 11 suites, no network
+xdog-flow graph "$EXAMPLES/depins_enrich/depins_enrich.json"
+```
+
+**示例随包分发**，不需要 clone。同目录下还有 `skill/SKILL.md` —— 让 coding agent
+照着写 flow 工作流的说明书。
+
 You can also run an example in your browser at
 **[xdog.942295.xyz/havefun/flow](https://xdog.942295.xyz/havefun/flow)**.
 

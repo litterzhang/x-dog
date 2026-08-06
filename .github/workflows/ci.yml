@@ -32,6 +32,26 @@ jobs:
       - name: Example suites
         run: uv run xdog-flow test packages/flow/examples/ --allow-script-stub
 
+      # The examples and the authoring skill are force-included into the wheel.
+      # Nothing in the unit tests can see that — an editable install has them at
+      # their source paths — so check the artifact CI actually produces.
+      - name: Wheel ships the examples and the skill
+        run: |
+          uv build --package xdog-flow --out-dir /tmp/wheelcheck
+          python - <<'PY'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("/tmp/wheelcheck/*.whl")[0]).namelist()
+          need = [
+              "xdog/flow/examples/agent_calculator.json",
+              "xdog/flow/examples/depins_enrich/cycle.py",
+              "xdog/flow/skill/SKILL.md",
+          ]
+          missing = [n for n in need if n not in names]
+          if missing:
+              sys.exit(f"wheel is missing packaged data: {missing}")
+          print(f"wheel carries {len([n for n in names if '/examples/' in n])} example files")
+          PY
+
       # A dependency named `ai` or `flow` on PyPI is somebody else's package.
       # Publishing metadata that points at one is a supply-chain bug, so fail
       # the build rather than discover it after upload.
