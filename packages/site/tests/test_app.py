@@ -40,13 +40,24 @@ def test_packages_index_ok(client: FlaskClient) -> None:
     assert "Packages" in resp.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("pkg", [p.name for p in PACKAGES])
-def test_each_package_detail_ok(client: FlaskClient, pkg: str) -> None:
-    resp = client.get(f"/packages/{pkg}")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert pkg in body
-    assert "Highlights" in body
+def test_each_package_detail_ok(client: FlaskClient) -> None:
+    """One test over the registry rather than one per package.
+
+    The inputs still matter — a broken page must be named, not merely counted —
+    so failures are collected and reported together, which beats reading six
+    separate red lines to learn that two pages are broken.
+    """
+    broken = []
+    for pkg in (p.name for p in PACKAGES):
+        resp = client.get(f"/packages/{pkg}")
+        if resp.status_code != 200:
+            broken.append(f"{pkg}: HTTP {resp.status_code}")
+            continue
+        body = resp.get_data(as_text=True)
+        if pkg not in body or "Highlights" not in body:
+            broken.append(f"{pkg}: missing name or Highlights")
+
+    assert not broken, f"broken package pages: {broken}"
 
 
 def test_unknown_package_404(client: FlaskClient) -> None:
@@ -60,15 +71,21 @@ def test_blog_index_ok_lists_articles(client: FlaskClient) -> None:
     assert get_articles()[0].title in body
 
 
-@pytest.mark.parametrize("slug", [a.slug for a in get_articles()])
-def test_each_article_ok(client: FlaskClient, slug: str) -> None:
-    resp = client.get(f"/blog/{slug}")
-    assert resp.status_code == 200
-    art = next(a for a in get_articles() if a.slug == slug)
-    body = resp.get_data(as_text=True)
-    assert art.title in body
-    # the markdown body is rendered as HTML (paragraphs), not a raw list
-    assert "markdown-body" in body
+def test_each_article_ok(client: FlaskClient) -> None:
+    broken = []
+    for art in get_articles():
+        resp = client.get(f"/blog/{art.slug}")
+        if resp.status_code != 200:
+            broken.append(f"{art.slug}: HTTP {resp.status_code}")
+            continue
+        body = resp.get_data(as_text=True)
+        if art.title not in body:
+            broken.append(f"{art.slug}: title missing")
+        # the markdown body is rendered as HTML (paragraphs), not a raw list
+        if "markdown-body" not in body:
+            broken.append(f"{art.slug}: markdown not rendered")
+
+    assert not broken, f"broken articles: {broken}"
 
 
 def test_unknown_article_404(client: FlaskClient) -> None:
@@ -199,29 +216,41 @@ _DOC_PACKAGES = ["ai", "agent", "tui", "coding", "claw", "flow"]
 _DOC_SUBPAGES = ["design", "features", "reference", "roadmap"]
 
 
-@pytest.mark.parametrize("name", _DOC_PACKAGES)
-@pytest.mark.parametrize("sub", _DOC_SUBPAGES)
-def test_package_docs_subpages_ok_with_breadcrumb(client: FlaskClient, name: str, sub: str) -> None:
-    resp = client.get(f"/packages/{name}/{sub}")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    # breadcrumb reflects the sub-page, e.g. "Packages / ai / Design"
-    assert f"Packages / {name} / {sub.capitalize()}" in body
-    # every doc page is reachable from the collapsible left-nav
-    assert f"/packages/{name}/reference" in body
+def test_package_docs_subpages_ok_with_breadcrumb(client: FlaskClient) -> None:
+    """Every package doc sub-page renders with the right breadcrumb and left-nav."""
+    broken = []
+    for name in _DOC_PACKAGES:
+        for sub in _DOC_SUBPAGES:
+            resp = client.get(f"/packages/{name}/{sub}")
+            if resp.status_code != 200:
+                broken.append(f"{name}/{sub}: HTTP {resp.status_code}")
+                continue
+            body = resp.get_data(as_text=True)
+            # breadcrumb reflects the sub-page, e.g. "Packages / ai / Design"
+            if f"Packages / {name} / {sub.capitalize()}" not in body:
+                broken.append(f"{name}/{sub}: wrong breadcrumb")
+            # every doc page is reachable from the collapsible left-nav
+            if f"/packages/{name}/reference" not in body:
+                broken.append(f"{name}/{sub}: no left-nav link")
+
+    assert not broken, f"broken doc pages: {broken}"
 
 
-@pytest.mark.parametrize("name", _DOC_PACKAGES)
-def test_overview_route_and_nav(client: FlaskClient, name: str) -> None:
+def test_overview_route_and_nav(client: FlaskClient) -> None:
     # Both /packages/<name> and /packages/<name>/overview render the overview.
-    assert client.get(f"/packages/{name}/overview").status_code == 200
-    body = client.get(f"/packages/{name}").get_data(as_text=True)
-    # The overview body no longer carries an in-page "Deep dive" block or a CLI line;
-    # sub-pages are reached via the left-nav, which links them on every page.
-    assert "Deep dive" not in body
-    assert "CLI:" not in body
-    assert f"/packages/{name}/design" in body  # left-nav submenu
-    assert f"/packages/{name}/roadmap" in body
+    broken = []
+    for name in _DOC_PACKAGES:
+        if client.get(f"/packages/{name}/overview").status_code != 200:
+            broken.append(f"{name}: /overview not 200")
+        body = client.get(f"/packages/{name}").get_data(as_text=True)
+        # The overview body no longer carries an in-page "Deep dive" block or a CLI line;
+        # sub-pages are reached via the left-nav, which links them on every page.
+        if "Deep dive" in body or "CLI:" in body:
+            broken.append(f"{name}: stale in-page deep-dive block")
+        if f"/packages/{name}/design" not in body or f"/packages/{name}/roadmap" not in body:
+            broken.append(f"{name}: left-nav submenu incomplete")
+
+    assert not broken, f"broken overviews: {broken}"
 
 
 def test_package_docs_unknown_name_404(client: FlaskClient) -> None:

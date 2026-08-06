@@ -109,7 +109,11 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             # was written there or, by an older version of this code, at the top
             # level. Collected separately so it can never shadow a real field.
             for sub_key, sub_value in value.items():
-                if isinstance(sub_value, (str, int, float, bool)):
+                # Any scalar, not just str/int/float/bool: YAML resolves an
+                # unquoted `created: 2026-01-01` to a `datetime.date`, and a
+                # hand-written date is exactly what this field attracts. The
+                # narrower check dropped it silently.
+                if not isinstance(sub_value, (dict, list, tuple, set)) and sub_value is not None:
                     nested[str(sub_key)] = str(sub_value).strip()
             continue
         if isinstance(value, str):

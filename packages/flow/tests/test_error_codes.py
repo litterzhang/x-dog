@@ -70,10 +70,14 @@ def test_the_code_set_stays_small_enough_to_branch_on() -> None:
     assert len(set(codes.ALL_CODES)) == len(codes.ALL_CODES), "duplicate code strings"
 
 
-@pytest.mark.parametrize("code", codes.ALL_CODES)
-def test_codes_are_lowercase_hyphenated(code: str) -> None:
-    """Stable across languages and safe in a URL, a log line or a shell script."""
-    assert re.fullmatch(r"[a-z]+(-[a-z]+)*", code), f"{code!r} is not a kebab-case slug"
+def test_codes_are_lowercase_hyphenated() -> None:
+    """Stable across languages and safe in a URL, a log line or a shell script.
+
+    One test, not one per code: they would all fail together for the same
+    reason, and eighteen red lines say nothing that one listing them does not.
+    """
+    bad = [c for c in codes.ALL_CODES if not re.fullmatch(r"[a-z]+(-[a-z]+)*", c)]
+    assert not bad, f"not kebab-case slugs: {bad}"
 
 
 def test_as_dict_omits_absent_fields_rather_than_nulling_them() -> None:

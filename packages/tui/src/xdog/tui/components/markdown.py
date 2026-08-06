@@ -775,7 +775,7 @@ class Markdown(Component):
     ) -> str:
         """Render inline tokens to a styled string."""
         if style_context is None:
-            apply_text = self._apply_default_style
+            apply_text: Callable[[str], str] = self._apply_default_style
             style_prefix = self._get_default_style_prefix()
         else:
             apply_text, style_prefix = style_context

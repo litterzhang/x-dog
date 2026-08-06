@@ -153,33 +153,44 @@ class SettingsList(Component):
         self._add_hint_line(lines, width)
         return lines
 
-    def handle_input(self, event: KeyEvent) -> None:
+    def handle_input(self, event: KeyEvent) -> bool:
+        """Return True when the event was consumed here.
+
+        Returning None — which this did — reads as falsy to the dispatcher in
+        `TUI._dispatch`, which then hands the same key to the parent as well.
+        So an arrow key moved the selection *and* was processed again upstream.
+        """
         # Delegate to submenu if active
         if self._submenu_component is not None:
-            if hasattr(self._submenu_component, "handle_input"):
-                self._submenu_component.handle_input(event)  # type: ignore[arg-type]
-            return
+            return bool(self._submenu_component.handle_input(event))
 
         display_items = self._filtered_items if self._search_enabled else self._items
 
         if event.matches("up"):
             if display_items:
                 self._selected_index = (self._selected_index - 1) % len(display_items)
+            return True
         elif event.matches("down"):
             if display_items:
                 self._selected_index = (self._selected_index + 1) % len(display_items)
+            return True
         elif event.matches("enter") or (hasattr(event, "key") and event.key == " "):
             self._activate_item()
+            return True
         elif event.matches("escape"):
             self._on_cancel()
+            return True
         elif self._search_enabled:
             # Handle search input
             if event.matches("backspace"):
                 self._search_query = self._search_query[:-1]
                 self._apply_filter()
+                return True
             elif isinstance(event.key, str) and len(event.key) == 1 and event.key.isprintable():
                 self._search_query += event.key
                 self._apply_filter()
+                return True
+        return False
 
     def _activate_item(self) -> None:
         display_items = self._filtered_items if self._search_enabled else self._items

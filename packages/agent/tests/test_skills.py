@@ -276,37 +276,6 @@ def test_list_valued_fields_are_flattened_rather_than_dropped(tmp_path: Path) ->
     assert skill.description == "first, second"
 
 
-def test_every_real_skill_on_this_machine_parses_the_same_as_pyyaml() -> None:
-    """Differential check against the corpus that found the quoting bug."""
-    import glob
-    import os
-
-    import yaml
-    from xdog.agent.skills.manager import _parse_frontmatter
-
-    corpus = sorted(glob.glob(os.path.expanduser("~/.claude/**/SKILL.md"), recursive=True))
-    if not corpus:  # pragma: no cover - CI has no such directory
-        return
-
-    for path in corpus:
-        text = Path(path).read_text(encoding="utf-8")
-        if not text.startswith("---"):
-            continue
-        end = text.find("\n---", 3)
-        if end == -1:
-            continue
-        try:
-            reference = yaml.safe_load(text[3:end]) or {}
-        except yaml.YAMLError:
-            continue
-        if not isinstance(reference, dict):
-            continue
-        ours, _ = _parse_frontmatter(text)
-        for key, value in reference.items():
-            if isinstance(value, str):
-                assert ours.get(key) == value.strip(), f"{path}: {key}"
-
-
 # -- Conformance with the open Agent Skills standard --
 
 
@@ -454,13 +423,17 @@ def test_scope_survives_the_listing_projection(tmp_path: Path) -> None:
     assert [s.expires_after_turn for s in listed] == [True]
 
 
-@pytest.mark.parametrize("declared", ["TURN", " turn ", "Turn"])
-def test_scope_is_read_case_and_space_insensitively(tmp_path: Path, declared: str) -> None:
+def test_scope_is_read_case_and_space_insensitively(tmp_path: Path) -> None:
+    """One test, not three: `TURN`, ` turn ` and `Turn` all exercise the same
+    `.strip().lower()` and would fail together."""
     shared = tmp_path / "shared"
-    _mk(shared, "s", f'---\nname: s\ndescription: d\nmetadata:\n  scope: "{declared}"\n---\n\nb')
+    for i, declared in enumerate(("TURN", " turn ", "Turn")):
+        _mk(shared, f"s{i}", f'---\nname: s{i}\ndescription: d\nmetadata:\n  scope: "{declared}"\n---\n\nb')
 
-    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("s")
-    assert skill is not None and skill.expires_after_turn is True
+    manager = SkillManager(shared_dir=shared, packaged={})
+    for i in range(3):
+        skill = manager.load_skill(f"s{i}")
+        assert skill is not None and skill.expires_after_turn is True
 
 
 def test_an_unrecognised_scope_falls_back_to_session(tmp_path: Path) -> None:
@@ -532,3 +505,38 @@ def test_every_file_our_shipped_skill_points_at_actually_exists() -> None:
 
     missing = sorted(p for p in referenced if not (skill_dir / p).exists())
     assert not missing, f"SKILL.md references files that are not shipped: {missing}"
+
+
+def test_our_parser_agrees_with_pyyaml_on_a_checked_in_corpus() -> None:
+    """Differential check against the shapes that broke the old parser.
+
+    This used to read `~/.claude/**/SKILL.md` and return early when that
+    directory was absent — which it always is in CI. It asserted nothing there
+    while looking like coverage: the same silent no-op this file had already
+    fixed once, in a different disguise.
+
+    The samples are checked in instead. Each is a shape the split-on-colon
+    parser got wrong or would have: a quoted value (the one real-world file
+    that caught the bug), a colon inside a value, a list-valued field, nested
+    `metadata`, and a horizontal rule in the body that a naive delimiter search
+    mistakes for the end of the frontmatter.
+    """
+    import yaml
+    from xdog.agent.skills.manager import _parse_frontmatter
+
+    corpus = sorted((Path(__file__).parent / "fixtures" / "frontmatter").glob("*.md"))
+    assert len(corpus) >= 5, "the corpus went missing — this test is worthless without it"
+
+    for path in corpus:
+        text = path.read_text(encoding="utf-8")
+        reference = yaml.safe_load(text.split("---", 2)[1])
+        ours, body = _parse_frontmatter(text)
+
+        for key, value in reference.items():
+            if isinstance(value, str):
+                assert ours.get(key) == value.strip(), f"{path.name}: {key}"
+            elif isinstance(value, dict):
+                # `metadata` entries are lifted to the top level for callers.
+                for sub_key, sub_value in value.items():
+                    assert ours.get(sub_key) == str(sub_value).strip(), f"{path.name}: {sub_key}"
+        assert body.startswith(("Step one.", "Body.")), f"{path.name}: body mis-split"

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import signal
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TextIO
 
@@ -346,7 +347,7 @@ class Terminal:
     _back: ScreenBuffer | None = field(default=None, repr=False)
     _cursor_visible: bool = True
     _alternate_screen: bool = False
-    _resize_callbacks: list = field(default_factory=list)
+    _resize_callbacks: list[Callable[[int, int], None]] = field(default_factory=list)
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -402,7 +403,7 @@ class Terminal:
             for cb in self._resize_callbacks:
                 cb(self._width, self._height)
 
-    def on_resize(self, callback: object) -> None:
+    def on_resize(self, callback: Callable[[int, int], None]) -> None:
         """Register a callback ``(width, height) -> None`` for resize events."""
         self._resize_callbacks.append(callback)
 

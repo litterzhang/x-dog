@@ -142,7 +142,7 @@ class Component(ABC):
 # Input listener type
 # ---------------------------------------------------------------------------
 
-InputListenerResult = dict | None  # {"consume": bool, "data": str} or None
+InputListenerResult = dict[str, object] | None  # {"consume": bool, "data": str} or None
 InputListener = Callable[[KeyEvent], InputListenerResult]
 
 

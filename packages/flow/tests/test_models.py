@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
 from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
 
 
@@ -18,14 +19,6 @@ def test_node_def_defaults() -> None:
     assert node.output_names == ()
 
 
-def test_node_def_replace_immutability() -> None:
-    node = NodeDef(id="n1", prompt="hello")
-    updated = dataclasses.replace(node, prompt="world")
-    assert updated.prompt == "world"
-    assert node.prompt == "hello"
-    assert updated is not node
-
-
 def test_condition_defaults() -> None:
     cond = Condition(op="equals")
     assert cond.op == "equals"
@@ -34,35 +27,12 @@ def test_condition_defaults() -> None:
     assert cond.children == ()
 
 
-def test_condition_with_children() -> None:
-    child = Condition(op="contains", text="ok")
-    parent = Condition(op="and", children=(child,))
-    assert len(parent.children) == 1
-    assert parent.children[0].text == "ok"
-
-
-def test_condition_replace_immutability() -> None:
-    cond = Condition(op="equals", value="yes")
-    updated = dataclasses.replace(cond, value="no")
-    assert updated.value == "no"
-    assert cond.value == "yes"
-    assert updated is not cond
-
-
 def test_edge_def_defaults() -> None:
     edge = EdgeDef(src="a", dst="b")
     assert edge.src == "a"
     assert edge.dst == "b"
     assert edge.when is None
     assert edge.loop_max is None
-
-
-def test_edge_def_replace_immutability() -> None:
-    edge = EdgeDef(src="a", dst="b", loop_max=3)
-    updated = dataclasses.replace(edge, loop_max=5)
-    assert updated.loop_max == 5
-    assert edge.loop_max == 3
-    assert updated is not edge
 
 
 def test_workflow_def_construction() -> None:
@@ -82,34 +52,6 @@ def test_workflow_def_construction() -> None:
     assert len(wf.edges) == 1
     assert wf.default_model == ""
     assert wf.initial_state == ()
-
-
-def test_workflow_def_replace_immutability() -> None:
-    node = NodeDef(id="n1")
-    wf = WorkflowDef(
-        name="flow-a",
-        provider="anthropic",
-        entry="n1",
-        nodes=(node,),
-        edges=(),
-    )
-    updated = dataclasses.replace(wf, name="flow-b")
-    assert updated.name == "flow-b"
-    assert wf.name == "flow-a"
-    assert updated is not wf
-
-
-def test_workflow_def_initial_state() -> None:
-    node = NodeDef(id="n1")
-    wf = WorkflowDef(
-        name="flow",
-        provider="anthropic",
-        entry="n1",
-        nodes=(node,),
-        edges=(),
-        initial_state=(("key", "value"),),
-    )
-    assert wf.initial_state == (("key", "value"),)
 
 
 def test_node_def_script_type() -> None:
@@ -132,12 +74,6 @@ def test_node_def_agent_with_tools() -> None:
     assert node.tools == ("echo", "search")
 
 
-def test_node_def_new_fields_default() -> None:
-    node = NodeDef(id="n1")
-    assert node.tools == ()
-    assert node.run is None
-
-
 def test_node_def_inputs_default() -> None:
     node = NodeDef(id="n1")
     assert node.input_ports == ()
@@ -148,15 +84,6 @@ def test_node_def_inputs_construction() -> None:
     node = NodeDef(id="n1", input_ports=(Port("a"), Port("b")))
     assert node.input_ports == (Port("a"), Port("b"))
     assert node.input_names == ("a", "b")
-
-
-def test_node_def_inputs_replace() -> None:
-    node = NodeDef(id="n1", input_ports=(Port("a"), Port("b")))
-    updated = dataclasses.replace(node, input_ports=(Port("c"),))
-    assert updated.input_ports == (Port("c"),)
-    assert updated.input_names == ("c",)
-    assert node.input_ports == (Port("a"), Port("b"))
-    assert updated is not node
 
 
 def test_agent_output_schema_derived_from_multi_ports() -> None:
@@ -189,3 +116,23 @@ def test_agent_single_structured_port_uses_its_schema() -> None:
     node = NodeDef(id="n1", type="agent", output_ports=(Port("plan", schema=plan),))
     assert agent_is_structured(node) is True
     assert agent_output_schema(node) == plan
+
+
+def test_the_model_types_are_actually_frozen() -> None:
+    """What the five deleted "immutability" tests never checked.
+
+    They each called `dataclasses.replace` and asserted the copy differed from
+    the original — which is the documented behaviour of `dataclasses.replace`,
+    not of anything here. Removing `frozen=True` from every model would have
+    left all five green. This one fails.
+    """
+    subjects = (
+        (NodeDef(id="n1"), "id", "n2"),
+        (Condition(op="equals", value="a"), "op", "contains"),
+        (EdgeDef(src="a", dst="b"), "dst", "c"),
+        (WorkflowDef(name="w", provider="p", entry="n1", nodes=(), edges=()), "name", "other"),
+        (Port(name="p"), "name", "q"),
+    )
+    for obj, field, value in subjects:
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(obj, field, value)

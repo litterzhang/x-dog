@@ -63,9 +63,9 @@ class Box(Component):
         # Render all children
         child_lines: list[str] = []
         for child in self.children:
-            result = child.render(content_width)
-            if result is not None:
-                for line in result:
+            rendered = child.render(content_width)
+            if rendered is not None:
+                for line in rendered:
                     child_lines.append(left_pad + line)
 
         if not child_lines:
