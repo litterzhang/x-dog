@@ -32,6 +32,7 @@ from xdog.flow.models import (
     OUT_NODE_ID,
     Condition,
     EdgeDef,
+    InheritSpec,
     NodeDef,
     Port,
     RetryPolicy,
@@ -232,6 +233,29 @@ def _parse_node(
     else:
         mcp_servers = ()
 
+    inherit_raw = data.get("inherit")
+    inherit: InheritSpec | None = None
+    if inherit_raw is not None:
+        if not isinstance(inherit_raw, dict):
+            raise WorkflowValidationError(
+                f"Node {node_id!r}: 'inherit' must be an object like {{\"from\": \"other-node\"}}",
+                code=codes.WRONG_SHAPE, node=node_id,
+            )
+        unknown = sorted(set(inherit_raw) - {"from"})
+        if unknown:
+            raise WorkflowValidationError(
+                f"Node {node_id!r}: unknown 'inherit' keys {unknown}",
+                code=codes.UNKNOWN_FIELD, node=node_id,
+                hint="Only 'from' is defined; overrides are the node's own fields.",
+            )
+        source = inherit_raw.get("from")
+        if not isinstance(source, str) or not source:
+            raise WorkflowValidationError(
+                f"Node {node_id!r}: 'inherit.from' must be a non-empty node id",
+                code=codes.MISSING_REQUIRED, node=node_id,
+            )
+        inherit = InheritSpec(from_node=source)
+
     return NodeDef(
         id=node_id,
         type=node_type,
@@ -253,6 +277,7 @@ def _parse_node(
         backend=backend_val,
         allowed_tools=allowed_tools,
         mcp_servers=mcp_servers,
+        inherit=inherit,
     )
 
 
@@ -859,6 +884,82 @@ def workflow_output_schema(wf: WorkflowDef) -> dict[str, object]:
     return {"type": "object", "properties": props, "required": sorted(props)}
 
 
+
+def _validate_inherit(
+    node: NodeDef,
+    *,
+    node_by_id: dict[str, NodeDef],
+    node_index: dict[str, int],
+    fan_out_workers: set[str],
+    ancestors: dict[str, set[str]],
+) -> None:
+    """Check that a node's `inherit.from` names a session it can actually get.
+
+    Strict here, lenient at run time — and the split is deliberate. A missing
+    session is tolerated when the run happens (the first pass of a
+    self-inheriting loop has none yet, and a skipped branch never produces one),
+    so a typo in `from` would otherwise do nothing at all and never say so. The
+    reference is therefore checked before anything runs; only its *absence* is
+    forgiven later.
+    """
+    spec = node.inherit
+    if spec is None:
+        return
+    source_id = spec.from_node
+
+    source = node_by_id.get(source_id)
+    if source is None:
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: inherit.from {source_id!r} not found in nodes",
+            code=codes.UNKNOWN_REFERENCE,
+        )
+    if source.type != "agent":
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: inherit.from {source_id!r} is a {source.type!r} node, "
+            "which has no agent session",
+            code=codes.NODE_KIND_CONFLICT,
+        )
+    if source.backend is not None or node.backend is not None:
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: 'inherit' needs the in-process SDK on both ends, but "
+            f"a CLI backend is set",
+            code=codes.NODE_KIND_CONFLICT,
+            hint="A CLI agent owns its own session; flow cannot read or seed it.",
+        )
+    if source.deterministic:
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: cannot inherit from {source_id!r}, which is deterministic",
+            code=codes.NODE_KIND_CONFLICT,
+            hint="A memoised node returns its stored ports without running, so it "
+                 "never produces a session to inherit.",
+        )
+    if source_id in fan_out_workers:
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: cannot inherit from {source_id!r}, a fan-out worker (v1)",
+            code=codes.INVALID_FANOUT,
+            hint="A fanned node runs N times under one id, so 'the' session is ambiguous.",
+        )
+
+    # Self-inheritance is the loop case: the node keeps its own context across
+    # iterations. Everything else must be an earlier node that always runs.
+    if source_id == node.id:
+        return
+    if node_index.get(source_id, 0) >= node_index.get(node.id, 0):
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: inherit.from {source_id!r} is not declared before it",
+            code=codes.GRAPH_INCOMPLETE,
+            hint="Nodes run in declaration order; a node can only inherit from an "
+                 "earlier one, or from itself.",
+        )
+    if source_id not in ancestors.get(node.id, set()):
+        raise WorkflowValidationError(
+            f"Node {node.id!r}: inherit.from {source_id!r} is not guaranteed to run first",
+            code=codes.GRAPH_INCOMPLETE,
+            hint="Only an unconditional ancestor always produces a session; a "
+                 "'when'-gated one may never run.",
+        )
+
+
 def _detect_cycle(wf: WorkflowDef) -> list[str] | None:
     """Return a cycle path over non-loop edges, or None if the graph is acyclic.
 
@@ -1317,6 +1418,36 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
             raise WorkflowValidationError(
                 f"Subflow node {_n.id!r} may not be a fan-out worker (v1)",
                 code=codes.INVALID_SUBFLOW,
+            )
+    # `inherit` needs the fan-out and ordering facts above, so it is checked here
+    # rather than in the per-node agent branch.
+    _unconditional_ancestors: dict[str, set[str]] = {}
+    for _n in wf.nodes:
+        seen: set[str] = set()
+        frontier = [
+            e.src for e in wf.edges
+            if e.dst == _n.id and e.when is None and e.loop_max is None
+            and e.src not in (IN_NODE_ID, OUT_NODE_ID)
+        ]
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            frontier.extend(
+                e.src for e in wf.edges
+                if e.dst == current and e.when is None and e.loop_max is None
+                and e.src not in (IN_NODE_ID, OUT_NODE_ID)
+            )
+        _unconditional_ancestors[_n.id] = seen
+    for _n in wf.nodes:
+        with collector.item(node=_n.id):
+            _validate_inherit(
+                _n,
+                node_by_id=node_by_id,
+                node_index=node_index,
+                fan_out_workers=fan_out_workers,
+                ancestors=_unconditional_ancestors,
             )
     for edge in wf.edges:
         with collector.item(edge=(edge.src, edge.dst)):

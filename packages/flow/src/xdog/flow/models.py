@@ -68,6 +68,22 @@ class RetryPolicy:
 
 
 @dataclass(frozen=True)
+class InheritSpec:
+    """Which node's agent session this node starts from.
+
+    Declared rather than ambient: flow's promise is that data moves only along
+    edges the graph can see, and a session crossing a node boundary is data. A
+    reference the validator can check keeps that promise; a hidden channel would
+    not.
+
+    ``from_node`` may name the node itself, which is how a loop keeps its own
+    context across iterations instead of restarting cold each pass.
+    """
+
+    from_node: str
+
+
+@dataclass(frozen=True)
 class NodeDef:
     id: str
     type: Literal["agent", "script", "human", "subflow"] = "agent"
@@ -115,6 +131,10 @@ class NodeDef:
     # CLI's MCP config (with ${ENV} secret interpolation), never validating fields,
     # so a CLI adding MCP config fields needs no flow change.  See cli-agent.md §5.1.
     mcp_servers: tuple[tuple[str, dict[str, object]], ...] = ()
+    # Start this agent node from another agent node's session (its messages and
+    # system prompt), overridable field by field.  Kept after the pre-existing
+    # fields to preserve positional constructor calls.
+    inherit: InheritSpec | None = None
 
     @property
     def input_names(self) -> tuple[str, ...]:
