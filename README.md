@@ -1,9 +1,9 @@
 # x-dog
 
 [![CI](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml/badge.svg)](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/xdog-flow?label=xdog-flow)](https://pypi.org/project/xdog-flow/)
+[![PyPI](https://img.shields.io/pypi/v/xdog-flow?label=xdog-flow&amp;cacheSeconds=3600)](https://pypi.org/project/xdog-flow/)
 [![Release](https://img.shields.io/github/v/release/litterzhang/x-dog?label=release)](https://github.com/litterzhang/x-dog/releases)
-[![Python](https://img.shields.io/pypi/pyversions/xdog-flow)](https://www.python.org/)
+[![Python](https://img.shields.io/pypi/pyversions/xdog-flow?cacheSeconds=3600)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-xdog.942295.xyz-informational.svg)](https://xdog.942295.xyz)
 
