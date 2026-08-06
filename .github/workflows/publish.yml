@@ -63,9 +63,21 @@ jobs:
   publish:
     needs: [build, test]
     runs-on: ubuntu-latest
-    # The environment name must match the Trusted Publisher entry on PyPI.
+    strategy:
+      # One environment per package: PyPI keys a *pending* publisher on
+      # (owner, repository, workflow, environment), so six packages sharing one
+      # environment name is ambiguous — it cannot tell which project an upload
+      # should create — and registering the second one is rejected outright.
+      # Per-package environments also mean one package failing does not block
+      # the rest, and each can carry its own approval gate.
+      fail-fast: false
+      matrix:
+        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow, xdog-claw, xdog-coding]
     environment:
-      name: ${{ inputs.target == 'pypi' && 'pypi' || (github.event_name == 'push' && 'pypi' || 'testpypi') }}
+      name: >-
+        ${{ (github.event_name == 'push' || inputs.target == 'pypi')
+            && format('pypi-{0}', matrix.package)
+            || format('testpypi-{0}', matrix.package) }}
     permissions:
       # Mints the short-lived OIDC token PyPI trades for an upload token.
       # Without this the action silently falls back to looking for a password.
@@ -73,8 +85,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: dist-*
-          merge-multiple: true
+          name: dist-${{ matrix.package }}
           path: dist/
       - name: Publish to TestPyPI
         if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
