@@ -48,6 +48,10 @@ class AgentSession:
     working_dir: Path
     event_bus: EventBus = field(default_factory=get_event_bus)
     _unsubscribe: Any = field(default=None, init=False, repr=False)
+    #: Slugs of skills whose instructions are currently in the system prompt.
+    #: Held here rather than pushed into the message history so they can be
+    #: taken back out — see `activate_skill`.
+    _active_skills: frozenset[str] = field(default=frozenset(), init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Restore session-level settings
@@ -76,6 +80,32 @@ class AgentSession:
         return self.agent.state.is_streaming
 
     # -- Public API --
+
+    @property
+    def active_skills(self) -> frozenset[str]:
+        """Slugs whose instructions are currently in the system prompt."""
+        return self._active_skills
+
+    def activate_skill(self, slug: str) -> None:
+        """Put a skill's instructions in the system prompt until told otherwise.
+
+        The obvious implementation — append the skill body as a message — is
+        what the format's reference clients do, and it is a one-way door: a
+        message cannot be taken back out of a conversation, so the body keeps
+        occupying the window for the rest of the session whether or not it is
+        still relevant. The system prompt is rebuilt before every turn, so
+        putting it there makes deactivation possible at all.
+        """
+        self._active_skills = self._active_skills | {slug}
+        self._rebuild_system_prompt()
+
+    def deactivate_skill(self, slug: str) -> bool:
+        """Drop a skill from the system prompt. False if it was not active."""
+        if slug not in self._active_skills:
+            return False
+        self._active_skills = self._active_skills - {slug}
+        self._rebuild_system_prompt()
+        return True
 
     async def send_message(self, user_text: str) -> AssistantMessage | None:
         """Send a user message and run the full agent loop.
@@ -248,7 +278,7 @@ class AgentSession:
                 platform_info=PlatformInfo.detect(),
             ),
             tool_defs,
-            extra_context=_skills_context(),
+            extra_context=_skills_context(self._active_skills),
         )
         self.agent.set_system_prompt(prompt)
 
@@ -282,13 +312,14 @@ class AgentSession:
             self._unsubscribe = None
 
 
-def _skills_context() -> str:
-    """One line per available skill, for the system prompt.
+def _skills_context(active: frozenset[str] = frozenset()) -> str:
+    """The skills section of the system prompt.
 
-    This is what makes a skill more than a command the user has to remember:
-    the model can see that `/flow` exists and suggest it. Only names and
-    descriptions go in — bodies are read on demand, so the cost of having many
-    skills installed stays a line each.
+    Two levels, following the format's progressive disclosure: every skill
+    contributes one line so the model knows it exists, and the ones the user
+    has activated contribute their full instructions. Rebuilt from scratch on
+    every turn, which is what makes deactivation work — an activated skill
+    leaves no trace once its slug is dropped.
 
     Returns an empty string on any failure. A skills directory that cannot be
     read is not a reason to start without a system prompt.
@@ -296,10 +327,24 @@ def _skills_context() -> str:
     try:
         from xdog.coding.core.slash_commands import skill_manager
 
-        summary = skill_manager().skills_summary()
+        manager = skill_manager()
+        summary = manager.skills_summary()
+        bodies = []
+        for slug in sorted(active):
+            skill = manager.load_skill(slug)
+            if skill is not None:
+                bodies.append(f"## Active skill: {skill.name}\n\n{skill.content}")
     except Exception:
         logger.debug("could not build the skills section of the system prompt", exc_info=True)
         return ""
-    if not summary:
-        return ""
-    return summary + "\nRun one with the /<slug> command, or ask the user to."
+
+    sections = []
+    if summary:
+        sections.append(summary + "\nRun one with the /<slug> command, or ask the user to.")
+    if bodies:
+        sections.append(
+            "# Active skills\n\n"
+            "The user activated these; follow them. They stay until /unload.\n\n"
+            + "\n\n".join(bodies)
+        )
+    return "\n\n".join(sections)

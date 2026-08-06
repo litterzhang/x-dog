@@ -27,6 +27,7 @@ class CommandResult:
 BUILTIN_COMMANDS: dict[str, str] = {
     "help": "Show available commands",
     "skills": "List available skills: /skills",
+    "unload": "Drop an active skill: /unload [name|all]",
     "model": "Show or switch model: /model [name]",
     "thinking": "Show or set thinking level: /thinking [off|low|medium|high]",
     "compact": "Force conversation compaction",
@@ -103,13 +104,15 @@ async def execute_command(
     elif cmd in ("quit", "exit"):
         return CommandResult(output="Goodbye.", exit_requested=True)
     elif cmd == "skills":
-        return _cmd_skills()
+        return _cmd_skills(session)
+    elif cmd == "unload":
+        return _cmd_unload(args, session)
 
     # Not a built-in: a skill of that name becomes a command. Checked last so
     # a skill can never take over `/quit`.
     skill = _load_skill(cmd)
     if skill is not None:
-        return _run_skill(skill, args)
+        return _run_skill(skill, args, session)
 
     return CommandResult(output=f"Unknown command: /{cmd}. Type /help for available commands.")
 
@@ -137,21 +140,44 @@ def _load_skill(slug: str) -> Skill | None:
         return None
 
 
-def _run_skill(skill: Skill, args: str) -> CommandResult:
-    """Turn a skill into a turn: its instructions go to the model, not the user.
+def _run_skill(skill: Skill, args: str, session: AgentSession) -> CommandResult:
+    """Activate a skill, and start a turn if the user gave one.
 
-    The user's own words are appended so `/flow add a retry step` reads as one
-    request rather than two — the skill says how, the argument says what.
+    The instructions go into the system prompt rather than the message
+    history. That costs a prompt-cache miss on activation, and buys the only
+    thing the message-history approach cannot offer: taking them back out.
+
+    `/flow` on its own just activates. `/flow add a retry step` activates and
+    sends the request, so it reads as one instruction — the skill says how,
+    the argument says what.
     """
-    prompt = skill.content
-    if args:
-        prompt = f"{prompt}\n\n---\n\n{args}"
-
+    session.activate_skill(skill.slug)
     origin = " (shipped with an installed package)" if skill.packaged else ""
-    return CommandResult(output=f"Using skill: {skill.name}{origin}", prompt=prompt)
+    note = f"Activated skill: {skill.name}{origin} — /unload {skill.slug} to drop it"
+    return CommandResult(output=note, prompt=args)
 
 
-def _cmd_skills() -> CommandResult:
+def _cmd_unload(args: str, session: AgentSession) -> CommandResult:
+    active = session.active_skills
+    if not args:
+        if not active:
+            return CommandResult(output="No skills are active.")
+        return CommandResult(
+            output="Active skills: " + ", ".join(sorted(active)) + "\nDrop one with /unload <name>."
+        )
+
+    slug = args.strip()
+    if slug == "all":
+        for s in sorted(active):
+            session.deactivate_skill(s)
+        return CommandResult(output=f"Unloaded {len(active)} skill(s)." if active else "Nothing to unload.")
+
+    if session.deactivate_skill(slug):
+        return CommandResult(output=f"Unloaded skill: {slug}")
+    return CommandResult(output=f"Skill not active: {slug}")
+
+
+def _cmd_skills(session: AgentSession) -> CommandResult:
     skills = available_skills()
     if not skills:
         return CommandResult(
@@ -162,12 +188,19 @@ def _cmd_skills() -> CommandResult:
             )
         )
 
+    active = session.active_skills
     lines = ["Available skills:", ""]
     width = max(len(s.slug) for s in skills)
     for s in skills:
         mark = "*" if s.packaged else " "
-        lines.append(f"  {mark} /{s.slug:<{width}s}  {s.description}")
-    lines += ["", "  * shipped with an installed package", "", "Run one with /<name> [request]."]
+        state = "  [active]" if s.slug in active else ""
+        lines.append(f"  {mark} /{s.slug:<{width}s}  {s.description}{state}")
+    lines += [
+        "",
+        "  * shipped with an installed package",
+        "",
+        "Activate with /<name> [request], drop with /unload <name>.",
+    ]
     return CommandResult(output="\n".join(lines))
 
 

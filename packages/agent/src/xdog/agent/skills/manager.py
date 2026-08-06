@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
+import yaml
 from xdog.agent.skills.discovery import packaged_skills
 from xdog.agent.skills.types import Skill
 
@@ -38,36 +39,80 @@ def _slugify(name: str) -> str:
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Split YAML frontmatter from markdown body."""
+    """Split YAML frontmatter from the markdown body.
+
+    The frontmatter really is YAML — the format is shared with other agent
+    tooling — so it is parsed with a YAML parser rather than approximated.
+    Splitting on ``:`` and taking the rest of the line gets 57 of the 58 real
+    SKILL.md files on a developer's machine right, and the one it fails is
+    instructive: a quoted value comes back still wearing its quotes, and the
+    agent is told its own description is `"You MUST..."` including the marks.
+    Quoting is not exotic — YAML requires it whenever a value would otherwise
+    be ambiguous — so that failure is waiting in any corpus large enough.
+
+    Values are flattened to strings because that is what :class:`Skill` holds;
+    a field written as a list still round-trips to something readable rather
+    than being dropped.
+    """
     if not text.startswith("---"):
         return {}, text
 
-    end = text.find("---", 3)
-    if end == -1:
+    # Match a closing delimiter only when it is a line of its own. `find("---")`
+    # would also match a `---` inside a value or an em-dash rule in the body.
+    match = re.search(r"^---\s*$", text[3:], re.MULTILINE)
+    if match is None:
         return {}, text
+    fm_text = text[3:3 + match.start()]
+    body = text[3 + match.end():].strip()
 
-    fm_text = text[3:end].strip()
-    body = text[end + 3:].strip()
+    try:
+        loaded = yaml.safe_load(fm_text)
+    except yaml.YAMLError as exc:
+        # A malformed header should cost the skill its metadata, not raise in
+        # the middle of listing a directory the user did not write.
+        logger.warning("could not parse skill frontmatter: %s", exc)
+        return {}, body
+
+    if not isinstance(loaded, dict):
+        return {}, body
 
     meta: dict[str, str] = {}
-    for line in fm_text.splitlines():
-        if ":" in line:
-            key, _, value = line.partition(":")
-            meta[key.strip()] = value.strip()
+    for key, value in loaded.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            meta[str(key)] = value.strip()
+        elif isinstance(value, (list, tuple)):
+            meta[str(key)] = ", ".join(str(v) for v in value)
+        else:
+            meta[str(key)] = str(value)
 
     return meta, body
 
 
 def _build_frontmatter(name: str, description: str, created: str, updated: str) -> str:
-    """Build YAML frontmatter string."""
-    lines = ["---"]
-    lines.append(f"name: {name}")
+    """Build the YAML frontmatter block.
+
+    Dumped rather than formatted, because an agent writes its own skills and
+    will eventually describe one as ``Fix bug: retry on 500``. Pasted into
+    ``description: {}`` that is a YAML syntax error, and the skill comes back
+    with no metadata at all — it round-trips only as long as nobody writes a
+    colon. The dumper quotes when it has to and leaves prose alone when it
+    doesn't.
+    """
+    fields = {"name": name, "created": created, "updated": updated}
     if description:
-        lines.append(f"description: {description}")
-    lines.append(f"created: {created}")
-    lines.append(f"updated: {updated}")
-    lines.append("---")
-    return "\n".join(lines)
+        fields["description"] = description
+    # sort_keys=False to keep name first, where a human skimming expects it.
+    # allow_unicode so a Chinese description is not mangled into escapes.
+    dumped = yaml.safe_dump(
+        {k: fields[k] for k in ("name", "description", "created", "updated") if k in fields},
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+        width=10_000,  # one field per line; wrapped values are harder to skim
+    ).strip()
+    return f"---\n{dumped}\n---"
 
 
 def _load_skill_from_dir(skill_dir: Path, *, slug: str = "", packaged: bool = False) -> Skill | None:

@@ -23,6 +23,9 @@ license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 dependencies = [
     "xdog-ai",
     "fastjsonschema",
+    # Skill frontmatter is YAML; see xdog.agent.skills.manager for why it is
+    # parsed rather than approximated.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

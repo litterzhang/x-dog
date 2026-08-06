@@ -205,3 +205,102 @@ def test_discovery_is_safe_to_call_and_finds_only_real_skills() -> None:
     for slug, path in found.items():
         assert (path / "SKILL.md").is_file()
         assert slug not in {"", "skill"}, "slug must name the package, not the directory"
+
+
+# -- Frontmatter is YAML, and must be parsed and written as YAML --
+
+
+def test_a_quoted_description_does_not_keep_its_quotes(tmp_path: Path) -> None:
+    """The one real-world SKILL.md that a split-on-colon parser got wrong."""
+    shared = tmp_path / "shared"
+    _mk(shared, "q", '---\nname: q\ndescription: "You MUST use this before creative work"\n---\n\nbody')
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("q")
+    assert skill is not None
+    assert skill.description == "You MUST use this before creative work"
+
+
+def test_a_colon_in_a_description_survives_the_round_trip(tmp_path: Path) -> None:
+    """An agent writes its own skills, and will eventually write a colon.
+
+    Formatted straight into `description: {}` this is a YAML syntax error, and
+    the skill reloads with no metadata at all.
+    """
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
+    m.save_skill("s", "body", name="s", description="Fix bug: retry on 500")
+
+    back = m.load_skill("s")
+    assert back is not None
+    assert back.description == "Fix bug: retry on 500"
+    assert back.content == "body"
+
+
+def test_unicode_descriptions_are_not_mangled(tmp_path: Path) -> None:
+    m = SkillManager(shared_dir=tmp_path / "shared", packaged={})
+    m.save_skill("cn", "正文", name="工作流", description="把流程固化成 workflow.json")
+
+    back = m.load_skill("cn")
+    assert back is not None
+    assert back.name == "工作流"
+    assert back.description == "把流程固化成 workflow.json"
+
+
+def test_a_horizontal_rule_in_the_body_is_not_read_as_the_delimiter(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "hr", "---\nname: hr\ndescription: d\n---\n\nStep one\n\n---\n\nStep two")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("hr")
+    assert skill is not None
+    assert skill.description == "d"
+    assert "Step two" in skill.content
+
+
+def test_malformed_frontmatter_loses_metadata_but_not_the_skill(tmp_path: Path) -> None:
+    """A directory of skills is user-authored; one bad file must not raise."""
+    shared = tmp_path / "shared"
+    _mk(shared, "broken", "---\nname: [unclosed\n---\n\nthe body is still here")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("broken")
+    assert skill is not None
+    assert skill.content == "the body is still here"
+    assert skill.name == "broken", "falls back to the directory name"
+
+
+def test_list_valued_fields_are_flattened_rather_than_dropped(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "l", "---\nname: l\ndescription:\n  - first\n  - second\n---\n\nbody")
+
+    skill = SkillManager(shared_dir=shared, packaged={}).load_skill("l")
+    assert skill is not None
+    assert skill.description == "first, second"
+
+
+def test_every_real_skill_on_this_machine_parses_the_same_as_pyyaml() -> None:
+    """Differential check against the corpus that found the quoting bug."""
+    import glob
+    import os
+
+    import yaml
+    from xdog.agent.skills.manager import _parse_frontmatter
+
+    corpus = sorted(glob.glob(os.path.expanduser("~/.claude/**/SKILL.md"), recursive=True))
+    if not corpus:  # pragma: no cover - CI has no such directory
+        return
+
+    for path in corpus:
+        text = Path(path).read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        try:
+            reference = yaml.safe_load(text[3:end]) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(reference, dict):
+            continue
+        ours, _ = _parse_frontmatter(text)
+        for key, value in reference.items():
+            if isinstance(value, str):
+                assert ours.get(key) == value.strip(), f"{path}: {key}"
