@@ -118,23 +118,6 @@ def test_flow_overview_renders_product_purpose_and_release_radar(client: FlaskCl
     assert "release_readiness.json" in body
 
 
-def test_flow_reference_documents_workflow_tests(client: FlaskClient) -> None:
-    body = client.get("/packages/flow/reference").get_data(as_text=True)
-    assert "xdog-flow test" in body
-    assert ".test.json" in body
-    # The selectors are the load-bearing part of the design — they are what makes a
-    # case deterministic under fan-out concurrency, so the page must name them.
-    assert "--allow-script-stub" in body
-    for selector in ("when", "index", "round"):
-        assert f"<code>{selector}</code>" in body
-
-
-def test_flow_roadmap_includes_web_ui_and_testing(client: FlaskClient) -> None:
-    body = client.get("/packages/flow/roadmap").get_data(as_text=True)
-    assert "Human + Agent authoring surfaces" in body
-    assert "First-class workflow tests" in body
-
-
 def test_favicon_served_and_linked(client: FlaskClient) -> None:
     resp = client.get("/static/favicon.ico")
     assert resp.status_code == 200
@@ -151,30 +134,33 @@ def test_404_page_is_styled(client: FlaskClient) -> None:
 # --- flow deep-dive sub-pages (now the shared markdown + dynamic routes) ------
 
 
-@pytest.mark.parametrize(
-    "path,crumb",
-    [
-        ("/packages/flow", "flow"),
-        ("/packages/flow/design", "flow / Design"),
-        ("/packages/flow/features", "flow / Features"),
-        ("/packages/flow/reference", "flow / Reference"),
-        ("/packages/flow/examples", "flow / Examples"),
-        ("/packages/flow/roadmap", "flow / Roadmap"),
-    ],
-)
-def test_flow_subpages_ok_with_breadcrumb(client: FlaskClient, path: str, crumb: str) -> None:
-    resp = client.get(path)
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    # the h1 breadcrumb reflects the sub-page, e.g. "x-dog / Packages / flow / Design"
-    assert f"Packages / {crumb}" in body
-    # the left-nav flow submenu links every sub-page
-    assert "/packages/flow/design" in body and "/packages/flow/roadmap" in body
-    assert "/packages/flow/reference" in body
+def test_flow_only_subpages_ok_with_breadcrumb(client: FlaskClient) -> None:
+    """The two flow pages the generic package test cannot cover.
+
+    Its design/features/reference/roadmap cases asserted byte-identical strings
+    to `test_package_docs_subpages_ok_with_breadcrumb` for name="flow". These
+    two are genuinely flow-only: the overview breadcrumb has no sub-page
+    segment, and no other package ships an examples page — `ai/examples` 404s.
+    """
+    for path, crumb in (("/packages/flow", "flow"), ("/packages/flow/examples", "flow / Examples")):
+        resp = client.get(path)
+        assert resp.status_code == 200, f"{path}: HTTP {resp.status_code}"
+        body = resp.get_data(as_text=True)
+        assert f"Packages / {crumb}" in body, f"{path}: wrong breadcrumb"
+        # the left-nav flow submenu links every sub-page
+        assert "/packages/flow/design" in body and "/packages/flow/roadmap" in body
+        assert "/packages/flow/reference" in body
 
 
 def test_flow_reference_documents_schema_and_rules(client: FlaskClient) -> None:
     body = client.get("/packages/flow/reference").get_data(as_text=True)
+    assert "xdog-flow test" in body
+    assert ".test.json" in body
+    # The selectors are the load-bearing part of the design — they are what makes
+    # a case deterministic under fan-out concurrency, so the page must name them.
+    assert "--allow-script-stub" in body
+    for selector in ("when", "index", "round"):
+        assert f"<code>{selector}</code>" in body
     # the JSON schema, type system, conditions, runtime container, CLI, and validation rules
     assert "submit_result" in body  # structured-output contract (derived from ports)
     assert "$output" in body  # the reserved sink
@@ -195,6 +181,8 @@ def test_flow_examples_renders_ascii_diagrams(client: FlaskClient) -> None:
 
 def test_flow_roadmap_has_phases(client: FlaskClient) -> None:
     body = client.get("/packages/flow/roadmap").get_data(as_text=True)
+    assert "Human + Agent authoring surfaces" in body
+    assert "First-class workflow tests" in body
     assert "retry" in body.lower()  # a named phase
     assert "Checkpoint" in body  # a roadmap phase
 

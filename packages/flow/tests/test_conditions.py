@@ -240,3 +240,17 @@ def test_unknown_op_raises() -> None:
     bad_cond = replace(cond, op="xor")  # type: ignore[arg-type]
     with pytest.raises(WorkflowValidationError, match="Unknown condition op"):
         evaluate(bad_cond, {})
+
+
+def test_an_unresolved_numeric_operand_compares_false_rather_than_raising() -> None:
+    """The branch a loop-carried port takes on its first pass.
+
+    `_as_number` returns None for an empty operand so the comparison is simply
+    False, matching interpolation's lenient miss. It is documented behaviour
+    and nothing pinned it: "fixing" this to raise — which the adjacent
+    non-numeric case does — would break every workflow whose loop guard reads a
+    port that has not been produced yet, and no test would have said so.
+    """
+    for op in ("gt", "gte", "lt", "lte"):
+        cond = Condition(op=op, value="{{not_yet}}", text="1")
+        assert evaluate(cond, {}) is False, f"{op} on an unresolved port must be False"
