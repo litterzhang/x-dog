@@ -44,7 +44,8 @@ from __future__ import annotations
 import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, get_type_hints
+from collections.abc import Callable
+from typing import Any, TypeVar, get_type_hints
 
 from xdog.agent.core import AgentTool, AgentToolResult
 from xdog.ai.types import TextContent
@@ -88,13 +89,24 @@ class Param:
 
 
 _ACTION_ATTR = "_tool_action"
+
+#: An action method, returned unchanged by @action so the decorated
+#: signature survives type checking.
+_ActionFn = TypeVar("_ActionFn", bound=Callable[..., Any])
 _action_counter = 0
 
 
-def action(name: str, description: str = "", **params: Param):
+def action(
+    name: str, description: str = "", **params: Param
+) -> Callable[[_ActionFn], _ActionFn]:
     """Decorator that marks a method as a tool action.
 
     Actions are ordered by definition order, not alphabetically.
+
+    The identity signature matters: without it every decorated method is
+    "untyped" to a type checker, and so is everything that calls one. One
+    unannotated decorator here silenced sixteen checks across five tool
+    classes in another package.
 
     Usage::
 
@@ -104,7 +116,7 @@ def action(name: str, description: str = "", **params: Param):
             ...
     """
 
-    def decorator(fn):
+    def decorator(fn: _ActionFn) -> _ActionFn:
         global _action_counter
         _action_counter += 1
         setattr(fn, _ACTION_ATTR, {

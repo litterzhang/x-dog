@@ -8,7 +8,7 @@ class DailyLog:
         self.memory_dir = memory_dir
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
-    def append(self, text: str, *, date_str: str = None) -> None:
+    def append(self, text: str, *, date_str: str | None = None) -> None:
         if date_str is None:
             date_str = datetime.date.today().isoformat()
         log_file = self.memory_dir / f"{date_str}.md"

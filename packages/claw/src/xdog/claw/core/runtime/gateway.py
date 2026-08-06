@@ -426,6 +426,13 @@ class GatewayServer:
             base_url=base_url,
             token=token,
         )
+        if self._orchestrator is None:
+            # Every other use in this file guards; this one did not, so adding
+            # the channel before `start()` raised AttributeError instead of
+            # saying what was wrong.
+            logger.error("Cannot add the WeChat channel: the orchestrator is not running")
+            return
+
         self._orchestrator.add_channel(weixin)
         # Channel was added after orchestrator.start(), so connect manually
         asyncio.get_event_loop().create_task(weixin.connect())

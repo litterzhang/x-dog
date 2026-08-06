@@ -111,9 +111,9 @@ def messages_to_transcript(messages: tuple[AgentMessage, ...] | list[AgentMessag
         elif isinstance(msg, ToolResultMessage):
             text = ""
             if msg.content:
-                for part in msg.content:
-                    if isinstance(part, TextContent):
-                        text = part.text
+                for result_part in msg.content:
+                    if isinstance(result_part, TextContent):
+                        text = result_part.text
                         break
             transcript.append({
                 "role": "tool",
@@ -170,9 +170,9 @@ def estimate_turn_usage(
                 if isinstance(part, TextContent):
                     input_chars += len(part.text)
         elif isinstance(msg, ToolResultMessage):
-            for part in msg.content:
-                if isinstance(part, TextContent):
-                    input_chars += len(part.text)
+            for result_part in msg.content:
+                if isinstance(result_part, TextContent):
+                    input_chars += len(result_part.text)
     total["input"] = max(1, input_chars // 4) if input_chars else 0
 
     return total

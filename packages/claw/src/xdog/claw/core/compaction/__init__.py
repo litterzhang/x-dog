@@ -14,3 +14,14 @@ from xdog.claw.core.compaction.transcript import (  # noqa: F401
     compact_transcript,
     estimate_tokens,
 )
+
+
+# Explicit re-export: without `__all__` a strict checker treats these as
+# private to this module and rejects every import of them elsewhere.
+__all__ = [
+    "archive_transcript",
+    "compact_transcript",
+    "estimate_tokens",
+    "run_compaction",
+    "should_compact",
+]
