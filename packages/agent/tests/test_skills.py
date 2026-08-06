@@ -1,0 +1,157 @@
+"""Tests for the shared skills core.
+
+This code moved out of ``xdog.claw`` so ``xdog.coding`` could read the same
+skill directories, and it arrived with no tests at all. The contracts worth
+pinning are the ones a second caller can easily break: the two-tier override,
+and progressive disclosure — ``list_skills`` must NOT carry bodies, or every
+skill on disk lands in the prompt.
+"""
+from pathlib import Path
+
+from xdog.agent.skills import SkillManager
+
+
+def _mk(root: Path, slug: str, text: str) -> Path:
+    d = root / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(text, encoding="utf-8")
+    return d
+
+
+def test_save_then_load_round_trips(tmp_path: Path) -> None:
+    m = SkillManager(shared_dir=tmp_path / "shared")
+    m.save_skill("deploy", "Run `make deploy`.", name="Deploy", description="Ship it")
+
+    got = m.load_skill("deploy")
+    assert got is not None
+    assert (got.name, got.description) == ("Deploy", "Ship it")
+    assert got.content == "Run `make deploy`."
+
+
+def test_group_skill_overrides_shared_of_the_same_slug(tmp_path: Path) -> None:
+    shared, group = tmp_path / "shared", tmp_path / "group"
+    _mk(shared, "notes", "---\nname: shared one\n---\n\nshared body")
+    _mk(group, "notes", "---\nname: group one\n---\n\ngroup body")
+
+    m = SkillManager(shared_dir=shared, group_dir=group)
+
+    loaded = m.load_skill("notes")
+    assert loaded is not None and loaded.content == "group body"
+    # ...and the override collapses to a single entry rather than listing twice.
+    assert [s.name for s in m.list_skills()] == ["group one"]
+
+
+def test_listing_omits_bodies_so_the_prompt_stays_small(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "big", "---\nname: big\ndescription: d\n---\n\n" + "x" * 5000)
+
+    m = SkillManager(shared_dir=shared)
+
+    listed = m.list_skills()
+    assert [s.description for s in listed] == ["d"]
+    assert listed[0].content == "", "list_skills must not carry the body"
+    # The full body is still one explicit call away.
+    loaded = m.load_skill("big")
+    assert loaded is not None and len(loaded.content) == 5000
+
+
+def test_description_falls_back_to_first_body_line(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "undescribed", "---\nname: u\n---\n\n# Heading\n\nThe real summary.")
+
+    skill = SkillManager(shared_dir=shared).load_skill("undescribed")
+    assert skill is not None
+    assert skill.description == "The real summary."
+
+
+def test_updating_keeps_the_original_created_date(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "old", "---\nname: old\ncreated: 2020-01-01\nupdated: 2020-01-01\n---\n\nbody")
+
+    m = SkillManager(shared_dir=shared)
+    updated = m.save_skill("old", "new body", name="old")
+
+    assert updated.created == "2020-01-01"
+    assert updated.updated != "2020-01-01"
+
+
+def test_patch_appends_and_preserves_metadata(tmp_path: Path) -> None:
+    m = SkillManager(shared_dir=tmp_path / "shared")
+    m.save_skill("s", "first", name="S", description="keep me")
+
+    patched = m.patch_skill("s", "second")
+    assert patched is not None
+    assert patched.content == "first\n\nsecond"
+    assert patched.description == "keep me"
+
+    assert m.patch_skill("does-not-exist", "x") is None
+
+
+def test_remove_clears_both_tiers(tmp_path: Path) -> None:
+    shared, group = tmp_path / "shared", tmp_path / "group"
+    _mk(shared, "dup", "---\nname: a\n---\n\na")
+    _mk(group, "dup", "---\nname: b\n---\n\nb")
+
+    m = SkillManager(shared_dir=shared, group_dir=group)
+    assert m.remove_skill("dup") is True
+    assert m.load_skill("dup") is None
+    assert m.remove_skill("dup") is False
+
+
+def test_summary_is_empty_when_there_are_no_skills(tmp_path: Path) -> None:
+    # An empty string is what the prompt builder tests for; a header with no
+    # entries under it would be worse than nothing.
+    assert SkillManager(shared_dir=tmp_path / "shared").skills_summary() == ""
+
+
+def test_summary_lists_every_slug_with_its_description(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    _mk(shared, "b-skill", "---\nname: B\ndescription: does b\n---\n\nbody")
+    _mk(shared, "a-skill", "---\nname: A\ndescription: does a\n---\n\nbody")
+
+    summary = SkillManager(shared_dir=shared).skills_summary()
+
+    assert "`a-skill` — does a" in summary
+    assert "`b-skill` — does b" in summary
+    assert "body" not in summary
+
+
+def test_non_directories_and_dirs_without_skill_md_are_ignored(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir(parents=True)
+    (shared / "stray.md").write_text("not a skill", encoding="utf-8")
+    (shared / "empty").mkdir()
+    _mk(shared, "real", "---\nname: real\n---\n\nbody")
+
+    assert [s.slug for s in SkillManager(shared_dir=shared).list_skills()] == ["real"]
+
+
+def test_reads_a_skill_shipped_inside_an_installed_package() -> None:
+    """The packaging path: `xdog-flow` ships `xdog/flow/skill/SKILL.md`.
+
+    Pointing a manager at a package's own directory is how an installed
+    distribution teaches an agent to use it, with no copying and nothing to
+    drift out of date.
+
+    Under an editable install the packaged copy does not exist — the skill is
+    force-included at build time — so fall back to the source directory the
+    wheel is built from. Skipping instead would make this test silently pass
+    for everyone who runs it from a checkout, which is everyone. CI checks the
+    built artifact separately.
+    """
+    from importlib.resources import files
+
+    packaged = Path(str(files("xdog.flow"))) / "skill"
+    source = Path(__file__).resolve().parents[2] / "flow" / "skill"
+    skill_root = packaged if (packaged / "SKILL.md").exists() else source
+    assert (skill_root / "SKILL.md").exists(), f"no SKILL.md at {packaged} or {source}"
+
+    # The manager lists *subdirectories* of what it is given, so point it at
+    # the parent and address the skill by directory name.
+    m = SkillManager(shared_dir=skill_root.parent, group_dir=None)
+    assert skill_root.name in {s.slug for s in m.list_skills()}
+
+    loaded = m.load_skill(skill_root.name)
+    assert loaded is not None
+    assert loaded.description
+    assert "workflow" in loaded.content.lower()

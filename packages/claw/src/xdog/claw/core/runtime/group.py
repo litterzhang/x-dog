@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from xdog.agent import AgentConfig, AgentTool, StreamFn
+from xdog.agent.skills import SkillManager
 from xdog.claw.core.compaction.flush_runner import FlushRunner
 from xdog.claw.core.compaction.summarizer import Summarizer
 from xdog.claw.core.memory.manager import MemoryManager
 from xdog.claw.core.persistence.transcript_store import TranscriptStore
 from xdog.claw.core.planning.goal_manager import GoalManager
 from xdog.claw.core.prompt import build_system_prompt, init_workspace, workspace_path
-from xdog.claw.core.skills.skill_manager import SkillManager
 from xdog.claw.core.tools import create_tools
 from xdog.claw.core.types import Group
 

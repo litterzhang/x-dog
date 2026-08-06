@@ -17,7 +17,7 @@ import shutil
 from datetime import date
 from pathlib import Path
 
-from xdog.claw.core.skills.types import Skill
+from xdog.agent.skills.types import Skill
 
 logger = logging.getLogger(__name__)
 
