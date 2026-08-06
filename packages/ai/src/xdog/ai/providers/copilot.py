@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from xdog.ai.vendors.copilot import CopilotVendor
 
 from xdog.ai.core import AuthResult, BaseProvider
 from xdog.ai.types import (
@@ -29,7 +32,7 @@ class CopilotProvider(BaseProvider):
     """GitHub Copilot provider."""
 
     def __init__(self) -> None:
-        self._vendor = None
+        self._vendor: CopilotVendor | None = None
         self._model_cache: dict[str, Model] = {}
         self._protocols: dict[str, object] = {}
 
@@ -43,13 +46,13 @@ class CopilotProvider(BaseProvider):
 
     # -- Internals ------------------------------------------------------------
 
-    def _get_vendor(self):
+    def _get_vendor(self) -> CopilotVendor:
         if self._vendor is None:
             from xdog.ai.vendors.copilot import CopilotVendor
             self._vendor = CopilotVendor()
         return self._vendor
 
-    def _get_protocol(self, protocol_id: str):
+    def _get_protocol(self, protocol_id: str) -> Any:
         if protocol_id not in self._protocols:
             if protocol_id == "openai-completions":
                 from xdog.ai.protocols.openai_completions import OpenAICompletionsProtocol
@@ -124,14 +127,17 @@ class CopilotProvider(BaseProvider):
 
     # -- Embed ----------------------------------------------------------------
 
-    async def embed(self, model_name: str, input: str | tuple[str, ...]) -> EmbeddingResponse:
+    async def embed(
+        self, model_name: str, input: str | tuple[str, ...] | EmbeddingRequest,
+    ) -> EmbeddingResponse:
         resolved = self._resolve(model_name)
         request = input if isinstance(input, EmbeddingRequest) else EmbeddingRequest(input=input)
 
         auth = await self._get_vendor().resolve_auth(resolved)
         protocol = self._get_protocol(resolved.preferred_protocol or resolved.api)
         wire = self._wire_model(resolved, auth)
-        return await protocol.embed(wire, request, auth)
+        response: EmbeddingResponse = await protocol.embed(wire, request, auth)
+        return response
 
     # -- Web search -----------------------------------------------------------
 

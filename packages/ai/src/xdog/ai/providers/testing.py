@@ -8,6 +8,7 @@ from xdog.ai.core import AuthResult, BaseProtocol, BaseProvider
 from xdog.ai.types import (
     AssistantMessage,
     Context,
+    EmbeddingRequest,
     EmbeddingResponse,
     Model,
     ModelCost,
@@ -45,7 +46,8 @@ class _TestProtocol(BaseProtocol):
         options: StreamOptions,
         auth: AuthResult,
     ) -> EventStream[AssistantMessage]:
-        return self._stream_fn(model, context, options)
+        stream: EventStream[AssistantMessage] = self._stream_fn(model, context, options)
+        return stream
 
 
 class TestProvider(BaseProvider):
@@ -97,7 +99,7 @@ class TestProvider(BaseProvider):
     ) -> AssistantMessage:
         return await self.stream(model_name, context, options, cancel).result()
 
-    async def embed(self, model: str, input: str | tuple[str, ...]) -> EmbeddingResponse:
+    async def embed(self, model: str, input: str | tuple[str, ...] | EmbeddingRequest) -> EmbeddingResponse:
         raise NotImplementedError("TestProvider does not support embed")
 
     async def web_search(self, model: str, query: str) -> AssistantMessage:

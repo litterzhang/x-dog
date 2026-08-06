@@ -272,7 +272,9 @@ async def _cmd_chat(
                 history.append(AssistantMessage(content=(TextContent(text=content),)))
 
         if images:
-            history.append(UserMessage(content=tuple([TextContent(text=user_input)] + images)))
+            parts: list[TextContent | ImageContent] = [TextContent(text=user_input)]
+            parts.extend(images)
+            history.append(UserMessage(content=tuple(parts)))
             images = []
         else:
             history.append(UserMessage(content=user_input))

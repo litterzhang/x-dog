@@ -106,7 +106,7 @@ class _TokenManager:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 token = data.get("copilot", {}).get("access_token", "")
                 if token:
-                    return token
+                    return str(token)
             except (json.JSONDecodeError, OSError):
                 pass
         return None

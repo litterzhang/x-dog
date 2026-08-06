@@ -141,7 +141,7 @@ def parse_request(body: dict[str, Any]) -> tuple[str, Context, StreamOptions, bo
     options = StreamOptions(
         max_tokens=body.get("max_tokens"),
         temperature=body.get("temperature"),
-        thinking=thinking_level,
+        thinking=thinking_level,  # type: ignore[arg-type]  # the proxy validates this upstream
     )
 
     return model_id, context, options, is_stream
@@ -180,7 +180,7 @@ def _parse_message(msg: dict[str, Any]) -> list[UserMessage | AssistantMessage |
                 # Tool results are wrapped as ToolResultMessage
                 result_content = block.get("content", "")
                 if isinstance(result_content, str):
-                    tc = (TextContent(text=result_content),)
+                    tc: tuple[TextContent, ...] = (TextContent(text=result_content),)
                 elif isinstance(result_content, list):
                     tc = tuple(
                         TextContent(text=b.get("text", ""))

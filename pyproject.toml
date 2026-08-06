@@ -134,5 +134,5 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers", "sqlite_vec", "rank_bm25", "qrcode", "croniter", "xdog.agent", "xdog.agent.*", "xdog.ai", "xdog.ai.*", "xdog.flow", "xdog.flow.*", "flask", "flask.*", "markupsafe", "markupsafe.*", "markdown", "markdown.*", "frontmatter", "frontmatter.*", "fastjsonschema", "jsonpath_ng", "jsonpath_ng.*"]
+module = ["openai", "sentence_transformers", "sqlite_vec", "rank_bm25", "qrcode", "croniter", "xdog.agent", "xdog.agent.*", "xdog.ai", "xdog.ai.*", "xdog.flow", "xdog.flow.*", "flask", "flask.*", "markupsafe", "markupsafe.*", "markdown", "markdown.*", "frontmatter", "frontmatter.*", "fastjsonschema", "jsonpath_ng", "jsonpath_ng.*"]
 ignore_missing_imports = true

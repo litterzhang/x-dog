@@ -73,7 +73,7 @@ def validate_tool_arguments(
         if expected_types is None:
             continue
 
-        if not isinstance(value, expected_types):
+        if not isinstance(value, expected_types):  # type: ignore[arg-type]  # runtime-built tuple of types
             errors.append(
                 f"Argument {key!r}: expected {expected_type_name}, "
                 f"got {type(value).__name__}"

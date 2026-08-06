@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from xdog.ai.types import (
         AssistantMessage,
         Context,
+        EmbeddingRequest,
         EmbeddingResponse,
         Model,
         StreamOptions,
@@ -138,7 +139,9 @@ class Runtime(BaseProvider):
 
     # -- Embedding / Web search -----------------------------------------------
 
-    async def embed(self, model: str = "", input: str | tuple[str, ...] = "") -> EmbeddingResponse:
+    async def embed(
+        self, model: str = "", input: str | tuple[str, ...] | EmbeddingRequest = "",
+    ) -> EmbeddingResponse:
         """Generate embeddings. Same routing as stream."""
         p, short = self._route(model)
         return await p.embed(short, input)

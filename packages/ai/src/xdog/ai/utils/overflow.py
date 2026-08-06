@@ -51,9 +51,9 @@ def _estimate_message_tokens(msg: object) -> int:
                     total += 768
 
     elif isinstance(msg, AssistantMessage):
-        for part in msg.content:
-            if isinstance(part, TextContent):
-                total += estimate_token_count(part.text)
+        for reply_part in msg.content:
+            if isinstance(reply_part, TextContent):
+                total += estimate_token_count(reply_part.text)
             elif isinstance(part, ThinkingContent):
                 total += estimate_token_count(part.thinking)
             elif isinstance(part, ToolCall):
@@ -78,7 +78,11 @@ def estimate_context_tokens(context: "Context") -> int:
     """Estimate total token usage for a full :class:`Context`."""
     total = 0
     if context.system_prompt:
-        total += estimate_token_count(context.system_prompt)
+        # A system prompt may be a tuple of blocks rather than one string.
+        prompt = context.system_prompt
+        total += estimate_token_count(
+            prompt if isinstance(prompt, str) else "".join(b.text for b in prompt)
+        )
 
     for msg in context.messages:
         total += _estimate_message_tokens(msg)

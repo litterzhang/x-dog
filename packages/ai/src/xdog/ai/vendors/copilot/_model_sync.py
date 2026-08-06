@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal, cast
 
 import httpx
 from xdog.ai.paths import data_dir, models_cache_file
@@ -172,7 +172,6 @@ def _parse_api_model(raw: dict[str, Any]) -> Model | None:
     if "anthropic-messages" in supported_protocols and vendor.lower() == "anthropic":
         preferred_protocol = "anthropic-messages"
 
-    caps: dict[str, Any] = raw.get("capabilities", {})
     limits: dict[str, Any] = caps.get("limits", {})
     supports: dict[str, Any] = caps.get("supports", {})
     family: str = caps.get("family", model_id)
@@ -280,7 +279,12 @@ def _parse_api_model(raw: dict[str, Any]) -> Model | None:
         provider="copilot",
         base_url="https://api.githubcopilot.com",
         reasoning=has_reasoning,
-        input=input_modalities,
+        # Narrow to the literal pair Model declares; the upstream list is
+        # free-form strings and may name a modality we do not model.
+        input=tuple(
+            cast(Literal["text", "image"], m)
+            for m in input_modalities if m in ("text", "image")
+        ),
         cost=ModelCost(input=multiplier),
         context_window=limits.get("max_context_window_tokens", 0) or 0,
         max_prompt_tokens=limits.get("max_prompt_tokens", 0) or 0,

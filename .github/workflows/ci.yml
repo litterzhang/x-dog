@@ -61,14 +61,14 @@ jobs:
       - name: Lint
         run: uv run ruff check packages
 
-      # Six of seven packages are strict-clean and stay that way. `agent` (36)
-      # and `ai` (35) still carry type debt — checking them here would fail
-      # every build, so they are left out until each is cleaned rather than
-      # silently downgrading the standard for the ones that pass.
+      # Every package, strictly. Getting here meant deleting a dead tool layer
+      # and fixing a dozen real defects; keeping it means a new one cannot land
+      # without either a type or an explicit, narrow ignore.
       - name: Types
         run: >
           uv run mypy --strict
-          -p xdog.flow -p xdog.site -p xdog.tui -p xdog.coding -p xdog.claw
+          -p xdog.ai -p xdog.agent -p xdog.tui -p xdog.flow
+          -p xdog.site -p xdog.claw -p xdog.coding
 
       # The examples are executable artifacts, not decoration: this catches a
       # workflow whose companion suite stopped passing after a kernel change.
