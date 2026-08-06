@@ -21,6 +21,13 @@ on:
         type: choice
         options: [testpypi, pypi]
         default: testpypi
+      packages:
+        description: >-
+          JSON array of packages to publish. PyPI allows only three *pending*
+          trusted publishers at a time, so a first release has to go in waves —
+          publish three, which converts their pending publishers to regular ones
+          and frees the slots, then register and publish the rest.
+        default: '["xdog-ai","xdog-tui","xdog-agent","xdog-flow","xdog-claw","xdog-coding"]'
 
 permissions:
   contents: read
@@ -32,7 +39,7 @@ jobs:
       matrix:
         # Everything except `xdog-site`, which is the website itself rather
         # than a library anyone would install.
-        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow, xdog-claw, xdog-coding]
+        package: ${{ fromJSON(inputs.packages || '["xdog-ai","xdog-tui","xdog-agent","xdog-flow","xdog-claw","xdog-coding"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -72,7 +79,7 @@ jobs:
       # the rest, and each can carry its own approval gate.
       fail-fast: false
       matrix:
-        package: [xdog-ai, xdog-tui, xdog-agent, xdog-flow, xdog-claw, xdog-coding]
+        package: ${{ fromJSON(inputs.packages || '["xdog-ai","xdog-tui","xdog-agent","xdog-flow","xdog-claw","xdog-coding"]') }}
     environment:
       name: >-
         ${{ (github.event_name == 'push' || inputs.target == 'pypi')
