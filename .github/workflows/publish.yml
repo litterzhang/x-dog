@@ -5,8 +5,8 @@ name: publish
 # this workflow file, and the named environment.
 #
 # Two ways in:
-#   * push a tag `v0.57.1`  → builds and publishes to PyPI
-#   * Run workflow…         → choose testpypi (default) or pypi
+#   * push a tag `v0.57.1`  → builds and publishes every package
+#   * Run workflow…         → publish a subset, for a staged first release
 #
 # Publish order does not matter: PyPI does not resolve Requires-Dist at upload
 # time, only at install time, and all four land in the same run.
@@ -16,11 +16,6 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      target:
-        description: Where to publish
-        type: choice
-        options: [testpypi, pypi]
-        default: testpypi
       packages:
         description: >-
           JSON array of packages to publish. PyPI allows only three *pending*
@@ -80,11 +75,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJSON(inputs.packages || '["xdog-ai","xdog-tui","xdog-agent","xdog-flow","xdog-claw","xdog-coding"]') }}
-    environment:
-      name: >-
-        ${{ (github.event_name == 'push' || inputs.target == 'pypi')
-            && format('pypi-{0}', matrix.package)
-            || format('testpypi-{0}', matrix.package) }}
+    environment: pypi-${{ matrix.package }}
     permissions:
       # Mints the short-lived OIDC token PyPI trades for an upload token.
       # Without this the action silently falls back to looking for a password.
@@ -94,16 +85,7 @@ jobs:
         with:
           name: dist-${{ matrix.package }}
           path: dist/
-      - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          # TestPyPI accumulates versions from earlier dry runs; re-running a
-          # build that produced identical files should not fail the job.
-          skip-existing: true
       - name: Publish to PyPI
-        if: github.event_name == 'push' || inputs.target == 'pypi'
         uses: pypa/gh-action-pypi-publish@release/v1
 
   release:
