@@ -1,6 +1,7 @@
 """Skill tool — create, patch, remove, list, load skills (procedural memory)."""
 from __future__ import annotations
 
+from xdog.agent.skills import render_skill_body
 from xdog.agent.tool_def import Param, ToolDef, action
 
 
@@ -60,7 +61,11 @@ class SkillTool(ToolDef):
         skill = manager.load_skill(slug)
         if skill is None:
             return f"Skill not found: {slug}"
-        return f"# {skill.name}\n\n{skill.content}"
+        # Rendered, not raw: a skill may point at files beside its SKILL.md, and
+        # those paths mean nothing to a model that has not been told where the
+        # skill lives. Handing over `skill.content` looks right and quietly
+        # yields an agent hunting for files in the working directory.
+        return f"# {skill.name}\n\n{render_skill_body(skill)}"
 
 
 def create_skill_tool():

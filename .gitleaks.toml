@@ -1,0 +1,29 @@
+# Secret-scanning configuration for `gitleaks detect` / `gitleaks git`.
+#
+# Run before anything that changes who can read this repository:
+#
+#     gitleaks git --no-banner --redact .
+#
+# The history was scanned clean at 251 commits. One finding was reviewed and is
+# allowlisted below; anything new is a real result and should be treated as one.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key"
+regex = '''(?i)(?:key|api|token|secret|passwd|password)[\w.-]{0,20}[\s'"]{0,3}[:=][\s'"]{0,3}\b([a-z0-9=_\-]{16,})\b'''
+entropy = 3.5
+keywords = ["key", "api", "token", "secret", "password"]
+
+  # The IndexNow key is public by protocol: ownership of the origin is proven by
+  # serving it at `https://<host>/<key>.txt`, so the value is meant to be
+  # readable by anyone who visits the site. It is high-entropy — 32 hex
+  # characters — which is what a generic detector keys on, and there is no way
+  # to write it that would not look like a secret. Rotating it would be
+  # meaningless; it is not a credential and grants nothing but the ability to
+  # tell search engines a URL changed.
+  [rules.allowlist]
+  regexTarget = "line"
+  regexes = ['''_INDEXNOW_KEY = "[0-9a-f]{32}"''']
