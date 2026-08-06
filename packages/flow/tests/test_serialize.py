@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import pathlib
 
-import pytest
 from xdog.flow.builder.serialize import dump_workflow, workflow_to_dict
 from xdog.flow.loader import load_workflow, parse_workflow
 from xdog.flow.models import Condition, EdgeDef, NodeDef, Port, WorkflowDef
