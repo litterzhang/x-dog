@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.components.diff import Diff
@@ -25,7 +26,7 @@ class ToolExecutionComponent(Container):
     def __init__(
         self,
         tool_name: str,
-        arguments: dict | None,
+        arguments: dict[str, Any] | None,
         theme: Theme,
     ) -> None:
         super().__init__()
@@ -169,14 +170,14 @@ def _extract_summary(text: str) -> str:
     return ""
 
 
-def _summarize_args(args: dict, tool_name: str = "") -> str:
+def _summarize_args(args: dict[str, Any], tool_name: str = "") -> str:
     """Create a tool-aware compact summary of arguments.
 
     Uses specialized formatting for known tools (bash, filesystem, grep, find)
     and falls back to generic key=value pairs for unknown tools.
     """
     if tool_name == "bash":
-        cmd = args.get("command", "")
+        cmd = str(args.get("command", ""))
         return cmd if len(cmd) <= 80 else cmd[:77] + "..."
     if tool_name == "filesystem":
         action = args.get("action", "")
@@ -193,7 +194,7 @@ def _summarize_args(args: dict, tool_name: str = "") -> str:
     return _generic_summarize_args(args)
 
 
-def _generic_summarize_args(args: dict) -> str:
+def _generic_summarize_args(args: dict[str, Any]) -> str:
     """Generic key=value argument summary."""
     parts: list[str] = []
     for key, value in args.items():

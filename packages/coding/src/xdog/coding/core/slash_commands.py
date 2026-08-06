@@ -254,11 +254,11 @@ def _cmd_thinking(args: str, session: AgentSession) -> CommandResult:
         level = session.agent.options.thinking or "off"
         return CommandResult(output=f"Current thinking level: {level}")
 
-    level = args.strip().lower()
+    requested = args.strip().lower()
     valid_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
-    if level not in valid_levels:
+    if requested not in valid_levels:
         return CommandResult(
-            output=f"Invalid thinking level: {level}\nValid levels: {', '.join(valid_levels)}"
+            output=f"Invalid thinking level: {requested}\nValid levels: {', '.join(valid_levels)}"
         )
 
     if level == "off":

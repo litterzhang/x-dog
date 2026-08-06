@@ -14,6 +14,7 @@ from typing import Any
 
 from xdog.agent import AgentTool as CoreAgentTool
 from xdog.agent.agent import Agent
+from xdog.ai.types import ThinkingLevel
 from xdog.coding.config import (
     GlobalConfig,
     ProjectConfig,
@@ -25,6 +26,21 @@ from xdog.coding.core.defaults import DEFAULT_MODEL, DEFAULT_THINKING_LEVEL
 from xdog.coding.core.session_manager import SessionData, SessionManager
 from xdog.coding.core.settings_manager import SettingsManager
 from xdog.coding.core.tools import get_default_tools
+
+_THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def _as_thinking_level(raw: object) -> ThinkingLevel | None:
+    """Narrow a configured string to a level the provider accepts.
+
+    Settings arrive from JSON, so anything can be in there. Passing it through
+    untyped meant a typo like `thinking: hgih` reached the provider verbatim
+    instead of falling back.
+    """
+    for level in _THINKING_LEVELS:
+        if raw == level:
+            return level
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +158,7 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
             model=model_id,
             system_prompt="",  # will be rebuilt on first prompt
             options=StreamOptions(
-                thinking=thinking_level if thinking_level != "off" else None,
+                thinking=_as_thinking_level(thinking_level),
             ),
         ),
         tools=agent_tools,

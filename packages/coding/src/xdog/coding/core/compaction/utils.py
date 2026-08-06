@@ -30,9 +30,9 @@ def estimate_message_tokens(msg: AgentMessage) -> int:
                 else:
                     total += 200
     elif isinstance(msg, AssistantMessage):
-        for part in msg.content:
-            if isinstance(part, TextContent):
-                total += estimate_tokens(part.text)
+        for reply_part in msg.content:
+            if isinstance(reply_part, TextContent):
+                total += estimate_tokens(reply_part.text)
             else:
                 total += 200
     elif isinstance(msg, ToolResultMessage):

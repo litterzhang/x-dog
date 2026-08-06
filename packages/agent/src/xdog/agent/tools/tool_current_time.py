@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from xdog.agent.core import AgentTool
 from xdog.agent.tool_def import ToolDef
 
 
@@ -15,5 +16,5 @@ class CurrentTimeTool(ToolDef):
         return now.strftime("%Y-%m-%d %H:%M:%S %Z (UTC%z)")
 
 
-def create_current_time_tool():
+def create_current_time_tool() -> AgentTool:
     return CurrentTimeTool().build()

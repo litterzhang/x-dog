@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from xdog.coding.modes.interactive.components.assistant_message import AssistantMessageComponent
 from xdog.coding.modes.interactive.components.tool_execution import ToolExecutionComponent
 from xdog.coding.modes.interactive.components.user_message import UserMessageComponent
@@ -33,7 +35,7 @@ class ChatLog(Container):
         """Add a system/info message."""
         self._append(Text(self._theme.system(f"  {text}"), 1, 0))
 
-    def add_tool(self, tool_name: str, arguments: dict | None = None) -> ToolExecutionComponent:
+    def add_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolExecutionComponent:
         """Add a tool execution component."""
         comp = ToolExecutionComponent(tool_name, arguments, self._theme)
         self._last_tool = comp

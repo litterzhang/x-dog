@@ -38,6 +38,7 @@ from xdog.ai.types import (
     UserMessage,
 )
 from xdog.coding.core.agent_session import AgentSession
+from xdog.coding.core.defaults import MAX_CONTEXT_TOKENS
 from xdog.coding.core.slash_commands import execute_command, parse_slash_command
 from xdog.coding.modes.interactive.components.chat_log import ChatLog
 from xdog.coding.modes.interactive.components.custom_editor import CustomEditorComponent
@@ -74,7 +75,7 @@ def _context_tokens_from_messages(messages: list[Any]) -> int:
         usage = getattr(msg, "usage", None)
         if usage is None:
             continue
-        total = usage.input + usage.cache_read + usage.cache_write
+        total = int(usage.input) + int(usage.cache_read) + int(usage.cache_write)
         if total > 0:
             return total
     return 0
@@ -146,8 +147,8 @@ class InteractiveMode:
         self._update_header()
         self._update_footer()
 
-        model_name = self._session.model.id if self._session.model else "unknown"
-        thinking = self._session.agent.state.thinking_level or "off"
+        model_name = self._session.model or "unknown"
+        thinking = self._session.agent.options.thinking or "off"
         self._chat_log.add_system(
             f"session:{self._session.session_id[:8]} | {model_name} | thinking:{thinking}"
         )
@@ -161,7 +162,7 @@ class InteractiveMode:
         try:
             self._tui.start()
         finally:
-            if self._unsubscribe:
+            if self._unsubscribe is not None:
                 self._unsubscribe()
 
     def _replay_history(self) -> None:
@@ -183,15 +184,14 @@ class InteractiveMode:
     # -- Header / Footer --
 
     def _update_header(self) -> None:
-        model_name = self._session.model.id if self._session.model else "unknown"
+        model_name = self._session.model or "unknown"
         self._header.set_text(
             self._theme.header(f"  coding | {model_name}")
         )
 
     def _update_footer(self) -> None:
-        model = self._session.model
-        model_name = model.id if model else "unknown"
-        thinking = self._session.agent.state.thinking_level or "off"
+        model_name = self._session.model or "unknown"
+        thinking = self._session.agent.options.thinking or "off"
         self._footer.update(
             model=model_name,
             session_id=self._session.session_id,
@@ -199,7 +199,10 @@ class InteractiveMode:
             thinking=str(thinking),
             working_dir=str(self._session.working_dir),
             context_tokens=_context_tokens_from_messages(self._session.messages),
-            max_context=getattr(model, "context_window", 0) or 200_000,
+            # `self._session.model` is a model id, not an object: the previous
+            # `getattr(model, "context_window", 0)` could only ever return 0,
+            # so this footer has always shown the fallback. Name the fallback.
+            max_context=MAX_CONTEXT_TOKENS,
         )
 
     # -- Status management --
@@ -398,24 +401,24 @@ class InteractiveMode:
 
         elif isinstance(event, ToolExecutionUpdateEvent):
             if event.partial_result is not None:
-                text_parts: list[str] = []
-                for part in event.partial_result.content:
-                    if isinstance(part, TextContent):
-                        text_parts.append(part.text)
-                if text_parts:
+                update_parts: list[str] = []
+                for update_part in event.partial_result.content:
+                    if isinstance(update_part, TextContent):
+                        update_parts.append(update_part.text)
+                if update_parts:
                     self._event_queue.put({
                         "type": "tool_update",
                         "name": event.tool_name,
-                        "text": "".join(text_parts),
+                        "text": "".join(update_parts),
                     })
 
         elif isinstance(event, ToolExecutionEndEvent):
             result_text = ""
             if event.result is not None:
                 # Extract text content from the result
-                for part in event.result.content:
-                    if isinstance(part, TextContent):
-                        result_text = part.text
+                for result_part in event.result.content:
+                    if isinstance(result_part, TextContent):
+                        result_text = result_part.text
                         break
             # Detect errors
             is_error = result_text.startswith("Error:")

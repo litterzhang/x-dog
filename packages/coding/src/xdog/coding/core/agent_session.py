@@ -18,6 +18,7 @@ from xdog.agent.agent import Agent
 from xdog.ai.types import (
     AssistantMessage,
     TextContent,
+    ThinkingLevel,
     UserMessage,
 )
 from xdog.coding.core.defaults import COMPACTION_THRESHOLD_RATIO, MAX_CONTEXT_TOKENS
@@ -176,7 +177,7 @@ class AgentSession:
         self.agent.set_model(model)
         self._persist()
 
-    def set_thinking_level(self, level: str | None) -> None:
+    def set_thinking_level(self, level: ThinkingLevel | None) -> None:
         """Switch the thinking/reasoning level."""
         from dataclasses import replace
         self.agent.set_options(replace(self.agent.options, thinking=level))
@@ -206,9 +207,9 @@ class AgentSession:
                         else:
                             char_count += 200
             elif isinstance(msg, AssistantMessage):
-                for part in msg.content:
-                    if isinstance(part, TextContent):
-                        char_count += len(part.text)
+                for reply_part in msg.content:
+                    if isinstance(reply_part, TextContent):
+                        char_count += len(reply_part.text)
                     else:
                         char_count += 200
             else:
