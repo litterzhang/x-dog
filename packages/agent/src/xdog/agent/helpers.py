@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from xdog.agent.core import EmbedFn
 from xdog.ai.core import BaseProvider
 
 if TYPE_CHECKING:
@@ -56,7 +57,7 @@ def web_search_fn_from_provider(provider: BaseProvider, model: str) -> WebSearch
     return _search
 
 
-def embed_fn_from_provider(provider: BaseProvider, model: str):
+def embed_fn_from_provider(provider: BaseProvider, model: str) -> EmbedFn:
     """Build a :class:`~agent.core.EmbedFn` from an ai Provider.
 
     The returned function calls ``provider.embed(model, text)``

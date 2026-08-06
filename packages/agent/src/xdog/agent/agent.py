@@ -59,6 +59,7 @@ from xdog.ai.types import (
     ImageContent,
     Message,
     StreamOptions,
+    SystemPromptBlock,
     TextContent,
     UserMessage,
 )
@@ -221,7 +222,7 @@ class Agent:
 
     # -- Public state mutators -----------------------------------------------
 
-    def set_system_prompt(self, prompt: str | tuple | None) -> None:
+    def set_system_prompt(self, prompt: str | tuple[SystemPromptBlock, ...] | None) -> None:
         """Update the system prompt. Accepts string or SystemPromptBlock tuple."""
         self._update_state(system_prompt=prompt)
 

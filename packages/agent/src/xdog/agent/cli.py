@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from xdog.agent.agent import Agent
-from xdog.agent.core import AgentConfig, AgentToolResult
+from xdog.agent.core import AgentConfig, AgentToolResult, CustomAgentMessage
 from xdog.agent.events import (
     MessageUpdateEvent,
     ToolExecutionEndEvent,
@@ -371,7 +371,12 @@ class _Session:
         from xdog.ai.utils.overflow import estimate_context_tokens
         ctx = Context(
             system_prompt=self.agent.state.system_prompt,
-            messages=tuple(m for m in self.agent.state.messages if hasattr(m, "role")),
+            # `Context` carries only the wire message kinds; CustomAgentMessage
+            # is agent-side bookkeeping with nothing to send.
+            messages=tuple(
+                m for m in self.agent.state.messages
+                if not isinstance(m, CustomAgentMessage)
+            ),
         )
         est_tokens = estimate_context_tokens(ctx)
         ctx_window = cfg.context_window

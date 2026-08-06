@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, get_type_hints
 
@@ -306,7 +306,7 @@ class ToolDef:
         raw.sort(key=lambda t: t[0])
         return [entry for _, entry in raw]
 
-    def _build_description_with_actions(self, actions: list[dict]) -> str:
+    def _build_description_with_actions(self, actions: list[dict[str, Any]]) -> str:
         """Append per-action summary to the tool description."""
         lines = [self.description, "", "Actions:"]
         for act in actions:
@@ -322,7 +322,7 @@ class ToolDef:
             lines.append(f"- {act['name']}{desc}{param_str}")
         return "\n".join(lines)
 
-    def _build_multi_action_schema(self, actions: list[dict]) -> dict[str, Any]:
+    def _build_multi_action_schema(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
         """Generate JSON Schema with action enum + per-action param annotations.
 
         Each property's description is prefixed with ``[action1, action2]``
@@ -430,7 +430,7 @@ class ToolDef:
             return f"Tool {self.name!r} requires ctx keys: {', '.join(missing)}"
         return None
 
-    def _build_multi_action_dispatch(self, actions: list[dict]):
+    def _build_multi_action_dispatch(self, actions: list[dict[str, Any]]) -> Callable[..., Awaitable[AgentToolResult]]:
         """Generate an async execute function that dispatches by action."""
         action_map = {a["name"]: a for a in actions}
         _validate = self._validate_ctx
@@ -490,7 +490,7 @@ class ToolDef:
 
         return execute
 
-    def _build_single_action_dispatch(self):
+    def _build_single_action_dispatch(self) -> Callable[..., Awaitable[AgentToolResult]]:
         """Generate an execute function for a single-action tool."""
         method = getattr(self, "execute", None)
         if method is None:

@@ -83,8 +83,8 @@ class FilesystemTool(ToolDef):
                 "required": ["old_string", "new_string"],
             }),
             replace_all=Param("boolean", description="Replace all occurrences"))
-    async def edit(self, ctx, path: str, old_string: str = "", new_string: str = "",
-                   edits: list[Any] | None = None, replace_all: bool = False) -> str:
+    async def edit(self, ctx: dict[str, Any], path: str, old_string: str = "", new_string: str = "",
+                   edits: list[Any] | None = None, replace_all: bool = False) -> str | AgentToolResult:
         error = validate_path(path)
         if error:
             return error
@@ -97,7 +97,7 @@ class FilesystemTool(ToolDef):
     @action("ls", description="List directory contents",
             path=Param("string", required=True, description="Absolute directory path"),
             show_hidden=Param("boolean", description="Include hidden files"))
-    async def ls(self, ctx: dict[str, Any], path: str, show_hidden: bool = False) -> str:
+    async def ls(self, ctx: dict[str, Any], path: str, show_hidden: bool = False) -> str | AgentToolResult:
         error = validate_path(path)
         if error:
             return error
@@ -112,7 +112,7 @@ class FilesystemTool(ToolDef):
             context=Param("integer", description="Context lines"),
             multiline=Param("boolean"),
             head_limit=Param("integer"))
-    async def grep(self, ctx: dict[str, Any], path: str, pattern: str, **kwargs) -> str:
+    async def grep(self, ctx: dict[str, Any], path: str, pattern: str, **kwargs: Any) -> str:
         error = validate_path(path)
         if error:
             return error
@@ -204,7 +204,7 @@ def _fs_delete(path: Path) -> str:
     return f"Deleted {path}"
 
 
-def _fs_edit(path: Path, args: dict[str, Any]) -> str:
+def _fs_edit(path: Path, args: dict[str, Any]) -> str | AgentToolResult:
     if not path.exists():
         return f"Error: file not found: {path}"
     if path.is_dir():
@@ -258,7 +258,7 @@ def _fs_edit(path: Path, args: dict[str, Any]) -> str:
     return AgentToolResult(content=(TextContent(text=diff_text),))
 
 
-def _fs_ls(path: Path, args: dict[str, Any]) -> str:
+def _fs_ls(path: Path, args: dict[str, Any]) -> str | AgentToolResult:
     if not path.exists():
         return f"Error: directory not found: {path}"
     if not path.is_dir():
