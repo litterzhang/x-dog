@@ -285,6 +285,11 @@ async def execute(
     if inputs:
         seed.update(inputs)
     outputs: dict[str, dict[str, object]] = {IN_NODE_ID: seed}
+    # Dumped agent sessions, node id -> session, for nodes that declare `inherit`.
+    # A missing entry means "start cold": the first pass of a self-inheriting
+    # loop has none yet, and a skipped branch never produces one.  That is not an
+    # error — the reference itself was already checked at load.
+    sessions: dict[str, dict[str, object]] = {}
     _state_lock = asyncio.Lock()
     _signals: set[str] = signals if signals is not None else set()
     tokens_used = 0
@@ -382,8 +387,13 @@ async def execute(
                 "memo",
                 "tokens_used",
             }
-            if set(snap) != expected_keys:
-                raise WorkflowExecutionError("checkpoint does not match the current seven-field schema")
+            # `sessions` is optional so a checkpoint written before `inherit`
+            # existed still resumes — it simply carries no sessions, which is
+            # the same state a run has before any agent node has spoken.
+            if set(snap) - {"sessions"} != expected_keys:
+                raise WorkflowExecutionError("checkpoint does not match the current schema")
+            if "sessions" in snap and not isinstance(snap["sessions"], dict):
+                raise WorkflowExecutionError("checkpoint sessions must be a mapping")
             if not isinstance(snap["outputs"], dict) or not isinstance(snap["completed"], list):
                 raise WorkflowExecutionError("checkpoint outputs/completed have invalid types")
             if not isinstance(snap["loop_counters"], dict) or not isinstance(snap["stack"], list):
@@ -394,6 +404,11 @@ async def execute(
                 raise WorkflowExecutionError("checkpoint tokens_used must be an integer")
 
             outputs = {str(k): dict(v) for k, v in snap["outputs"].items() if isinstance(v, dict)}
+            sessions = {
+                str(k): dict(v)
+                for k, v in (snap.get("sessions") or {}).items()
+                if isinstance(v, dict)
+            }
             completed = {str(node_id) for node_id in snap["completed"]}
             lc_raw = snap["loop_counters"]
             loop_counters = {
@@ -423,9 +438,15 @@ async def execute(
                     raise _strict_loop_error(edge)
 
     def _checkpoint_snapshot() -> dict[str, object]:
-        """Materialize the unchanged seven-field checkpoint schema."""
+        """Materialize the checkpoint schema.
+
+        ``sessions`` joined the original seven when agent nodes gained
+        ``inherit``: without it, resuming a run would hand the child an empty
+        context and produce a plausible, wrong answer rather than an error.
+        """
         return {
             "outputs": outputs,
+            "sessions": sessions,
             "completed": list(completed),
             "loop_counters": dict(loop_counters),
             "stack": stack,
@@ -893,7 +914,9 @@ async def execute(
         model = node.model or wf.default_model
         logger.debug("Running node %r with model %r", node_id, model)
         runner = _runner_for(node)
-        return await runner.run(
+        inherited = sessions.get(node.inherit.from_node) if node.inherit else None
+        session_sink: dict[str, object] = {}
+        result = await runner.run(
             node,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
@@ -902,7 +925,14 @@ async def execute(
             inputs=ins,
             step=step,
             fan_index=fan_index,
+            session=inherited,
+            session_sink=session_sink,
         )
+        captured = session_sink.get("session")
+        if isinstance(captured, dict):
+            async with _state_lock:
+                sessions[node_id] = captured
+        return result
 
     def _store_agent_output(node: NodeDef, node_id: str, output_value: object) -> None:
         """Store an agent's output value into its port(s) (caller holds _state_lock)."""

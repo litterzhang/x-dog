@@ -107,7 +107,7 @@ async def test_executor_rejects_incomplete_checkpoint_schema(tmp_path: Path) -> 
         nodes=(NodeDef(id="a", type="script", code="def a(ctx):\n    return None"),),
         edges=(),
     )
-    with pytest.raises(Exception, match="current seven-field schema"):
+    with pytest.raises(Exception, match="does not match the current schema"):
         await execute(wf, checkpoint=store, run_id="old")
 
 
@@ -281,6 +281,7 @@ def node2(ctx, val: str) -> str:
     assert snap is not None
     assert set(snap) == {
         "outputs",
+        "sessions",
         "completed",
         "loop_counters",
         "stack",

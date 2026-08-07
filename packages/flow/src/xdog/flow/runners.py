@@ -44,6 +44,13 @@ class AgentRunner(Protocol):
     ``inputs``/``step``/``fan_index`` describe *which* activation this turn belongs
     to.  The SDK and CLI backends ignore them; :class:`StubRunner` uses them to pick
     a test stub deterministically (see :class:`NodeStubs`).
+
+    ``session`` is a dumped agent session to start from (``inherit``), and
+    ``session_sink`` is where this turn leaves its own for a later node.  Both
+    are passed rather than returned so the ``(value, tokens)`` contract — shared
+    with script, human and subflow nodes in both engines — stays put.  A ``None``
+    session means start cold: absent is not an error, since a self-inheriting
+    loop has none on its first pass.
     """
 
     async def run(
@@ -57,6 +64,8 @@ class AgentRunner(Protocol):
         inputs: Mapping[str, object],
         step: int,
         fan_index: int | None,
+        session: Mapping[str, object] | None = None,
+        session_sink: dict[str, object] | None = None,
     ) -> tuple[object, int]: ...
 
 
@@ -133,9 +142,27 @@ class StubRunner:
         inputs: Mapping[str, object],
         step: int,
         fan_index: int | None,
+        session: Mapping[str, object] | None = None,
+        session_sink: dict[str, object] | None = None,
     ) -> tuple[object, int]:
-        _ = (system_prompt, user_prompt, model, timeout)
-        return self._stubs.agent(node, inputs=inputs, step=step, fan_index=fan_index)
+        _ = timeout
+        value, tokens = self._stubs.agent(node, inputs=inputs, step=step, fan_index=fan_index)
+        if session_sink is not None:
+            # Synthesise the turn a real agent would have had.  Without this,
+            # every `xdog-flow test` of an inheriting workflow would see an empty
+            # context and pass for the wrong reason.
+            prior = list(session.get("messages", [])) if session else []
+            text = value if isinstance(value, str) else repr(value)
+            session_sink["session"] = {
+                "messages": [
+                    *prior,
+                    {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": text}]},
+                ],
+                "system_prompt": system_prompt,
+                "model": model,
+            }
+        return value, tokens
 
 
 
@@ -169,6 +196,8 @@ class SdkRunner:
         inputs: Mapping[str, object],
         step: int,
         fan_index: int | None,
+        session: Mapping[str, object] | None = None,
+        session_sink: dict[str, object] | None = None,
     ) -> tuple[object, int]:
         _ = (inputs, step, fan_index)  # activation identity: only StubRunner needs it
         from xdog.agent.agent import Agent
@@ -206,6 +235,14 @@ class SdkRunner:
             web_search_fn=web_search_fn,
         )
 
+        if session:
+            agent.restore(session)
+            # The node's own fields override what it inherited.
+            if node.system_prompt:
+                agent.set_system_prompt(final_sys_prompt)
+            if node.model:
+                agent.set_model(model)
+
         accumulated: list[str] = []
         total_tokens = 0
 
@@ -225,6 +262,9 @@ class SdkRunner:
                         total_tokens += _u.total_tokens or (_u.input + _u.output)
 
         await asyncio.wait_for(_drain(), timeout=timeout)
+
+        if session_sink is not None:
+            session_sink["session"] = agent.dump()
 
         if structured:
             result_obj = sink.get("result")
@@ -514,6 +554,8 @@ class CliRunner:
         inputs: Mapping[str, object],
         step: int,
         fan_index: int | None,
+        session: Mapping[str, object] | None = None,
+        session_sink: dict[str, object] | None = None,
     ) -> tuple[object, int]:
         _ = (inputs, step, fan_index)  # activation identity: only StubRunner needs it
         structured = agent_is_structured(node)
