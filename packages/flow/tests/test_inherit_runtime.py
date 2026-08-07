@@ -238,3 +238,49 @@ async def test_a_checkpoint_written_before_inherit_existed_still_resumes() -> No
     )
 
     assert not result.runtime["failed"], "the resumed run should complete"
+
+
+async def test_a_node_with_no_incoming_data_can_still_recall_the_parent_turn() -> None:
+    """The control experiment, as a test.
+
+    Verified against a real model first: with `inherit`, the second node
+    reproduced the exact noun and number the first invented; without it — the
+    same workflow, one field removed — it answered NO_MEMORY. The edge carries
+    an empty `map`, so there is no port through which the answer could arrive.
+    """
+    from xdog.flow.executor import execute
+
+    workflow = parse_workflow({
+        "name": "inherit-proof",
+        "provider": "copilot",
+        "defaults": {"model": "m"},
+        "entry": "pick",
+        "state": {"seed": "unused"},
+        "nodes": [
+            {"id": "pick", "type": "agent", "inputs": ["seed"],
+             "prompt": "Invent a noun and a number.", "outputs": ["chosen"]},
+            {"id": "recall", "type": "agent", "inherit": {"from": "pick"},
+             "prompt": "What did you choose?", "outputs": ["recalled"]},
+        ],
+        "edges": [
+            {"from": "$in", "to": "pick", "map": {"seed": "seed"}},
+            {"from": "pick", "to": "recall", "map": {}},
+            {"from": "recall", "to": "$output", "map": {"recalled": "result"}},
+        ],
+    })
+
+    seen: dict[str, Any] = {}
+    original = StubRunner.run
+
+    async def _spy(self: StubRunner, node: NodeDef, **kwargs: Any):
+        seen[node.id] = kwargs.get("session")
+        return await original(self, node, **kwargs)
+
+    StubRunner.run = _spy  # type: ignore[method-assign]
+    try:
+        await execute(workflow, stubs=_Recorder({"pick": "NOUN=brumation NUMBER=407"}))
+    finally:
+        StubRunner.run = original  # type: ignore[method-assign]
+
+    # No edge feeds `recall` any port value, so its whole context is inherited.
+    assert "NOUN=brumation NUMBER=407" in _texts(seen["recall"])
