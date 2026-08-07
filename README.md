@@ -275,6 +275,7 @@ written for another client works here unmodified.
 | | |
 |---|---|
 | **[xdog.942295.xyz](https://xdog.942295.xyz)** | documentation, design notes, blog · 文档、设计笔记、博客 |
+| **[CHANGELOG](https://github.com/litterzhang/x-dog/blob/main/CHANGELOG.md)** | what changed since 1.0.0 · 1.0.0 以来的变更 |
 | **[flow's README](https://github.com/litterzhang/x-dog/blob/main/packages/flow/README.md)** | the full workflow schema, execution model and CLI · 完整 schema、执行模型与 CLI |
 | **[examples/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples)** | runnable examples · 可运行示例 |
 | **[depins_enrich/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples/depins_enrich)** | a case study — a workflow that runs unattended every four hours and writes real commits · 案例研究：每四小时无人值守运行并产生真实提交的工作流 |
