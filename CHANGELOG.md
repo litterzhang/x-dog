@@ -8,6 +8,12 @@ project follows [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [1.1.0] — 2026-08-07
+
 ### Added
 
 - **`inherit` on agent nodes** (`xdog-flow`). An agent node can start from
@@ -123,5 +129,6 @@ Also in 1.0:
   **model cannot unload one**, since a skill is often a constraint and the
   constrained party should not hold the release.
 
-[Unreleased]: https://github.com/litterzhang/x-dog/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/litterzhang/x-dog/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/litterzhang/x-dog/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/litterzhang/x-dog/releases/tag/v1.0.0

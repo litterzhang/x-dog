@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "x-dog"
-version = "1.0.0"
+version = "1.1.0"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE-EXCEPTION.md"]
 requires-python = ">=3.12"
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
