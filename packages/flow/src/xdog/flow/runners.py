@@ -151,7 +151,8 @@ class StubRunner:
             # Synthesise the turn a real agent would have had.  Without this,
             # every `xdog-flow test` of an inheriting workflow would see an empty
             # context and pass for the wrong reason.
-            prior = list(session.get("messages", [])) if session else []
+            raw_prior = session.get("messages") if session else None
+            prior = list(raw_prior) if isinstance(raw_prior, list) else []
             text = value if isinstance(value, str) else repr(value)
             session_sink["session"] = {
                 "messages": [

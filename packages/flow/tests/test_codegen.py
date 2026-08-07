@@ -22,7 +22,17 @@ from pathlib import Path
 from xdog.flow.codegen import generate
 from xdog.flow.events import NodeFinished, NodeStarted
 from xdog.flow.executor import ExecResult, execute
-from xdog.flow.models import IN_NODE_ID, Condition, EdgeDef, NodeDef, Port, RetryPolicy, WorkflowDef
+from xdog.flow.models import (
+    IN_NODE_ID,
+    OUT_NODE_ID,
+    Condition,
+    EdgeDef,
+    InheritSpec,
+    NodeDef,
+    Port,
+    RetryPolicy,
+    WorkflowDef,
+)
 
 
 def _interp_out(result: ExecResult) -> dict[str, dict[str, str]]:
@@ -1875,3 +1885,98 @@ def test_generated_run_ref_workflow_with_compound_condition_is_ruff_clean() -> N
     assert "from zulu_module import consume as _script_omega" in src
     ok, msg = _ruff_clean(src)
     assert ok, f"ruff failed:\n{msg}"
+
+
+def _make_inheriting_wf() -> WorkflowDef:
+    """researcher -> critic, where the critic starts from the researcher's session."""
+    return WorkflowDef(
+        name="inherit-parity",
+        provider="anthropic",
+        entry="researcher",
+        default_model="m",
+        nodes=(
+            NodeDef(id="researcher", prompt="research it", output_ports=(Port("out"),)),
+            NodeDef(
+                id="critic",
+                prompt="critique it",
+                input_ports=(Port("seed", required=False),),
+                output_ports=(Port("out"),),
+                inherit=InheritSpec(from_node="researcher"),
+            ),
+        ),
+        edges=(
+            EdgeDef(src="researcher", dst="critic", mapping=(("out", "seed"),)),
+            EdgeDef(src="critic", dst=OUT_NODE_ID, mapping=(("out", "result"),)),
+        ),
+    )
+
+
+async def test_generate_inherit_parity() -> None:
+    """interpret == compile for a workflow whose second agent inherits the first.
+
+    The generated module carries sessions in its own `_SESSIONS` global, mirroring
+    the interpreter's store. Nothing structural keeps the two in step — only this.
+    """
+    import types
+
+    import xdog.agent.helpers as _agent_helpers
+    import xdog.ai as _ai
+    from xdog.flow.executor import execute
+
+    wf = _make_inheriting_wf()
+    src = generate(wf)
+
+    stub = _plain_text_stream_fn("said something")
+    original_sfp = _agent_helpers.stream_fn_from_provider
+    original_ai_provider = _ai.provider
+    _agent_helpers.stream_fn_from_provider = lambda _p: stub  # type: ignore[assignment]
+    _ai.provider = lambda _name: object()  # type: ignore[assignment]
+    gen_module = types.ModuleType("_inherit_module")
+    try:
+        exec(compile(src, "<inherit>", "exec"), gen_module.__dict__)  # noqa: S102
+        await gen_module.main()  # type: ignore[attr-defined]
+        gen_state = {k: dict(v) for k, v in gen_module._OUT.items()}  # type: ignore[attr-defined]
+        gen_sessions = dict(gen_module._SESSIONS)  # type: ignore[attr-defined]
+
+        interp = await execute(wf, stream_fn_factory=lambda _m: stub)  # type: ignore[arg-type]
+    finally:
+        _agent_helpers.stream_fn_from_provider = original_sfp  # type: ignore[assignment]
+        _ai.provider = original_ai_provider  # type: ignore[assignment]
+
+    assert gen_state == _interp_out(interp)
+
+    # Both nodes left a session behind, and the critic's carries the researcher's
+    # turn — an implementation that resolved `inherit` and then passed nothing
+    # would still satisfy the equality above.
+    assert set(gen_sessions) == {"researcher", "critic"}
+    critic_texts = [
+        part["text"]
+        for message in gen_sessions["critic"]["messages"]
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "text"
+    ]
+    assert "research it" in critic_texts, "the critic did not inherit the researcher's turn"
+    assert "critique it" in critic_texts
+
+
+def _plain_text_stream_fn(text: str) -> object:
+    """A stub stream_fn that replies with *text* and calls no tools."""
+    import asyncio as _asyncio
+
+    from xdog.ai.types import AssistantMessage, DoneEvent, TextContent
+    from xdog.ai.utils.event_stream import EventStream as AiEventStream
+
+    def _fn(model_id: object, context: object, options: object = None) -> "AiEventStream[AssistantMessage]":
+        stream: AiEventStream[AssistantMessage] = AiEventStream()
+        msg = AssistantMessage(content=(TextContent(text=text),), stop_reason="stop")
+
+        async def _push() -> None:
+            await _asyncio.sleep(0)
+            await stream.send(DoneEvent(stop_reason=msg.stop_reason, message=msg))
+            stream.set_result(msg)
+            await stream.close()
+
+        _asyncio.ensure_future(_push())  # noqa: RUF006
+        return stream
+
+    return _fn

@@ -461,6 +461,43 @@ names matching the declared input ports.
 
 ---
 
+## Shared agent context (`inherit`)
+
+An agent node normally starts cold: a fresh agent, one turn, discarded. `inherit`
+starts it from another agent node's session instead — the messages and the system
+prompt — so "research, then critique your own findings" does not have to
+re-establish the context through a port.
+
+```jsonc
+{
+  "id": "critique",
+  "type": "agent",
+  "inherit": { "from": "research" },
+  "system_prompt": "You are now a harsh reviewer of your own work.",  // overrides
+  "prompt": "Critique the findings you just produced."
+}
+```
+
+The edge from `research` to `critique` can carry an empty `map`: it establishes
+order and reachability, while the session carries the context. Tools are never
+inherited — a node's capabilities stay readable from the node itself.
+
+**A node may inherit from itself.** In a loop that is the point: the node keeps
+its own context across iterations, so a reviser remembers what it already tried.
+On the first pass there is no session yet, which is not an error — the same
+lenient-on-first-pass rule as a non-required loop-carried port.
+
+**Strict at load, lenient at run.** The reference is checked before anything
+runs: it must name an existing agent node, declared earlier or itself, that
+always executes. Two rejections are worth knowing because they otherwise fail
+silently — a `deterministic` source returns memoised ports *without running*, so
+it never produces a session at all; and a fan-out worker runs N times under one
+node id, so "the" session is ambiguous. What is lenient is only a *missing*
+session for a reference already known to be sound.
+
+CLI backends (`claude-cli`, `codex-cli`) cannot take part in either direction:
+the CLI owns its own session, and flow can neither read nor seed it.
+
 ## Per-node tools
 
 Agent nodes can declare a `"tools"` list.  Each name is resolved from the

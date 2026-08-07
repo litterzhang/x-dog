@@ -218,6 +218,10 @@ $sdk_registry
 # Node-private outputs: _OUT[node_id][port] = value.  The reserved source node
 # carries the workflow's initial values.
 _OUT: dict[str, dict[str, object]] = $in_seed
+# Dumped agent sessions, node id -> session, for nodes that declare `inherit`.
+# A missing entry means start cold: the first pass of a self-inheriting loop has
+# none yet, and a skipped branch never produces one. Neither is an error.
+_SESSIONS: dict[str, dict[str, object]] = {}
 # Per-node execution trace (delta frames) and the collected workflow output.
 _STACK: list[dict[str, object]] = []
 _OUTPUT: dict[str, object] = {}
@@ -278,11 +282,17 @@ def _load_checkpoint() -> None:
     with p.open(encoding="utf-8") as _fh:
         _snap: dict[str, object] = json.load(_fh)
     expected = {"outputs", "completed", "loop_counters", "stack", "out_live", "memo", "tokens_used"}
-    if set(_snap) != expected:
-        raise WorkflowExecutionError("checkpoint does not match the current seven-field schema")
+    # `sessions` is optional so a checkpoint written before `inherit` existed
+    # still resumes, carrying no sessions — the same state a run has before any
+    # agent node has spoken.
+    if set(_snap) - {"sessions"} != expected:
+        raise WorkflowExecutionError("checkpoint does not match the current schema")
     _out, _done = _snap["outputs"], _snap["completed"]
     _lc, _stk = _snap["loop_counters"], _snap["stack"]
     _outp, _mem, _tok = _snap["out_live"], _snap["memo"], _snap["tokens_used"]
+    _sess = _snap.get("sessions") or {}
+    if isinstance(_sess, dict):
+        _SESSIONS.update({str(k): dict(v) for k, v in _sess.items() if isinstance(v, dict)})
     if not isinstance(_out, dict) or not isinstance(_done, list):
         raise WorkflowExecutionError("checkpoint outputs/completed have invalid types")
     if not isinstance(_lc, dict) or not isinstance(_stk, list):
@@ -308,6 +318,7 @@ def _load_checkpoint() -> None:
 def _checkpoint_snapshot() -> dict[str, object]:
     return {
         "outputs": _OUT,
+        "sessions": _SESSIONS,
         "completed": list(_COMPLETED),
         "stack": _STACK,
         "out_live": _OUTPUT,

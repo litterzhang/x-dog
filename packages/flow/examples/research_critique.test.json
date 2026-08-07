@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "name": "each stage builds on the last",
+      "inputs": {
+        "topic": "why B-trees beat binary trees on disk"
+      },
+      "agents": {
+        "research": {
+          "findings": "B-trees have high fan-out, so fewer disk seeks."
+        },
+        "critique": {
+          "critique": "I asserted fan-out without numbers, and never mentioned cache lines."
+        },
+        "revise": {
+          "final": "B-trees have high fan-out (100+ keys per node), so a lookup costs far fewer disk seeks than a binary tree's one comparison per level. Cache-line behaviour matters too."
+        }
+      },
+      "expect": {
+        "success": true,
+        "output": {
+          "result": "B-trees have high fan-out (100+ keys per node), so a lookup costs far fewer disk seeks than a binary tree's one comparison per level. Cache-line behaviour matters too."
+        }
+      }
+    }
+  ]
+}

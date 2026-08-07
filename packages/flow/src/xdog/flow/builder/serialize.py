@@ -88,6 +88,8 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["allowed_tools"] = list(node.allowed_tools)
     if node.mcp_servers:
         data["mcp_servers"] = {name: spec for name, spec in node.mcp_servers}
+    if node.inherit is not None:
+        data["inherit"] = {"from": node.inherit.from_node}
     return data
 
 

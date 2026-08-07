@@ -1,0 +1,74 @@
+{
+  "name": "research-then-critique",
+  "provider": "copilot",
+  "defaults": {
+    "model": "gpt-5.6-sol"
+  },
+  "entry": "research",
+  "state": {
+    "topic": "why B-trees beat binary trees on disk"
+  },
+  "nodes": [
+    {
+      "id": "research",
+      "type": "agent",
+      "inputs": [
+        "topic"
+      ],
+      "system_prompt": "You are a careful technical researcher. Show your reasoning.",
+      "prompt": "Research this and give your findings: {{$.topic}}",
+      "outputs": [
+        "findings"
+      ]
+    },
+    {
+      "id": "critique",
+      "type": "agent",
+      "inherit": {
+        "from": "research"
+      },
+      "system_prompt": "You are now a harsh reviewer of your own work.",
+      "prompt": "Critique the findings you just produced. What did you overstate, and what did you not check?",
+      "outputs": [
+        "critique"
+      ]
+    },
+    {
+      "id": "revise",
+      "type": "agent",
+      "inherit": {
+        "from": "critique"
+      },
+      "prompt": "Rewrite your findings, addressing every point in your critique.",
+      "outputs": [
+        "final"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "research",
+      "map": {
+        "topic": "topic"
+      }
+    },
+    {
+      "from": "research",
+      "to": "critique",
+      "map": {}
+    },
+    {
+      "from": "critique",
+      "to": "revise",
+      "map": {}
+    },
+    {
+      "from": "revise",
+      "to": "$output",
+      "map": {
+        "final": "result"
+      }
+    }
+  ]
+}

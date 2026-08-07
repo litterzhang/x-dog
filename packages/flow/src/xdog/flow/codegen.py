@@ -146,6 +146,8 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     tools: tuple[AgentTool, ...] = (),
     output_schema: dict[str, object] | None = None,
     web_search_model: str | None = None,
+    inherit_from: str | None = None,
+    node_id: str = "",
 ) -> tuple[object, int]:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
     # Structured output: register submit_result + a result sink, and instruct the
@@ -173,6 +175,16 @@ _SDK_RUN_AGENT = '''async def _run_agent(
         tool_ctx=_tool_ctx,
         web_search_fn=_web_search_fn,
     )
+    # `inherit`: adopt an earlier node's session, then let this node's own
+    # fields win. A missing session means start cold — the first pass of a
+    # self-inheriting loop has none, and that is not an error.
+    _inherited = _SESSIONS.get(inherit_from) if inherit_from else None
+    if _inherited:
+        agent.restore(_inherited)
+        if system_prompt:
+            agent.set_system_prompt(_sys)
+        if model:
+            agent.set_model(model)
     accumulated: list[str] = []
     _node_tokens = 0
     event_stream = await agent.prompt(prompt)
@@ -187,6 +199,8 @@ _SDK_RUN_AGENT = '''async def _run_agent(
                 # Mirrors flow.executor's token accounting: some providers leave
                 # total_tokens at 0 but fill input/output, so fall back to their sum.
                 _node_tokens += _u.total_tokens or (_u.input + _u.output)
+    if node_id:
+        _SESSIONS[node_id] = agent.dump()
     if output_schema is not None:
         _result_obj = _sink.get("result")
         if _result_obj is None:
@@ -632,6 +646,9 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
         _call_args.append(f"output_schema={agent_output_schema(node)!r}")
     if node.web_search:
         _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
+    if node.inherit is not None:
+        _call_args.append(f'inherit_from="{_ESC(node.inherit.from_node)}"')
+    _call_args.append(f'node_id="{_ESC(node.id)}"')
     _core = f"    result, _node_tokens = await _run_agent({', '.join(_call_args)})"
     lines.append(_core if len(_core) <= 120 else _core + "  # noqa: E501")
     lines.append("    _out: dict[str, object] = {}")
