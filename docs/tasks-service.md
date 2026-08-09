@@ -89,7 +89,10 @@ positions:
   blank page.
 - **Authoring is a run step, with a blast radius.** A generated workflow runs
   immediately but only within a sandbox: no `bash`, a token budget, a wall clock,
-  and a tool allow-list per task class.
+  and a tool allow-list per task class. The filesystem half of that is
+  [workspace confinement](./workspace-confinement.md), which does not exist yet —
+  and note that today a `script` node runs unrestricted Python, so this position
+  is not currently available at all.
 
 The first is the smaller claim and almost certainly the right start. The second
 is the more exciting demo and the one that will produce an incident.
