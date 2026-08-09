@@ -36,7 +36,7 @@ from xdog.flow.errors import WorkflowPaused, WorkflowValidationError
 from xdog.flow.events import FlowEvent, NodeFailed, NodeFinished, NodeStarted
 from xdog.flow.executor import execute
 from xdog.flow.graph import to_ascii, to_mermaid
-from xdog.flow.loader import validation_errors
+from xdog.flow.loader import unconfinable_reasons, validation_errors
 from xdog.flow.result import build_run_result
 
 # ---------------------------------------------------------------------------
@@ -186,6 +186,9 @@ async def _cmd_run(
     dry_run: bool,
     timeout: float = 120.0,
     inputs: dict[str, object] | None = None,
+    confined: bool = False,
+    workspace: str | None = None,
+    allow_paths: list[str] | None = None,
 ) -> None:
     """Execute a workflow and print a stable structured result envelope."""
     start_time = time.time()
@@ -212,6 +215,22 @@ async def _cmd_run(
             logging.getLogger("flow").debug("run inputs override $in: %s", inputs)
 
         base_dir = Path(config_path).resolve().parent
+
+        confine_kwargs: dict[str, object] = {}
+        if confined:
+            reasons = unconfinable_reasons(wf)
+            if reasons:
+                # Refusing is what makes the flag honest. Running anyway would
+                # confine nothing while looking like it had.
+                print(f"error: {wf.name!r} cannot be confined:")
+                for reason in reasons:
+                    print(f"  - {reason}")
+                raise SystemExit(2)
+            confine_kwargs = {
+                "workspace": Path(workspace).resolve() if workspace else base_dir / "runtime",
+                "allow_paths": [Path(p).resolve() for p in (allow_paths or ())],
+            }
+
         if dry_run:
             result = await execute(
                 wf,
@@ -220,6 +239,7 @@ async def _cmd_run(
                 base_dir=base_dir,
                 inputs=inputs,
                 on_event=_track,
+                **confine_kwargs,  # type: ignore[arg-type]
             )
         elif provider is not None:
             import xdog.ai as ai
@@ -237,10 +257,16 @@ async def _cmd_run(
                 base_dir=base_dir,
                 inputs=inputs,
                 on_event=_track,
+                **confine_kwargs,  # type: ignore[arg-type]
             )
         else:
             result = await execute(
-                wf, timeout=timeout, base_dir=base_dir, inputs=inputs, on_event=_track
+                wf,
+                timeout=timeout,
+                base_dir=base_dir,
+                inputs=inputs,
+                on_event=_track,
+                **confine_kwargs,  # type: ignore[arg-type]
             )
     except Exception as exc:
         envelope = build_run_result(
@@ -480,6 +506,31 @@ def main(argv: list[str] | None = None) -> None:
         "--timeout", type=float, default=120.0, help="Per-node wall-clock timeout in seconds (default 120)"
     )
     run_p.add_argument(
+        "--confined",
+        action="store_true",
+        help=(
+            "Bound filesystem access to a workspace (default <workflow dir>/runtime). "
+            "Refuses workflows containing an inline 'code' script, the 'bash' tool, "
+            "or a CLI backend, since none of those can be confined cooperatively."
+        ),
+    )
+    run_p.add_argument(
+        "--workspace",
+        metavar="DIR",
+        help="Workspace directory for --confined (default: <workflow dir>/runtime)",
+    )
+    run_p.add_argument(
+        "--allow-path",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help=(
+            "Grant --confined access to another directory (repeatable). "
+            "Deliberately a run-time flag: a workflow that could declare its own "
+            "access would not be confined by it."
+        ),
+    )
+    run_p.add_argument(
         "-v", "--verbose", action="store_true", help="Show DEBUG logs (node execution, loop firing)"
     )
 
@@ -570,6 +621,9 @@ def main(argv: list[str] | None = None) -> None:
                 dry_run=args.dry_run,
                 timeout=args.timeout,
                 inputs=_parse_inputs(args.input),
+                confined=args.confined,
+                workspace=args.workspace,
+                allow_paths=args.allow_path,
             )
         )
     elif args.command == "generate":

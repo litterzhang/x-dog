@@ -141,3 +141,149 @@ async def test_confinement_survives_a_structured_node(
 
     assert _CapturingAgent.seen[CONFINE_CTX_KEY] == [str(workspace)]
     assert "flow_result_sink" in _CapturingAgent.seen, "and the sink is still there"
+
+
+# -- What --confined refuses, and why it must -------------------------------
+
+
+def _wf(nodes: list[dict], edges: list[dict]) -> Any:
+    from xdog.flow.loader import parse_workflow
+
+    return parse_workflow({
+        "name": "c", "provider": "p", "defaults": {"model": "m"},
+        "entry": nodes[0]["id"], "nodes": nodes, "edges": edges,
+    })
+
+
+def test_a_confinable_workflow_has_no_reasons() -> None:
+    from xdog.flow.loader import unconfinable_reasons
+
+    wf = _wf(
+        [{"id": "a", "type": "agent", "prompt": "go", "tools": ["filesystem"],
+          "outputs": ["out"]}],
+        [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    )
+    assert unconfinable_reasons(wf) == []
+
+
+def test_an_inline_script_cannot_be_confined() -> None:
+    """`exec(node.code, namespace)` runs in the executor's own process, so no
+    path check is ever consulted. Confining a workflow containing one would be a
+    promise nothing keeps."""
+    from xdog.flow.loader import unconfinable_reasons
+
+    wf = _wf(
+        [{"id": "s", "type": "script", "code": "def s(ctx):\n    return 1", "outputs": ["out"]}],
+        [{"from": "s", "to": "$output", "map": {"out": "r"}}],
+    )
+    reasons = unconfinable_reasons(wf)
+
+    assert len(reasons) == 1
+    assert "unrestricted Python" in reasons[0]
+
+
+def test_a_run_ref_script_can_be_confined() -> None:
+    """`run: module:callable` imports reviewed code from disk rather than
+    executing text carried inside the workflow — the same trust as any other
+    dependency, so it is not a reason to refuse."""
+    from xdog.flow.loader import unconfinable_reasons
+
+    wf = _wf(
+        [{"id": "s", "type": "script", "run": "mymod:fn", "outputs": ["out"]}],
+        [{"from": "s", "to": "$output", "map": {"out": "r"}}],
+    )
+    assert unconfinable_reasons(wf) == []
+
+
+def test_bash_and_cli_backends_cannot_be_confined() -> None:
+    from xdog.flow.loader import unconfinable_reasons
+
+    with_bash = _wf(
+        [{"id": "a", "type": "agent", "prompt": "go", "tools": ["bash"], "outputs": ["out"]}],
+        [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    )
+    assert any("general-purpose escape" in r for r in unconfinable_reasons(with_bash))
+
+    with_cli = _wf(
+        [{"id": "a", "type": "agent", "prompt": "go", "backend": "claude-cli",
+          "outputs": ["out"]}],
+        [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    )
+    assert any("owns its own session" in r for r in unconfinable_reasons(with_cli))
+
+
+def test_a_subflow_hides_nothing() -> None:
+    """A child workflow runs in the parent's process too, so an inline script
+    buried in one is exactly as unconfinable — and much easier to miss."""
+    from xdog.flow.loader import unconfinable_reasons
+
+    wf = _wf(
+        [{"id": "outer", "type": "subflow", "subflow": {
+            "name": "child", "provider": "p", "defaults": {"model": "m"},
+            "entry": "inner",
+            "nodes": [{"id": "inner", "type": "script",
+                       "code": "def inner(ctx):\n    return 1", "outputs": ["out"]}],
+            "edges": [{"from": "inner", "to": "$output", "map": {"out": "out"}}],
+        }}],
+        [{"from": "outer", "to": "$output", "map": {"out": "r"}}],
+    )
+    reasons = unconfinable_reasons(wf)
+
+    assert reasons and "subflow 'outer'" in reasons[0]
+
+
+# -- interpret == compile ----------------------------------------------------
+
+
+def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
+    """The invariant, and the one place it matters most.
+
+    Confinement shipped in the interpreter first and codegen knew nothing about
+    it, so the same write that `--confined` refused succeeded when the workflow
+    was compiled. Nothing failed; the bound simply was not there. A divergence
+    in the *permissive* direction is the worst kind, because the run that skips
+    the check is the one that looks like it worked.
+    """
+    import os
+    import re
+
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "c", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go", "tools": ["filesystem"],
+                   "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    })
+    source = generate(wf)
+
+    # The generated module reads its bound from the environment, never from its
+    # own source — a module told by its own text what it may touch is not bound.
+    assert "FLOW_WORKSPACE" in source
+    assert "fs_confine_to" in source
+    assert not re.search(r'fs_confine_to["\']\s*:\s*\[["\']/', source), (
+        "a hard-coded root would mean the workflow granted its own access"
+    )
+
+    namespace: dict[str, Any] = {}
+    exec(compile(source, "<gen>", "exec"), namespace)  # noqa: S102 - our own output
+
+    roots = namespace["_confinement_roots"]
+    workspace = tmp_path / "runtime"
+
+    old = os.environ.pop("FLOW_WORKSPACE", None)
+    try:
+        assert roots() is None, "unset means unconfined, matching the interpreter"
+
+        os.environ["FLOW_WORKSPACE"] = str(workspace)
+        assert roots() == [str(workspace.resolve())]
+
+        os.environ["FLOW_ALLOW_PATHS"] = str(tmp_path / "data")
+        assert roots() == [str(workspace.resolve()), str((tmp_path / "data").resolve())]
+    finally:
+        os.environ.pop("FLOW_ALLOW_PATHS", None)
+        if old is None:
+            os.environ.pop("FLOW_WORKSPACE", None)
+        else:
+            os.environ["FLOW_WORKSPACE"] = old

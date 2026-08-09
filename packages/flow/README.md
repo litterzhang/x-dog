@@ -498,6 +498,56 @@ session for a reference already known to be sound.
 CLI backends (`claude-cli`, `codex-cli`) cannot take part in either direction:
 the CLI owns its own session, and flow can neither read nor seed it.
 
+## Workspace confinement (`--confined`)
+
+A run can be bounded to a directory. Its tools may then read and write inside
+that workspace and nowhere else.
+
+```bash
+xdog-flow run report.json --confined                      # <workflow dir>/runtime
+xdog-flow run report.json --confined --workspace ./scratch
+xdog-flow run report.json --confined --allow-path ~/data  # grant another tree
+```
+
+**The grant is never part of the workflow.** A workflow that could declare its
+own access would not be confined by it — and these are shareable artifacts that
+an agent may have written. The same applies to a compiled module, which reads
+its bound from the environment rather than its own source:
+
+```bash
+FLOW_WORKSPACE=./runtime FLOW_ALLOW_PATHS=/data python workflow.py
+```
+
+### What it refuses, and why that is the point
+
+`--confined` will not run a workflow it cannot actually confine:
+
+| Refused | Reason |
+|---|---|
+| a `script` node with inline `code` | it runs unrestricted Python in the executor's own process, so no path check is ever consulted |
+| the `bash` tool | a shell is a general-purpose escape |
+| a CLI backend | the subprocess owns its own filesystem access |
+
+A `script` node using `run: module:callable` is fine — it imports reviewed code
+from disk rather than executing text carried inside the workflow. Subflows are
+checked too, since an inline script buried in a child is exactly as unconfinable
+and much easier to miss.
+
+Refusing is what makes the flag mean something. Running anyway would confine
+nothing while looking like it had.
+
+### What this is and is not
+
+It is **containment**: every filesystem access in a confinable workflow goes
+through a tool that checks the path against the allowlist, resolving symlinks so
+a link out of the workspace is caught by where it lands. That stops the
+realistic failure — an agent that wanders into `~/.ssh`.
+
+It is **not a sandbox**. Nothing here restricts the process at the OS level; the
+guarantee comes entirely from the refusals above holding. Confining a run
+properly would mean a subprocess plus Landlock or `bwrap`, which is a much larger
+change — see [`docs/workspace-confinement.md`](../../docs/workspace-confinement.md).
+
 ## Per-node tools
 
 Agent nodes can declare a `"tools"` list.  Each name is resolved from the

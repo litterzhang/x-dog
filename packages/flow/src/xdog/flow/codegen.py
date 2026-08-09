@@ -153,11 +153,22 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # Structured output: register submit_result + a result sink, and instruct the
     # agent to call it.  The submitted object becomes the node's structured output.
     _sink: dict[str, object] = {}
-    _tool_ctx: dict[str, object] | None = None
+    # Confinement is a run-time decision, so it arrives from the environment
+    # rather than from the workflow — a generated module that could be told by
+    # its own source which directories it may touch would not be confined by it.
+    # Kept identical to the interpreter: absent means unconfined, present means
+    # the workspace plus any granted trees are the whole allowance.
+    _tool_ctx: dict[str, object] | None = (
+        {"fs_confine_to": _confinement_roots()} if _confinement_roots() is not None else None
+    )
     _sys = system_prompt
     if output_schema is not None:
         tools = tools + (create_submit_result_tool(),)
-        _tool_ctx = {"flow_output_schema": output_schema, "flow_result_sink": _sink}
+        _tool_ctx = {
+            **(_tool_ctx or {}),
+            "flow_output_schema": output_schema,
+            "flow_result_sink": _sink,
+        }
         _props = output_schema.get("properties")
         _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
         _sys = system_prompt + (
