@@ -45,6 +45,68 @@ happened, which is the point.
 
 ---
 
+## Recommendation, and what it costs
+
+**Take the cooperative path, and make it refuse what it cannot confine.** Not the
+OS sandbox, not yet.
+
+The reason is not that enforcement is unimportant — it is that cooperative
+confinement can be made to give a *real* guarantee for a *subset* of workflows,
+and that subset is checkable before anything runs. flow already knows every
+node's kind at validate time. So:
+
+```bash
+xdog-flow run report.json --confined --allow-read ~/data
+```
+
+`--confined` refuses to run a workflow that contains anything unconfinable:
+
+| Refused | Why |
+|---|---|
+| a `script` node with inline `code` | `executor.py:129` is `exec(node.code, namespace)`, carrying the comment *"inline workflow code, trusted author"*. That comment **is** the current security model, and it stops being true the moment an AI writes the workflow. |
+| the `bash` tool | a shell is a general-purpose escape; there is no cooperative version of confining it |
+| a CLI backend | the subprocess owns its own filesystem access |
+
+What is left — agent nodes with the filesystem tool, and `script` nodes using
+`run: module:callable` pointing at reviewed code — **is** fully confined by
+cooperative checks, because every filesystem access in that subset goes through a
+tool that can check. That is a guarantee worth stating, and it is narrow enough
+to state honestly.
+
+The refusal is what makes it honest. Without it, `--confined` on a workflow with
+an inline script would run and confine nothing, which is worse than not having
+the flag.
+
+### Effort
+
+**Cooperative + refusal: about four days.**
+
+| Step | Work | Est. |
+|---|---|---|
+| 1. Workspace exists | `execute(workspace=...)` — the plumbing already has the same shape in `base_dir` (`executor.py:196`), defaulting to `<workflow dir>/runtime`; thread it to the tool factories; **mirror it in codegen**, which is the recurring tax on anything touching execution | 1d |
+| 2. Cooperative confinement | `validate_path` gains an allowlist mode; the filesystem tool honours it. Note this lives in `xdog-agent`, so `xdog-coding` and `xdog-claw` are downstream — they must keep working unconfined by default, which is the current behaviour and therefore free | 2d |
+| 3. `--confined` + grants | a `confinable` check in the loader (reuses the per-node validation it already does), `--allow-read` / `--allow-write`, and the grant recorded in the scheduling unit — since a workflow installed as a timer still needs its grant somewhere that is not the workflow file | 1d |
+
+**OS enforcement: two to three weeks, and it changes a core API.** The blocker is
+not Landlock itself (three syscalls via `ctypes`, two or three days). It is that
+confining a run means putting it in a subprocess, and
+`execute(stream_fn_factory=...)` takes a **Python callable**. A callable does not
+cross a process boundary, so the child would have to construct its own provider
+from configuration — which means credentials cross the boundary, events and
+results need IPC, and every existing caller and test that passes a stub
+`stream_fn` needs another path. That is the real cost, not the syscalls.
+
+It is also Linux-only in practice: macOS `sandbox_init` is deprecated and Windows
+has no close equivalent. Acceptable for a task service running on a server;
+a significant asterisk for a local-first CLI.
+
+**So: build steps 1–3 when something needs them. Build the sandbox only if
+AI-authored workflows are going to run unattended** — which is exactly the
+[tasks service](./tasks-service.md)'s second position, and is the strongest
+argument for its first position instead.
+
+---
+
 ## The honest part: what can actually be enforced
 
 This is where the idea either becomes real or becomes theatre, so it goes near
@@ -129,7 +191,8 @@ Whichever — the workflow should not be the thing that decides.
 
 ## Smallest useful first step
 
-Not the sandbox. The concept:
+See the effort table above; this is the same sequence in prose. Not the sandbox —
+the concept:
 
 1. **A workspace exists.** `execute()` takes one, defaulting to
    `<workflow dir>/runtime`, and it is threaded to the bash tool's `initial_cwd`
