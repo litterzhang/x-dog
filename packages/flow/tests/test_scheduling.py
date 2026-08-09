@@ -190,6 +190,7 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
             dry_run: bool,
             base_dir: Path | None = None,
             venv: bool = True,
+            confine: object = None,
         ) -> str:
             # base_dir carries the workflow's sibling modules into the bundle.
             calls.append(("install", (wf, name, dry_run, base_dir is not None)))

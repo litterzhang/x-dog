@@ -15,6 +15,7 @@ docs/scheduling.md.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,29 @@ from xdog.flow.models import ScheduleDef
 
 # The shared hook listener service name (one per host; see docs/scheduling.md §5).
 LISTENER_SERVICE = "xdog-flow-listener"
+
+
+@dataclass(frozen=True)
+class ConfineGrant:
+    """The workspace a scheduled run is bound to, plus any extra granted trees.
+
+    A scheduled workflow is the case the confinement design was really written
+    for: nobody is watching, and the thing being confined is a file that may
+    have been generated. The grant therefore lives in the **unit**, which the
+    person installing it wrote, and never in the workflow, which they may not
+    have. `install --confined` refuses a workflow it cannot confine, so an
+    unconfinable one fails at install time rather than at 3am.
+    """
+
+    workspace: Path
+    allow_paths: tuple[Path, ...] = ()
+
+    def env(self) -> dict[str, str]:
+        """The variables the bundle reads — the same two the interpreter uses."""
+        out = {"FLOW_WORKSPACE": str(self.workspace)}
+        if self.allow_paths:
+            out["FLOW_ALLOW_PATHS"] = os.pathsep.join(str(p) for p in self.allow_paths)
+        return out
 
 
 @dataclass(frozen=True)
@@ -117,12 +141,19 @@ def _inputs_env(schedule: ScheduleDef) -> str:
 
 
 def render_timer_units(
-    name: str, bundle_dir: Path, schedule: ScheduleDef, *, python: str = "/usr/bin/python3"
+    name: str,
+    bundle_dir: Path,
+    schedule: ScheduleDef,
+    *,
+    python: str = "/usr/bin/python3",
+    confine: ConfineGrant | None = None,
 ) -> RenderedUnits:
     """Render the ``.service`` + ``.timer`` for a timer-mode workflow."""
     assert schedule.mode == "timer"
     inputs = _inputs_env(schedule)
     env_lines = f"Environment=FLOW_INPUTS={inputs}\n" if inputs else ""
+    if confine is not None:
+        env_lines += "".join(f"Environment={k}={v}\n" for k, v in confine.env().items())
     service = (
         "[Unit]\n"
         f"Description=flow workflow: {name}\n"
@@ -163,7 +194,12 @@ def render_timer_units(
 
 
 def render_timer_crontab(
-    name: str, bundle_dir: Path, schedule: ScheduleDef, *, python: str = "/usr/bin/python3"
+    name: str,
+    bundle_dir: Path,
+    schedule: ScheduleDef,
+    *,
+    python: str = "/usr/bin/python3",
+    confine: ConfineGrant | None = None,
 ) -> str:
     """Render a crontab line for a timer workflow (systemd-less fallback).
 
@@ -173,6 +209,8 @@ def render_timer_crontab(
     assert schedule.mode == "timer"
     inputs = _inputs_env(schedule)
     prefix = f"FLOW_INPUTS={shlex.quote(inputs)} FLOW_RUN_ID={name} " if inputs else f"FLOW_RUN_ID={name} "
+    if confine is not None:
+        prefix += "".join(f"{k}={shlex.quote(v)} " for k, v in confine.env().items())
     cron = schedule.cron
     if cron is None:
         # Approximate "every" as a cron step where possible (minutes only), else

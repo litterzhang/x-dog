@@ -21,9 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from xdog.flow.bundle import build_bundle
+from xdog.flow.loader import unconfinable_reasons
 from xdog.flow.models import ScheduleDef, WorkflowDef
 from xdog.flow.scheduler.systemd import (
     LISTENER_SERVICE,
+    ConfineGrant,
     render_listener_service,
     render_timer_units,
 )
@@ -82,6 +84,7 @@ class Installer:
         dry_run: bool = False,
         base_dir: Path | None = None,
         venv: bool = True,
+        confine: ConfineGrant | None = None,
     ) -> str:
         """Build the bundle + install the scheduler for *wf*; return its name.
 
@@ -93,9 +96,23 @@ class Installer:
         runs that environment. An install is then complete on its own rather than
         depending on whatever ``/usr/bin/python3`` happens to be or have. Pass
         ``venv=False`` to reuse :attr:`python` instead.
+
+        *confine* bounds the installed run's filesystem access. It is a parameter
+        here rather than a field of *wf* for the reason the whole feature rests
+        on: a workflow that declares its own access is not confined by it. A
+        workflow that cannot be confined is refused here, at install time, when
+        someone is present to read why.
         """
         if wf.schedule is None:
             raise ValueError(f"workflow {wf.name!r} has no 'schedule' block to install")
+        if confine is not None:
+            reasons = unconfinable_reasons(wf)
+            if reasons:
+                joined = "\n  - ".join(reasons)
+                raise ValueError(
+                    f"workflow {wf.name!r} cannot be confined:\n  - {joined}\n"
+                    "Install without --confined to accept that, or change the nodes named above."
+                )
         name = name or wf.name
         bundle_dir = (self.data_dir / name).resolve()
 
@@ -111,9 +128,9 @@ class Installer:
                 print(f"  would run: uv sync --project {bundle_dir}")
 
         if wf.schedule.mode == "timer":
-            self._install_timer(name, bundle_dir, wf.schedule, dry_run=dry_run, python=python)
+            self._install_timer(name, bundle_dir, wf.schedule, dry_run=dry_run, python=python, confine=confine)
         else:
-            self._install_hook(name, bundle_dir, wf.schedule, dry_run=dry_run)
+            self._install_hook(name, bundle_dir, wf.schedule, dry_run=dry_run, confine=confine)
         return name
 
     def _resolve_uv(self) -> str:
@@ -171,9 +188,16 @@ class Installer:
         return bundle_dir / ".venv" / "bin" / "python"
 
     def _install_timer(
-        self, name: str, bundle_dir: Path, schedule: ScheduleDef, *, dry_run: bool, python: str | None = None
+        self,
+        name: str,
+        bundle_dir: Path,
+        schedule: ScheduleDef,
+        *,
+        dry_run: bool,
+        python: str | None = None,
+        confine: ConfineGrant | None = None,
     ) -> None:
-        units = render_timer_units(name, bundle_dir, schedule, python=python or self.python)
+        units = render_timer_units(name, bundle_dir, schedule, python=python or self.python, confine=confine)
         for fname, text in units.files.items():
             self._write_unit(fname, text, dry_run=dry_run)
         self._run("daemon-reload", dry_run=dry_run)
@@ -181,7 +205,15 @@ class Installer:
             self._run("enable", "--now", unit, dry_run=dry_run)
         self._register(name, {"mode": "timer", "bundle": str(bundle_dir), "units": list(units.files)}, dry_run=dry_run)
 
-    def _install_hook(self, name: str, bundle_dir: Path, schedule: ScheduleDef, *, dry_run: bool) -> None:
+    def _install_hook(
+        self,
+        name: str,
+        bundle_dir: Path,
+        schedule: ScheduleDef,
+        *,
+        dry_run: bool,
+        confine: ConfineGrant | None = None,
+    ) -> None:
         # Ensure the ONE shared listener service exists; add this workflow's route
         # to the registry (which the listener reads) and reload it.
         listener_unit = f"{LISTENER_SERVICE}.service"
@@ -201,6 +233,10 @@ class Installer:
                 "signal": schedule.signal,
                 "listen": schedule.listen,
                 "units": [],  # served by the shared listener, no per-workflow unit
+                # A hook workflow has no unit of its own, so the registry — written
+                # by the installer, never by the workflow — is where its grant lives.
+                # The listener applies it when it spawns the bundle.
+                **({"confine": confine.env()} if confine is not None else {}),
             },
             dry_run=dry_run,
         )

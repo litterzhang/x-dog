@@ -49,6 +49,7 @@ class HookRoute:
     bundle: Path
     signal: str
     listen: dict[str, object]
+    confine: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -90,12 +91,16 @@ class Router:
             if e.get("mode") != "hook" or "bundle" not in e:
                 continue
             listen = e.get("listen")
+            confine = e.get("confine")
             routes.append(
                 HookRoute(
                     name=name,
                     bundle=Path(str(e["bundle"])),
                     signal=str(e.get("signal", "")),
                     listen=listen if isinstance(listen, dict) else {},
+                    confine=(
+                        {str(k): str(v) for k, v in confine.items()} if isinstance(confine, dict) else {}
+                    ),
                 )
             )
         return cls(routes=routes, spawn=spawn)
@@ -104,6 +109,9 @@ class Router:
         env = {"FLOW_SIGNALS": route.signal, "FLOW_RUN_ID": route.name}
         if inputs:
             env["FLOW_INPUTS"] = json.dumps(inputs, sort_keys=True)
+        # The grant recorded at install time. It goes in last so a hostile
+        # `inputs` payload — which arrives over the network — cannot displace it.
+        env.update(route.confine)
         self.spawn(route.bundle, env)
 
     def deliver_http(self, path: str, body: bytes) -> HookRoute:

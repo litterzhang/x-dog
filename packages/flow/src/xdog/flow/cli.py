@@ -425,6 +425,9 @@ def _cmd_scheduling_install(
     dry_run: bool,
     python: str | None = None,
     no_venv: bool = False,
+    confined: bool = False,
+    workspace: str | None = None,
+    allow_paths: list[str] | None = None,
 ) -> None:
     """Install one scheduled workflow."""
     try:
@@ -432,6 +435,15 @@ def _cmd_scheduling_install(
     except (WorkflowValidationError, FileNotFoundError, json.JSONDecodeError) as exc:
         print(str(exc))
         raise SystemExit(1)
+    grant = None
+    if confined:
+        from xdog.flow.scheduler.systemd import ConfineGrant
+
+        base_dir = Path(config_path).resolve().parent
+        grant = ConfineGrant(
+            workspace=Path(workspace).resolve() if workspace else base_dir / "runtime",
+            allow_paths=tuple(Path(p).resolve() for p in (allow_paths or ())),
+        )
     try:
         installed = _scheduling_installer(python).install(
             wf,
@@ -439,6 +451,7 @@ def _cmd_scheduling_install(
             dry_run=dry_run,
             base_dir=Path(config_path).resolve().parent,
             venv=not no_venv,
+            confine=grant,
         )
     except ValueError as exc:
         print(str(exc))
@@ -595,6 +608,31 @@ def main(argv: list[str] | None = None) -> None:
     scheduling_install.add_argument(
         "--dry-run", action="store_true", help="Print units/actions without touching the OS"
     )
+    scheduling_install.add_argument(
+        "--confined",
+        action="store_true",
+        help=(
+            "Record a workspace bound in the installed unit (default <workflow dir>/runtime). "
+            "Refuses to install a workflow containing an inline script, the bash tool, or a "
+            "CLI backend, since none of those can be confined cooperatively."
+        ),
+    )
+    scheduling_install.add_argument(
+        "--workspace",
+        metavar="DIR",
+        help="Workspace directory for --confined (default: <workflow dir>/runtime)",
+    )
+    scheduling_install.add_argument(
+        "--allow-path",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help=(
+            "Grant --confined access to another directory (repeatable). "
+            "The grant lives in the unit, never in the workflow file — a workflow that "
+            "could declare its own access would not be confined by it."
+        ),
+    )
 
     scheduling_uninstall = scheduling_sub.add_parser("uninstall", help="Uninstall a scheduled workflow")
     scheduling_uninstall.add_argument("name", help="Installed workflow name")
@@ -647,6 +685,9 @@ def main(argv: list[str] | None = None) -> None:
                 dry_run=args.dry_run,
                 python=args.python,
                 no_venv=args.no_venv,
+                confined=args.confined,
+                workspace=args.workspace,
+                allow_paths=args.allow_path,
             )
         elif args.scheduling_command == "uninstall":
             _cmd_scheduling_uninstall(args.name, dry_run=args.dry_run)

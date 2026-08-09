@@ -287,3 +287,80 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
             os.environ.pop("FLOW_WORKSPACE", None)
         else:
             os.environ["FLOW_WORKSPACE"] = old
+
+
+# -- the grant in the scheduling unit ----------------------------------------
+
+
+def _scheduled(node: dict) -> Any:
+    from xdog.flow.loader import parse_workflow
+
+    return parse_workflow({
+        "name": "sched", "provider": "p", "defaults": {"model": "m"}, "entry": node["id"],
+        "schedule": {"mode": "timer", "every": "1h"},
+        "nodes": [node],
+        "edges": [{"from": node["id"], "to": "$output", "map": {"out": "r"}}],
+    })
+
+
+def test_the_timer_unit_carries_the_grant(tmp_path: Path) -> None:
+    """A scheduled run is the case confinement was written for: nobody is
+    watching. The unit is where the grant belongs, because the person who wrote
+    the unit is the one with authority to give it."""
+    from xdog.flow.scheduler.systemd import ConfineGrant, render_timer_units
+
+    wf = _scheduled({"id": "a", "type": "agent", "prompt": "go", "tools": ["filesystem"],
+                     "outputs": ["out"]})
+    grant = ConfineGrant(workspace=tmp_path / "runtime", allow_paths=(tmp_path / "data",))
+
+    units = render_timer_units("sched", tmp_path / "bundle", wf.schedule, confine=grant)  # type: ignore[arg-type]
+    service = units.files["sched.service"]
+
+    assert f"Environment=FLOW_WORKSPACE={tmp_path / 'runtime'}" in service
+    assert f"Environment=FLOW_ALLOW_PATHS={tmp_path / 'data'}" in service
+
+
+def test_an_unconfined_install_renders_exactly_what_it_did_before(tmp_path: Path) -> None:
+    """The default path must not change: every existing install is unconfined."""
+    from xdog.flow.scheduler.systemd import render_timer_units
+
+    wf = _scheduled({"id": "a", "type": "agent", "prompt": "go", "outputs": ["out"]})
+
+    service = render_timer_units("sched", tmp_path / "b", wf.schedule).files["sched.service"]  # type: ignore[arg-type]
+
+    assert "FLOW_WORKSPACE" not in service
+
+
+def test_installing_an_unconfinable_workflow_confined_is_refused(tmp_path: Path) -> None:
+    """At install time, when someone is present to read why — rather than at 3am
+    with only a systemd status to explain it."""
+    import pytest
+    from xdog.flow.scheduler.install import Installer
+    from xdog.flow.scheduler.systemd import ConfineGrant
+
+    wf = _scheduled({"id": "s", "type": "script", "code": "def s(ctx):\n    return 1",
+                     "outputs": ["out"]})
+    installer = Installer(unit_dir=tmp_path / "units", data_dir=tmp_path / "data")
+
+    with pytest.raises(ValueError, match="cannot be confined"):
+        installer.install(wf, dry_run=True, confine=ConfineGrant(workspace=tmp_path / "ws"))
+
+
+def test_a_hook_workflow_gets_its_grant_through_the_registry(tmp_path: Path) -> None:
+    """A hook workflow has no unit of its own — the shared listener spawns it —
+    so the registry is the only place the grant can live. If the listener did not
+    apply it, `--confined` would be silently inert for exactly the mode that runs
+    on someone else's schedule."""
+    from xdog.flow.scheduler.listener import HookRoute, Router
+
+    fired: list[dict[str, str]] = []
+    route = HookRoute(
+        name="h", bundle=tmp_path / "b", signal="go",
+        listen={"type": "http", "path": "/h"},
+        confine={"FLOW_WORKSPACE": str(tmp_path / "ws")},
+    )
+    router = Router(routes=[route], spawn=lambda _b, env: fired.append(env))
+
+    router.deliver_http("/h", b'{"x": 1}')
+
+    assert fired[0]["FLOW_WORKSPACE"] == str(tmp_path / "ws")

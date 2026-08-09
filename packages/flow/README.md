@@ -509,6 +509,13 @@ xdog-flow run report.json --confined --workspace ./scratch
 xdog-flow run report.json --confined --allow-path ~/data  # grant another tree
 ```
 
+A scheduled install records the same grant in the unit it writes:
+
+```bash
+xdog-flow scheduling install report.json --confined --allow-path ~/data
+# ... Environment=FLOW_WORKSPACE=/path/to/runtime
+```
+
 **The grant is never part of the workflow.** A workflow that could declare its
 own access would not be confined by it — and these are shareable artifacts that
 an agent may have written. The same applies to a compiled module, which reads
