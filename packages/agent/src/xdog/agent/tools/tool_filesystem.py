@@ -39,6 +39,27 @@ from xdog.ai.types import ImageContent, TextContent
 _file_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
+#: Key a caller puts in ``tool_ctx`` to confine this tool to a set of roots.
+#: Absent means unconfined, which is the historical behaviour and what
+#: xdog-coding and xdog-claw rely on.
+CONFINE_CTX_KEY = "fs_confine_to"
+
+
+def _confinement(ctx: dict[str, Any]) -> list[Path] | None:
+    """The roots this call may touch, or None when the caller set no bound.
+
+    Absent and empty are deliberately different. Absent means "no bound" and
+    allows everything the denylist permits. Empty means the caller computed a
+    bound and it came out empty, which must close the door rather than open it —
+    otherwise a bug upstream that produces no roots silently grants everything,
+    which is the failure this whole feature exists to prevent.
+    """
+    roots = ctx.get(CONFINE_CTX_KEY)
+    if roots is None:
+        return None
+    return [Path(r) for r in roots]
+
+
 class FilesystemTool(ToolDef):
     name = "filesystem"
     description = (
@@ -52,7 +73,7 @@ class FilesystemTool(ToolDef):
             offset=Param("integer", description="Line number to start from (1-based)"),
             limit=Param("integer", description=f"Max lines to return. Default: {_DEFAULT_READ_LIMIT}"))
     async def read(self, ctx: dict[str, Any], path: str, offset: int = 1, limit: int = _DEFAULT_READ_LIMIT) -> str | AgentToolResult:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return _fs_read(Path(path), {"offset": offset, "limit": limit})
@@ -61,7 +82,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Absolute file path"),
             content=Param("string", required=True, description="Content to write"))
     async def write(self, ctx: dict[str, Any], path: str, content: str) -> str:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return _fs_write(Path(path), content)
@@ -69,7 +90,7 @@ class FilesystemTool(ToolDef):
     @action("delete", description="Delete a file",
             path=Param("string", required=True, description="Absolute file path"))
     async def delete(self, ctx: dict[str, Any], path: str) -> str:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return _fs_delete(Path(path))
@@ -85,7 +106,7 @@ class FilesystemTool(ToolDef):
             replace_all=Param("boolean", description="Replace all occurrences"))
     async def edit(self, ctx: dict[str, Any], path: str, old_string: str = "", new_string: str = "",
                    edits: list[Any] | None = None, replace_all: bool = False) -> str | AgentToolResult:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         async with _file_locks[path]:
@@ -98,7 +119,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Absolute directory path"),
             show_hidden=Param("boolean", description="Include hidden files"))
     async def ls(self, ctx: dict[str, Any], path: str, show_hidden: bool = False) -> str | AgentToolResult:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return _fs_ls(Path(path), {"show_hidden": show_hidden})
@@ -113,7 +134,7 @@ class FilesystemTool(ToolDef):
             multiline=Param("boolean"),
             head_limit=Param("integer"))
     async def grep(self, ctx: dict[str, Any], path: str, pattern: str, **kwargs: Any) -> str:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return await _fs_grep(Path(path), {"pattern": pattern, **kwargs}, cancel=ctx.get("_cancel"))
@@ -123,7 +144,7 @@ class FilesystemTool(ToolDef):
             pattern=Param("string", required=True, description="Glob pattern"),
             head_limit=Param("integer"))
     async def find(self, ctx: dict[str, Any], path: str, pattern: str, head_limit: int = _DEFAULT_FIND_LIMIT) -> str:
-        error = validate_path(path)
+        error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
         return await _fs_find(Path(path), {"pattern": pattern, "head_limit": head_limit}, cancel=ctx.get("_cancel"))

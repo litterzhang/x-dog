@@ -13,7 +13,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -200,6 +200,8 @@ async def execute(
     run_id: str | None = None,
     on_event: EventCallback | None = None,
     max_concurrency: int | None = None,
+    workspace: Path | None = None,
+    allow_paths: Sequence[Path] | None = None,
     signals: set[str] | None = None,
     max_tokens: int | None = None,
     stubs: NodeStubs | None = None,
@@ -281,6 +283,14 @@ async def execute(
     # the reserved $in source carrying the workflow's initial values; run-time
     # ``inputs`` override those defaults key-by-key.  Only modified while holding
     # _state_lock or before/after concurrency.
+    # A run is either confined or it is not, and `None` is the historical
+    # unconfined behaviour every existing caller relies on.  Passing a workspace
+    # opts in; the workspace plus any granted trees are the whole allowance.
+    _confinement_roots: list[Path] | None = None
+    if workspace is not None:
+        workspace.mkdir(parents=True, exist_ok=True)
+        _confinement_roots = [workspace, *(allow_paths or ())]
+
     seed: dict[str, object] = dict(wf.initial_state)
     if inputs:
         seed.update(inputs)
@@ -892,6 +902,7 @@ async def execute(
                     stream_fn_factory=stream_fn_factory,
                     tool_registry=tool_registry,
                     web_search_fn_factory=web_search_fn_factory,
+                    confine_to=_confinement_roots,
                 )
             )
         return _sdk_runner_cache[0]

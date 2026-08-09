@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from collections.abc import Sequence
 from pathlib import Path
 
 _MAX_OUTPUT_CHARS = 30_000
@@ -28,8 +29,20 @@ _DEFAULT_FIND_LIMIT = 1000
 _DEFAULT_LS_LIMIT = 500
 
 
-def validate_path(file_path: str) -> str | None:
-    """Validate a file path for security. Returns error message or None."""
+def validate_path(file_path: str, *, confine_to: Sequence[Path] | None = None) -> str | None:
+    """Validate a file path. Returns an error message, or None if it is allowed.
+
+    Two modes, and the difference matters:
+
+    * Without ``confine_to`` this is a **denylist** — a handful of places nothing
+      should touch. An unlisted path is allowed.
+    * With ``confine_to`` it is an **allowlist**: the path must resolve inside one
+      of the given roots. An unlisted path is *denied*.
+
+    The allowlist is the one that confines. It compares resolved paths, so a
+    symlink pointing out of the workspace is caught by where it lands rather than
+    by how it is spelled.
+    """
     if not file_path:
         return "Error: file path must not be empty."
     if not os.path.isabs(file_path):
@@ -45,7 +58,23 @@ def validate_path(file_path: str) -> str | None:
     for blocked in _BLOCKED_DIRS:
         if resolved_str == blocked or resolved_str.startswith(blocked + "/"):
             return f"Error: access to {blocked} is not allowed."
+    if confine_to is not None:
+        if not any(_is_within(resolved, root) for root in confine_to):
+            allowed = ", ".join(str(r) for r in confine_to) or "<nothing>"
+            return (
+                f"Error: {resolved} is outside this run's workspace. "
+                f"Allowed: {allowed}"
+            )
     return None
+
+
+def _is_within(candidate: Path, root: Path) -> bool:
+    """Whether *candidate* is *root* or sits beneath it, after resolution."""
+    try:
+        resolved_root = root.resolve()
+    except (OSError, ValueError):
+        return False
+    return candidate == resolved_root or resolved_root in candidate.parents
 
 
 def truncate(text: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:

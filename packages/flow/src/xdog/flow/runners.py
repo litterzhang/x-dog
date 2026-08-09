@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -181,10 +181,14 @@ class SdkRunner:
         stream_fn_factory: Callable[[str], StreamFn],
         tool_registry: ToolRegistry,
         web_search_fn_factory: Callable[[str], WebSearchFn] | None,
+        confine_to: Sequence[Path] | None = None,
     ) -> None:
         self._stream_fn_factory = stream_fn_factory
         self._tool_registry = tool_registry
         self._web_search_fn_factory = web_search_fn_factory
+        # None means unconfined, which is what every caller got before this
+        # existed. A list — even an empty one — is a bound.
+        self._confine_to = confine_to
 
     async def run(
         self,
@@ -204,12 +208,17 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
+        from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY
         from xdog.ai.types import AssistantMessage, TextContent
 
         stream_fn = self._stream_fn_factory(model)
         resolved_tools: tuple[AgentTool, ...] = self._tool_registry.resolve(node.tools)
 
-        tool_ctx: dict[str, object] | None = None
+        tool_ctx: dict[str, object] | None = (
+            {CONFINE_CTX_KEY: [str(p) for p in self._confine_to]}
+            if self._confine_to is not None
+            else None
+        )
         sink: dict[str, object] = {}
         final_sys_prompt = system_prompt
         structured = agent_is_structured(node)
@@ -217,7 +226,11 @@ class SdkRunner:
             from xdog.agent.tools import create_submit_result_tool
 
             resolved_tools = resolved_tools + (create_submit_result_tool(),)
-            tool_ctx = {"flow_output_schema": agent_output_schema(node), "flow_result_sink": sink}
+            tool_ctx = {
+                **(tool_ctx or {}),
+                "flow_output_schema": agent_output_schema(node),
+                "flow_result_sink": sink,
+            }
             field_names = ", ".join(p.name for p in node.output_ports)
             final_sys_prompt = system_prompt + (
                 f"\nWhen finished, you MUST call the submit_result tool"
