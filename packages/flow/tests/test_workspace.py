@@ -462,7 +462,7 @@ async def test_a_confined_agent_is_told_the_walls_and_the_grants(
 
     prompt = await _prompt_for(
         monkeypatch, node_tools=("filesystem",), workspace=workspace,
-        confine_to=[workspace, granted],
+        allow_paths=[granted], confine_to=[workspace, granted],
     )
 
     assert str(workspace) in prompt
@@ -672,3 +672,113 @@ def test_a_run_ref_modules_import_is_deliberately_not_bounded(tmp_path: Path) ->
     asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path / "runtime", timeout=10))
 
     assert at_import.exists(), "import-time code runs unbounded, like any dependency"
+
+
+def test_a_module_may_import_its_siblings_but_not_read_their_data(tmp_path: Path) -> None:
+    """A `run:` module lives beside the workflow and may import what sits with it.
+
+    That is not a new grant: importing from there is exactly how the node itself
+    was resolved. Granting the whole directory would be different — `base_dir` is
+    wherever the .json happens to live, so a workflow kept in a home directory
+    would make ~/.ssh readable. Hence code roots, restricted to importable files.
+    """
+    import asyncio
+    import sys
+
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
+
+    (tmp_path / "helper.py").write_text("VALUE = 'sibling'\n", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("not code\n", encoding="utf-8")
+    (tmp_path / "lazymod.py").write_text(
+        "def go(ctx):\n"
+        "    import helper                      # lazy, inside the body\n"
+        "    from pathlib import Path\n"
+        "    try:\n"
+        "        Path(__file__).parent.joinpath('secret.txt').read_text()\n"
+        "        return 'READ DATA TOO'\n"
+        "    except PermissionError:\n"
+        "        return helper.VALUE\n",
+        encoding="utf-8",
+    )
+    for name in ("helper", "lazymod"):
+        sys.modules.pop(name, None)
+    wf = parse_workflow({
+        "name": "t", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "run": "lazymod:go", "outputs": ["r"]}],
+        "edges": [{"from": "s", "to": "$output", "map": {"r": "result"}}],
+    })
+
+    result = asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path / "runtime", timeout=10))
+
+    assert result.runtime["out"]["result"] == "sibling"
+
+
+def test_import_roots_do_not_depend_on_sys_path(monkeypatch: Any, tmp_path: Path) -> None:
+    """The divergence this fixed, at its source.
+
+    Read roots were taken from all of `sys.path`, which is environment-dependent:
+    a bundle run as `python <dir>` has its own directory at sys.path[0], so the
+    compiled engine granted itself a root the interpreter never had and the same
+    workflow behaved differently depending on how it was run.
+    """
+    import sys
+
+    from xdog.agent.workspace import _import_roots
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert str(tmp_path) in sys.path
+
+    assert not any(str(r) == str(tmp_path) for r in _import_roots()), (
+        "an entry on sys.path must not become a readable root by itself"
+    )
+
+
+async def test_a_structured_node_keeps_its_briefing(monkeypatch: Any, tmp_path: Path) -> None:
+    """The submit_result instruction used to be appended to the *raw* prompt,
+    which silently dropped the workspace briefing for every structured node —
+    and only in the interpreter, since codegen appends. The nodes doing the most
+    work were the ones told nothing."""
+    from xdog.flow.models import Port
+
+    workspace = tmp_path / "runtime"
+    import xdog.agent.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "Agent", _CapturingAgent)
+    _CapturingAgent.prompt_seen = ""
+    runner = SdkRunner(
+        stream_fn_factory=lambda _m: object(),  # type: ignore[arg-type,return-value]
+        tool_registry=ToolRegistry(),
+        web_search_fn_factory=None,
+        workspace=workspace,
+    )
+    structured = NodeDef(
+        id="n",
+        output_ports=(Port("a", schema={"type": "string"}), Port("b", schema={"type": "string"})),
+    )
+    try:
+        await runner.run(
+            structured, system_prompt="", user_prompt="go", model="m",
+            timeout=5.0, inputs={}, step=0, fan_index=None,
+        )
+    except Exception:
+        pass
+
+    assert str(workspace) in _CapturingAgent.prompt_seen, "briefing survived"
+    assert "submit_result" in _CapturingAgent.prompt_seen, "and so did the instruction"
+
+
+def test_a_confined_install_actually_turns_confinement_on(tmp_path: Path) -> None:
+    """The bundle gates on FLOW_CONFINED. Recording only FLOW_WORKSPACE set a
+    directory the bundle would have defaulted to anyway, so `install --confined`
+    refused unconfinable workflows and then ran the rest unconfined — a flag that
+    reads as a guarantee and is inert is worse than no flag."""
+    from xdog.flow.scheduler.systemd import ConfineGrant, render_timer_units
+
+    wf = _scheduled({"id": "a", "type": "agent", "prompt": "go", "tools": ["filesystem"],
+                     "outputs": ["out"]})
+    grant = ConfineGrant(workspace=tmp_path / "runtime")
+
+    service = render_timer_units("s", tmp_path / "b", wf.schedule, confine=grant).files["s.service"]  # type: ignore[arg-type]
+
+    assert "Environment=FLOW_CONFINED=1" in service

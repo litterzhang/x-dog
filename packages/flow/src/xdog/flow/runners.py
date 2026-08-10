@@ -181,6 +181,7 @@ class SdkRunner:
         tool_registry: ToolRegistry,
         web_search_fn_factory: Callable[[str], WebSearchFn] | None,
         workspace: Path | None = None,
+        allow_paths: Sequence[Path] = (),
         confine_to: Sequence[Path] | None = None,
     ) -> None:
         self._stream_fn_factory = stream_fn_factory
@@ -189,6 +190,10 @@ class SdkRunner:
         # Where "here" is. A relative path resolves inside it; None leaves the
         # tool's historical behaviour, where a relative path is an error.
         self._workspace = workspace
+        # Granted trees are named to the agent whether or not the run is
+        # confined: a grant it is not told about is a grant it cannot use, and
+        # the compiled engine has always passed them unconditionally.
+        self._allow_paths = allow_paths
         # None means unconfined, which is what every caller got before this
         # existed. A list — even an empty one — is a bound.
         self._confine_to = confine_to
@@ -231,9 +236,7 @@ class SdkRunner:
         # downstream node to use. We tell it where its files go; we cannot audit
         # that it obeys.
         final_sys_prompt = system_prompt + workspace_briefing(
-            self._workspace,
-            [p for p in (self._confine_to or ()) ],
-            confined=self._confine_to is not None,
+            self._workspace, self._allow_paths, confined=self._confine_to is not None
         )
         structured = agent_is_structured(node)
         if structured:
@@ -246,7 +249,10 @@ class SdkRunner:
                 "flow_result_sink": sink,
             }
             field_names = ", ".join(p.name for p in node.output_ports)
-            final_sys_prompt = system_prompt + (
+            # `final_sys_prompt`, not `system_prompt`: restarting from the raw
+            # prompt here dropped the workspace briefing for exactly the nodes
+            # doing the most work, and only in this engine -- codegen appends.
+            final_sys_prompt = final_sys_prompt + (
                 f"\nWhen finished, you MUST call the submit_result tool"
                 f" with an object containing these fields: {field_names}."
             )

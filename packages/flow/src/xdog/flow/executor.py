@@ -13,7 +13,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -147,6 +147,31 @@ def _resolve_script_fn(node: NodeDef, base_dir: Path | None) -> ScriptFn:
         module = importlib.import_module(module_name)
     fn: ScriptFn = getattr(module, func_name)
     return fn
+
+
+@contextlib.contextmanager
+def _importable(base_dir: Path | None) -> "Iterator[None]":
+    """Keep *base_dir* importable for the duration of the block.
+
+    `_resolve_script_fn` puts it on ``sys.path`` only while it imports, so a
+    module that imports a sibling *inside* its function body used to fail with a
+    bare ``No module named`` -- but succeeded once compiled, because a bundle run
+    as ``python <dir>`` has that directory on ``sys.path`` for its whole life.
+    Same workflow, different answer depending on how it was run.
+    """
+    if base_dir is None:
+        yield
+        return
+    entry = str(base_dir)
+    added = entry not in sys.path
+    if added:
+        sys.path.insert(0, entry)
+    try:
+        yield
+    finally:
+        if added:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(entry)
 
 
 def _script_stub_value(node: NodeDef, ports: dict[str, object]) -> object:
@@ -288,8 +313,8 @@ async def execute(
     # Every run has a workspace: the directory a relative path resolves inside,
     # and where a node's output belongs. It defaults to `<workflow dir>/runtime`
     # so a workflow run from two places still writes to one predictable spot. It
-    # is not created here — `_fs_write` makes its parents — so a run that writes
-    # nothing leaves nothing behind.
+    # It is created lazily, by `script_bound`, so a workflow with no script node
+    # leaves no directory behind.
     #
     # Confinement is the separate, opt-in half. A workspace says where "here" is;
     # `confined=True` says the walls are real, and then the workspace plus any
@@ -886,8 +911,11 @@ async def execute(
         # until this was tested. A `run:` ref is imported outside it -- that is
         # loading a module from disk, with the same trust as any other
         # dependency, and its import-time code is no more bounded than theirs.
+        _code_roots = [base_dir] if base_dir is not None else []
         if node.code is not None:
-            with script_bound(_workspace, allow_paths or (), confined=confined):
+            with script_bound(
+                _workspace, allow_paths or (), confined=confined, code_roots=_code_roots
+            ):
                 fn = _resolve_script_fn(node, base_dir)
         elif script_resolver is not None:
             fn = script_resolver(node.run or "")
@@ -903,11 +931,15 @@ async def execute(
         # applied whether or not the run is confined -- `--confined` only adds the
         # refusal of calls the hook cannot follow.  `base_dir` is readable because
         # a `run: module:callable` node has to import itself from there.
-        # Only the workspace and the paths a human granted. `base_dir` is
-        # deliberately NOT added: it is the workflow's own directory, so granting
-        # it would let every workflow write beside itself -- and it is not needed,
-        # because `_resolve_script_fn` imports above this line, outside the bound.
-        with script_bound(_workspace, allow_paths or (), confined=confined):
+        # Writes: only the workspace and the paths a human granted. `base_dir` is
+        # deliberately not among them -- it is wherever the .json happens to live,
+        # so granting it would let a workflow in a home directory write across it.
+        # It is a *code* root instead: a module may import its siblings, which is
+        # the same trust that resolved this node, while data files sitting beside
+        # the workflow stay outside the bound.
+        with _importable(base_dir), script_bound(
+            _workspace, allow_paths or (), confined=confined, code_roots=_code_roots
+        ):
             raw = fn(ctx, **kwargs)
             value = await asyncio.wait_for(
                 raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout
@@ -941,6 +973,7 @@ async def execute(
                     tool_registry=tool_registry,
                     web_search_fn_factory=web_search_fn_factory,
                     workspace=_workspace,
+                    allow_paths=tuple(allow_paths or ()),
                     confine_to=_confinement_roots,
                 )
             )

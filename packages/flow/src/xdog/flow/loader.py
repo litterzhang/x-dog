@@ -1195,7 +1195,6 @@ class _ErrorCollector:
             self.errors.append(exc)
 
 
-
 def unconfinable_reasons(wf: WorkflowDef) -> list[str]:
     """Why this workflow cannot be confined to a workspace, if it cannot.
 

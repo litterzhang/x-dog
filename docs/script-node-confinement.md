@@ -6,9 +6,11 @@ of scope, and is wrong about why
 
 ## The question
 
-`--confined` refuses a workflow containing an inline `code` script node, because
-`exec(node.code, namespace)` runs unrestricted Python in the executor's own
-process and no path check is ever consulted. That refusal is honest, but it is
+`--confined` **used to refuse** a workflow containing an inline `code` script
+node, because `exec(node.code, namespace)` ran unrestricted Python in the
+executor's own process and met no path check. That has since shipped: an audit
+hook now bounds script nodes in both engines (see the flow README). This document
+is what remains — the part a hook structurally cannot do. That refusal is honest, but it is
 also the biggest hole in the feature: script nodes are the ordinary way to do
 non-LLM work, and telling someone their workflow cannot be confined because it
 parses a CSV is a poor answer.

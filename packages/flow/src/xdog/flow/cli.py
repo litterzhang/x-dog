@@ -526,7 +526,7 @@ def main(argv: list[str] | None = None) -> None:
         "--confined",
         action="store_true",
         help=(
-            "Bound filesystem access to a workspace (default <workflow dir>/runtime). "
+            "Also refuse what the script audit hook cannot follow (subprocess, ctypes). "
             "Refuses workflows containing an inline 'code' script, the 'bash' tool, "
             "or a CLI backend, since none of those can be confined cooperatively."
         ),
@@ -616,7 +616,7 @@ def main(argv: list[str] | None = None) -> None:
         "--confined",
         action="store_true",
         help=(
-            "Record a workspace bound in the installed unit (default <workflow dir>/runtime). "
+            "Record a confined bound in the installed unit (default <workflow dir>/runtime). "
             "Refuses to install a workflow containing an inline script, the bash tool, or a "
             "CLI backend, since none of those can be confined cooperatively."
         ),

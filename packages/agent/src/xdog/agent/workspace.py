@@ -123,6 +123,11 @@ _WRITE_EVENTS: dict[str, tuple[int, ...]] = {
     "shutil.rmtree": (0,),
 }
 
+#: Suffixes that make a file *code* rather than data.  A code root grants reads
+#: of these and nothing else, so a module can import its siblings while a data
+#: file sitting in the same directory stays outside the bound.
+_CODE_SUFFIXES: frozenset[str] = frozenset({".py", ".pyc", ".pyd", ".so"})
+
 #: Events that leave the region the hook can see at all.  Refused only when the
 #: run is confined: without that flag a script node is unrestricted today, and
 #: silently breaking a workflow that shells out would be a worse surprise than
@@ -146,11 +151,18 @@ _UNAUDITABLE: frozenset[str] = frozenset({
 
 
 class _Bound:
-    __slots__ = ("write_roots", "read_roots", "confined")
+    __slots__ = ("write_roots", "read_roots", "code_roots", "confined")
 
-    def __init__(self, write_roots: tuple[Path, ...], read_roots: tuple[Path, ...], confined: bool):
+    def __init__(
+        self,
+        write_roots: tuple[Path, ...],
+        read_roots: tuple[Path, ...],
+        code_roots: tuple[Path, ...],
+        confined: bool,
+    ):
         self.write_roots = write_roots
         self.read_roots = read_roots
+        self.code_roots = code_roots
         self.confined = confined
 
 
@@ -171,7 +183,11 @@ def _import_roots() -> tuple[Path, ...]:
         candidates.extend(site.getsitepackages())
     with contextlib.suppress(Exception):
         candidates.append(site.getusersitepackages())
-    candidates.extend(p for p in sys.path if p)
+    # Deliberately NOT all of `sys.path`. That is environment-dependent -- a
+    # bundle run as `python <dir>` has its own directory at sys.path[0], so
+    # reading it granted the compiled engine a root the interpreter never had,
+    # and the same workflow behaved differently depending on how it was run.
+    # Workflow-local code is granted explicitly instead, via `code_roots`.
     roots: list[Path] = []
     for c in candidates:
         with contextlib.suppress(OSError, ValueError):
@@ -192,6 +208,19 @@ def _within(path: object, roots: Sequence[Path]) -> bool:
     return any(resolved == r or r in resolved.parents for r in roots)
 
 
+def _is_code(path: object, code_roots: Sequence[Path]) -> bool:
+    """True when *path* is an importable file inside a code root.
+
+    Loading a module from beside the workflow is trust the run already extends:
+    that is how the script node itself was resolved. Granting the whole directory
+    would be a different thing -- `base_dir` is wherever the .json happens to
+    live, so a workflow in a home directory would make ~/.ssh readable.
+    """
+    if not code_roots or not isinstance(path, str):
+        return False
+    return Path(path).suffix in _CODE_SUFFIXES and _within(path, code_roots)
+
+
 def _hook(event: str, args: tuple[Any, ...]) -> None:
     bound = _BOUND.get()
     if bound is None:
@@ -208,6 +237,8 @@ def _hook(event: str, args: tuple[Any, ...]) -> None:
         mode = args[1] if len(args) > 1 else ""
         writing = isinstance(mode, str) and any(c in mode for c in "wxa+")
         roots = bound.write_roots if writing else bound.read_roots
+        if not writing and not _within(path, roots) and _is_code(path, bound.code_roots):
+            return  # importing a sibling module, which resolution already trusts
         if not _within(path, roots):
             verb = "write" if writing else "read"
             allowed = ", ".join(str(r) for r in bound.write_roots) or "<nothing>"
@@ -232,6 +263,7 @@ def script_bound(
     allow_paths: Sequence[Path] = (),
     *,
     confined: bool = False,
+    code_roots: Sequence[Path] = (),
 ) -> Iterator[None]:
     """Hold the code inside this block to *workspace* plus *allow_paths*.
 
@@ -257,7 +289,14 @@ def script_bound(
         sys.addaudithook(_hook)
         _INSTALLED = True
     write_roots = tuple(dict.fromkeys([workspace.resolve(), *(p.resolve() for p in allow_paths)]))
-    token = _BOUND.set(_Bound(write_roots, write_roots + _import_roots(), confined))
+    token = _BOUND.set(
+        _Bound(
+            write_roots,
+            write_roots + _import_roots(),
+            tuple(p.resolve() for p in code_roots),
+            confined,
+        )
+    )
     try:
         yield
     finally:

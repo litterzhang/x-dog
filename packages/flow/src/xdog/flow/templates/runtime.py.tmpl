@@ -102,6 +102,7 @@ _WRITE_EVENTS: dict[str, tuple[int, ...]] = {
     "shutil.copymode": (0, 1), "shutil.copystat": (0, 1), "shutil.move": (0, 1),
     "shutil.rmtree": (0,),
 }
+_CODE_SUFFIXES = frozenset({".py", ".pyc", ".pyd", ".so"})
 _UNAUDITABLE = frozenset({
     "subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn",
     "os.fork", "os.forkpty", "pty.spawn", "ctypes.dlopen", "ctypes.dlsym",
@@ -126,7 +127,9 @@ def _import_roots() -> "tuple[Path, ...]":
         candidates.append(site.getusersitepackages())
     except Exception:
         pass
-    candidates.extend(p for p in sys.path if p)
+    # Deliberately NOT all of sys.path: a bundle run as `python <dir>` has its
+    # own directory at sys.path[0], and reading that granted this engine a root
+    # the interpreter never had. Workflow-local code is granted via _code_roots().
     roots = []
     for c in candidates:
         try:
@@ -134,6 +137,18 @@ def _import_roots() -> "tuple[Path, ...]":
         except (OSError, ValueError):
             pass
     return tuple(dict.fromkeys(roots))
+
+
+def _code_roots() -> "tuple[Path, ...]":
+    """This module's own directory: where a `run:` script and its siblings live."""
+    here = globals().get("__file__")
+    return (Path(here).resolve().parent,) if here else ()
+
+
+def _is_code(path: object, code_roots: "Sequence[Path]") -> bool:
+    if not code_roots or not isinstance(path, str):
+        return False
+    return Path(path).suffix in _CODE_SUFFIXES and _within(path, code_roots)
 
 
 def _within(path: object, roots: "Sequence[Path]") -> bool:
@@ -153,7 +168,7 @@ def _script_hook(event: str, args: "tuple[Any, ...]") -> None:
     bound = _SCRIPT_BOUND.get()
     if bound is None:
         return
-    write_roots, read_roots, confined = bound
+    write_roots, read_roots, code_roots, confined = bound
     if event in _UNAUDITABLE:
         if confined:
             raise UnauditableCall(
@@ -165,6 +180,8 @@ def _script_hook(event: str, args: "tuple[Any, ...]") -> None:
         path = args[0] if args else None
         mode = args[1] if len(args) > 1 else ""
         writing = isinstance(mode, str) and any(c in mode for c in "wxa+")
+        if not writing and not _within(path, read_roots) and _is_code(path, code_roots):
+            return  # importing a sibling module, which resolution already trusts
         if not _within(path, write_roots if writing else read_roots):
             allowed = ", ".join(str(r) for r in write_roots) or "<nothing>"
             verb = "write" if writing else "read"
@@ -196,7 +213,9 @@ def script_bound(
         sys.addaudithook(_script_hook)
         _HOOK_INSTALLED[0] = True
     write_roots = tuple(dict.fromkeys([workspace.resolve(), *(p.resolve() for p in allow_paths)]))
-    token = _SCRIPT_BOUND.set((write_roots, write_roots + _import_roots(), confined))
+    token = _SCRIPT_BOUND.set(
+        (write_roots, write_roots + _import_roots(), _code_roots(), confined)
+    )
     try:
         yield
     finally:
@@ -441,10 +460,7 @@ def _confinement_roots() -> list[str] | None:
     """
     if os.environ.get("FLOW_CONFINED", "") not in ("1", "true", "yes"):
         return None
-    roots = [str(_workspace_dir().resolve())]
-    granted = os.environ.get("FLOW_ALLOW_PATHS", "")
-    roots.extend(str(Path(part).resolve()) for part in granted.split(os.pathsep) if part)
-    return roots
+    return [str(_workspace_dir().resolve()), *(str(p) for p in _granted_paths())]
 
 
 def _checkpoint_path() -> Path | None:

@@ -43,7 +43,11 @@ class ConfineGrant:
 
     def env(self) -> dict[str, str]:
         """The variables the bundle reads — the same two the interpreter uses."""
-        out = {"FLOW_WORKSPACE": str(self.workspace)}
+        # FLOW_CONFINED is what the bundle actually gates on. Without it this
+        # recorded a workspace the bundle would have defaulted to anyway, so
+        # `install --confined` refused unconfinable workflows and then ran the
+        # rest unconfined -- the flag was inert.
+        out = {"FLOW_CONFINED": "1", "FLOW_WORKSPACE": str(self.workspace)}
         if self.allow_paths:
             out["FLOW_ALLOW_PATHS"] = os.pathsep.join(str(p) for p in self.allow_paths)
         return out
@@ -199,7 +203,6 @@ def render_timer_crontab(
     schedule: ScheduleDef,
     *,
     python: str = "/usr/bin/python3",
-    confine: ConfineGrant | None = None,
 ) -> str:
     """Render a crontab line for a timer workflow (systemd-less fallback).
 
@@ -209,8 +212,6 @@ def render_timer_crontab(
     assert schedule.mode == "timer"
     inputs = _inputs_env(schedule)
     prefix = f"FLOW_INPUTS={shlex.quote(inputs)} FLOW_RUN_ID={name} " if inputs else f"FLOW_RUN_ID={name} "
-    if confine is not None:
-        prefix += "".join(f"{k}={shlex.quote(v)} " for k, v in confine.env().items())
     cron = schedule.cron
     if cron is None:
         # Approximate "every" as a cron step where possible (minutes only), else
