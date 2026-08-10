@@ -12,6 +12,67 @@ Nothing yet.
 
 ---
 
+## [2.0.0] — 2026-08-10
+
+A run now has a **workspace**, and each node kind is held to it differently. This
+is a major version because it changes behaviour for workflows that already work:
+a script node that reads or writes outside its workspace now fails.
+
+### Added
+
+- **Every run has a workspace** (`xdog-flow`), defaulting to
+  `<workflow dir>/runtime`. Relative paths in the `filesystem` tool resolve
+  there, and it is where a node's output belongs. On by default, enforcing
+  nothing by itself. `--workspace DIR` overrides it, `--allow-path DIR` grants
+  another tree.
+- **Agent nodes are briefed.** Every agent node's system prompt now names its
+  workspace and granted directories, with an instruction not to go outside them —
+  whatever tools the node declares. Nothing verifies that the model obeys, and
+  the docs say so: a node's access cannot be inspected at one chokepoint, so this
+  is a promise the agent keeps.
+- **Script nodes are audited.** A PEP 578 audit hook refuses reads and writes
+  outside the workspace, covering a node's whole `code` including its top-level
+  statements. `ctx.workspace`, `ctx.allow_paths` and `ctx.confined` tell a script
+  where it stands.
+- **`--confined`** additionally refuses calls the hook cannot follow —
+  `subprocess`, `ctypes`, `os.system` — and refuses up front any workflow whose
+  agent nodes leave the process (the `bash` tool, a CLI backend).
+- **`xdog-flow scheduling install --confined`** records the grant in the systemd
+  unit it writes, or in the install registry for hook workflows. The grant is
+  never part of the workflow file: a workflow that could declare its own access
+  would not be confined by it.
+- Subflows inherit their parent's workspace, grants and confined flag.
+- `docs/script-node-confinement.md` — what a child process plus Landlock would
+  add, measured rather than argued, and why it is not built yet.
+
+### Changed
+
+- **BREAKING:** a script node can no longer read or write outside its workspace.
+  Grant what it needs with `--allow-path`, or point `--workspace` at the
+  directory it already uses.
+- `execute()` takes `workspace`, `allow_paths` and `confined`. All optional; the
+  workspace defaults rather than being absent.
+- Import roots for the audit hook are the interpreter's own trees, not all of
+  `sys.path`. The old behaviour made a compiled bundle grant itself its own
+  directory while the interpreter granted nothing, so the same workflow behaved
+  differently depending on how it was run.
+
+### Fixed
+
+- Confinement reached the interpreter but not codegen, so a workflow that
+  `--confined` refused to let write outside its workspace wrote there happily
+  once compiled. The generated module now reads its bound from the environment.
+- A structured agent node's `submit_result` instruction was appended to the raw
+  system prompt, dropping the workspace briefing for exactly the nodes doing the
+  most work — and only in the interpreter.
+- `scheduling install --confined` recorded a workspace but never `FLOW_CONFINED`,
+  which is what the bundle gates on, so the flag refused unconfinable workflows
+  and then ran the rest unconfined.
+- A script node's top-level `code` ran outside its own bound in both engines —
+  in the compiled one, at import time, before `main()`.
+
+---
+
 ## [1.1.0] — 2026-08-07
 
 ### Added

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "x-dog"
-version = "1.1.0"
+version = "2.0.0"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
