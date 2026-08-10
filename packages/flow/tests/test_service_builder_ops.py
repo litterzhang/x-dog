@@ -1,9 +1,9 @@
-"""The deterministic half of the service-builder example.
+"""The deterministic half of the unattended service-builder.
 
-These functions are what make repeated runs converge instead of circling, so
-they are tested against real files rather than stubbed. The flow-level suite
-(`service_builder.test.json`) covers the graph shape; this covers the judgement
-that graph delegates to code precisely so no model makes it.
+With nobody watching, these functions are the entire safety story: what counts as
+progress, what closes a criterion, and when the project stops. They are tested
+against real files rather than stubbed, because the flow-level suite necessarily
+stubs them and would then be asserting on fiction.
 """
 from __future__ import annotations
 
@@ -24,153 +24,164 @@ class _Ctx:
         self.workflow_name = "service-builder"
 
 
-def _plan(ws: Path, text: str) -> None:
+def _charter(ws: Path, text: str) -> None:
     ws.mkdir(parents=True, exist_ok=True)
-    (ws / "PLAN.md").write_text(text, encoding="utf-8")
+    (ws / "ACCEPTANCE.md").write_text(text, encoding="utf-8")
 
 
-def test_a_fresh_workspace_reports_no_plan(tmp_path: Path) -> None:
+def _run(ws: Path, criterion: str, passed: str, *, touches: str | None = None) -> dict:
+    """One whole run: survey stamps the tree, work happens, record judges it."""
+    builder_ops.survey(_Ctx(ws))
+    if touches is not None:
+        (ws / touches).write_text(f"# {criterion}\n", encoding="utf-8")
+    return builder_ops.record(_Ctx(ws), criterion, f"do {criterion}", passed, "report")
+
+
+def test_a_fresh_workspace_has_no_charter(tmp_path: Path) -> None:
     out = builder_ops.survey(_Ctx(tmp_path / "ws"))
 
-    assert out["has_plan"] == "no"
-    assert out["open_count"] == 0
+    assert out["has_charter"] == "no"
+    assert out["active"] == "yes"
     assert out["run_no"] == 1
 
 
-def test_survey_counts_what_is_left(tmp_path: Path) -> None:
+def test_survey_lists_the_unmet_criteria_for_the_agent(tmp_path: Path) -> None:
+    """The agent chooses from this list, so what is in it is what can be chosen."""
     ws = tmp_path / "ws"
-    _plan(ws, "- [x] 1. done\n- [ ] 2. open\n- [ ] 3. also open\n- [!] 4. blocked\n")
+    _charter(ws, "- [x] a: done already\n- [ ] b: still open\n- [ ] c: also open\n")
 
     out = builder_ops.survey(_Ctx(ws))
 
-    assert out["has_plan"] == "yes"
-    assert out["open_count"] == 2
-    assert out["blocked_count"] == 1
+    assert out["unmet_count"] == 2
+    assert "b: still open" in out["unmet"]
+    assert "a: done already" not in out["unmet"]
 
 
-def test_pick_takes_the_first_open_task_not_the_easiest(tmp_path: Path) -> None:
-    """Order is decided once, when the plan is written. Re-choosing every run
-    lets a model keep picking the task it likes and never finish the hard one."""
+def test_a_criterion_closes_only_when_the_checks_pass(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
-    _plan(ws, "- [x] 1. done\n- [ ] 2. the hard one\n- [ ] 3. the easy one\n")
+    _charter(ws, "- [ ] a: thing\n")
 
-    assert builder_ops.pick(_Ctx(ws), 2)["task"] == "2. the hard one"
+    _run(ws, "a", "no", touches="src.py")
+    assert "- [ ] a: thing" in (ws / "ACCEPTANCE.md").read_text(), "failing leaves it open"
+
+    _run(ws, "a", "yes", touches="src2.py")
+    assert "- [x] a: thing" in (ws / "ACCEPTANCE.md").read_text()
 
 
-def test_pick_reports_nothing_left_rather_than_inventing_work(tmp_path: Path) -> None:
+def test_an_invented_criterion_closes_nothing(tmp_path: Path) -> None:
+    """The unattended failure mode: an agent could otherwise finish the project
+    by naming a criterion that does not exist, at the moment nobody is reading."""
     ws = tmp_path / "ws"
-    _plan(ws, "- [x] 1. done\n- [x] 2. done\n")
+    _charter(ws, "- [ ] a: thing\n")
 
-    out = builder_ops.pick(_Ctx(ws), 0)
+    out = _run(ws, "totally-made-up", "yes", touches="src.py")
 
-    assert out["found"] == "no"
-    assert out["task"] == ""
+    assert "- [ ] a: thing" in (ws / "ACCEPTANCE.md").read_text()
+    assert "unknown criterion" in out["outcome"]
+    assert builder_ops.survey(_Ctx(ws))["unmet_count"] == 1
 
 
-def test_unverified_is_reported_as_failure_not_success(tmp_path: Path) -> None:
-    """The distinction the whole design rests on: "nothing checked it" and "it
-    passed" must never produce the same answer, or the loop terminates on the
-    absence of a test suite."""
+def test_meeting_every_criterion_halts_the_project(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n")
+
+    _run(ws, "a", "yes", touches="a.py")
+    assert builder_ops.survey(_Ctx(ws))["active"] == "yes"
+
+    _run(ws, "b", "yes", touches="b.py")
+    done = builder_ops.survey(_Ctx(ws))
+
+    assert done["active"] == "no"
+    assert "complete" in done["status"]
+
+
+def test_a_halted_run_is_cheap_and_stays_halted(tmp_path: Path) -> None:
+    """Nobody uninstalls the timer on a finished project, so the finished state
+    has to be a no-op rather than a thing that keeps calling models."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n")
+    _run(ws, "a", "yes", touches="a.py")
+
+    for _ in range(3):
+        assert builder_ops.survey(_Ctx(ws))["active"] == "no"
+
+
+def test_runs_that_change_no_file_halt_the_project(tmp_path: Path) -> None:
+    """The bound that makes an unattended loop safe to leave installed."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n- [ ] c: three\n")
+
+    _run(ws, "a", "no")
+    assert builder_ops.survey(_Ctx(ws))["active"] == "yes", "one idle run is normal"
+
+    _run(ws, "b", "no")
+    stopped = builder_ops.survey(_Ctx(ws))
+
+    assert stopped["active"] == "no"
+    assert "changed no source file" in stopped["status"]
+
+
+def test_motion_without_achievement_also_halts(tmp_path: Path) -> None:
+    """The subtler stall: every run edits files, so the idle counter never fires,
+    but no criterion is ever met. Left alone this bills forever while looking
+    healthy — a diff every hour and nothing to show for it."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n- [ ] c: three\n- [ ] d: four\n- [ ] e: five\n")
+
+    for i in range(builder_ops.MAX_BARREN_RUNS):
+        _run(ws, "a", "no", touches=f"churn{i}.py")
+
+    stopped = builder_ops.survey(_Ctx(ws))
+
+    assert stopped["active"] == "no"
+    assert "no acceptance criterion" in stopped["status"]
+
+
+def test_meeting_a_criterion_resets_the_barren_counter(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n- [ ] c: three\n")
+
+    _run(ws, "a", "no", touches="x1.py")
+    _run(ws, "a", "no", touches="x2.py")
+    _run(ws, "a", "yes", touches="x3.py")
+
+    assert json.loads((ws / "state.json").read_text())["barren_runs"] == 0
+    assert builder_ops.survey(_Ctx(ws))["active"] == "yes"
+
+
+def test_unverified_work_is_a_failure_not_a_pass(tmp_path: Path) -> None:
+    """If "nothing checked it" and "it passed" agreed, an unattended loop would
+    close fastest on a project that never wrote a test."""
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
 
-    out = builder_ops.verify(_Ctx(ws), "any task")
+    assert builder_ops.verify(_Ctx(ws), "a")["passed"] == "no"
 
-    assert out["passed"] == "no"
-    assert "nothing checked" in out["report"]
+    (ws / "verify.txt").write_text("  \n", encoding="utf-8")
+    assert builder_ops.verify(_Ctx(ws), "a")["passed"] == "no"
 
-    (ws / "verify.txt").write_text("   \n", encoding="utf-8")
-    assert builder_ops.verify(_Ctx(ws), "any task")["passed"] == "no", "empty counts as unchecked"
-
-
-def test_verify_runs_the_projects_own_command(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"
-    ws.mkdir(parents=True)
     (ws / "verify.txt").write_text("exit 0\n", encoding="utf-8")
-    assert builder_ops.verify(_Ctx(ws), "t")["passed"] == "yes"
-
-    (ws / "verify.txt").write_text("echo boom >&2; exit 1\n", encoding="utf-8")
-    failed = builder_ops.verify(_Ctx(ws), "t")
-    assert failed["passed"] == "no"
-    assert "boom" in failed["report"]
+    assert builder_ops.verify(_Ctx(ws), "a")["passed"] == "yes"
 
 
-def test_a_failed_task_is_blocked_so_the_next_run_moves_on(tmp_path: Path) -> None:
-    """Left open, the same task would be picked again every run forever. Marked
-    blocked, the loop advances and a human sees a list of what it could not do."""
+def test_bookkeeping_alone_is_not_progress(tmp_path: Path) -> None:
+    """ACCEPTANCE/JOURNAL/state change every run by construction. Counting them
+    would mean the idle bound never fires."""
     ws = tmp_path / "ws"
-    _plan(ws, "- [ ] 1. impossible\n- [ ] 2. next\n")
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n")
 
-    builder_ops.record(_Ctx(ws), "1. impossible", "no", "boom")
+    _run(ws, "a", "no")
+    _run(ws, "b", "no")
 
-    assert "- [!] 1. impossible" in (ws / "PLAN.md").read_text()
-    assert builder_ops.pick(_Ctx(ws), 1)["task"] == "2. next"
-
-
-def test_a_passed_task_is_ticked(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"
-    _plan(ws, "- [ ] 1. add health\n")
-
-    builder_ops.record(_Ctx(ws), "1. add health", "yes", "ok")
-
-    assert "- [x] 1. add health" in (ws / "PLAN.md").read_text()
+    assert json.loads((ws / "state.json").read_text())["idle_runs"] == 2
 
 
-def test_runs_that_change_no_source_are_counted_and_eventually_stall(tmp_path: Path) -> None:
-    """The termination guarantee. Without it a scheduled workflow spends money
-    every half hour producing nothing, and looks healthy while doing it."""
-    ws = tmp_path / "ws"
-    _plan(ws, "- [ ] 1. a\n- [ ] 2. b\n- [ ] 3. c\n")
-
-    def a_run_that_changes_nothing(task: str) -> None:
-        builder_ops.survey(_Ctx(ws))           # stamps the tree as it starts
-        builder_ops.record(_Ctx(ws), task, "no", "nope")
-
-    a_run_that_changes_nothing("1. a")
-    assert builder_ops.survey(_Ctx(ws))["stalled"] == "no", "one idle run is normal"
-
-    a_run_that_changes_nothing("2. b")
-    assert builder_ops.survey(_Ctx(ws))["stalled"] == "yes", "two in a row is a stall"
-
-
-def test_writing_a_source_file_clears_the_stall(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"
-    _plan(ws, "- [ ] 1. a\n- [ ] 2. b\n")
-    for task in ("1. a", "2. b"):
-        builder_ops.survey(_Ctx(ws))
-        builder_ops.record(_Ctx(ws), task, "no", "nope")
-    assert builder_ops.survey(_Ctx(ws))["stalled"] == "yes"
-
-    _plan(ws, "- [ ] 3. c\n")
-    builder_ops.survey(_Ctx(ws))
-    (ws / "app.py").write_text("print('real work')\n", encoding="utf-8")   # during the run
-    builder_ops.record(_Ctx(ws), "3. c", "yes", "ok")
-
-    assert builder_ops.survey(_Ctx(ws))["stalled"] == "no"
-
-
-def test_bookkeeping_alone_does_not_count_as_progress(tmp_path: Path) -> None:
-    """The journal grows every run by construction. If it counted, the stall
-    detector would never fire and the loop would run until someone noticed."""
-    ws = tmp_path / "ws"
-    _plan(ws, "- [ ] 1. a\n")
-    builder_ops.survey(_Ctx(ws))
-    builder_ops.record(_Ctx(ws), "1. a", "no", "nope")
-    first = json.loads((ws / "state.json").read_text())["fingerprint"]
-
-    _plan(ws, "- [ ] 2. b\n")
-    builder_ops.survey(_Ctx(ws))
-    builder_ops.record(_Ctx(ws), "2. b", "no", "nope")
-    second = json.loads((ws / "state.json").read_text())
-
-    assert second["fingerprint"] == first, "plan/journal/state churn is not progress"
-    assert second["idle_runs"] == 2
-
-
-def test_state_survives_a_corrupt_file(tmp_path: Path) -> None:
-    """A half-written state.json from a killed run must not end the project."""
+def test_a_corrupt_state_file_does_not_end_the_project(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
-    (ws / "state.json").write_text("{not json", encoding="utf-8")
+    (ws / "state.json").write_text("{ half written", encoding="utf-8")
 
-    assert builder_ops.survey(_Ctx(ws))["run_no"] == 1
+    out = builder_ops.survey(_Ctx(ws))
+
+    assert out["run_no"] == 1
+    assert out["active"] == "yes"

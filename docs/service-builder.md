@@ -1,121 +1,108 @@
-# A workflow that builds a service from an idea, one run at a time
+# An unattended workflow that builds a service from an idea
 
 Status: **working example** — `packages/flow/examples/service_builder/` ·
 Related: [`tasks-service.md`](./tasks-service.md)
 
-## The shape of the answer
-
-You cannot write a fixed workflow that turns an idea into a service in one run.
-You *can* write a fixed workflow that **advances a project by one verified
-increment**, and run it until there is nothing left to advance. That is a
-repeatable process, which is the only kind flow is for.
-
-So the input is the idea, the output of each run is one task's worth of progress,
-and the thing that accumulates is the workspace — not anyone's context.
+Input: one paragraph. No human nodes, no approval gate. Every hour a timer fires,
+one agent decides the next increment, builds it, and the checks decide whether it
+counted. It stops itself when the criteria are met — or when it stops getting
+anywhere.
 
 ```
-run 1     survey → plan → (human approves) ─┐
-run 2..n  survey → pick → implement ⇄ verify → record
-run n+1   survey → nothing open → done
-any run   survey → stalled → escalate to a human
+run 1     survey → charter                          (acceptance criteria + a check command)
+run 2..n  survey → propose → implement ⇄ verify → record
+once done survey → (nothing)                        no tokens spent
 ```
 
-## Why it converges
+## The hour is structural, not advisory
 
-Four properties, none of which are the model's opinion:
+`propose` is told to size the increment to about an hour. That alone would be a
+suggestion, so the schedule enforces it:
 
-**The plan is written once and ordered once.** `pick` takes the first open task
-by position. Letting an agent choose each run invites it to keep picking the easy
-one, and the hard task is never done.
+```jsonc
+"schedule": {"mode": "timer", "every": "1h", "timeout": "50m"}
+```
 
-**Verification is a command, not a judgement.** `verify` runs whatever
-`verify.txt` says and reads the exit code. An agent asked "is this done?"
-eventually says yes regardless of the truth.
+`timeout` becomes the unit's `TimeoutStartSec`: the run is killed at fifty
+minutes whatever it is doing. The prompt says so plainly, because a model that
+knows it will be cut off writes differently from one that does not — it finishes
+one behaviour rather than starting three.
 
-**Absence of a check is a failure, not a pass.** No `verify.txt`, or an empty
-one, reports `passed: no`. If "nothing checked it" and "it passed" produced the
-same answer, the loop would terminate fastest on a project with no tests.
+## What replaces the human
 
-**A failing task is marked blocked, not left open.** Otherwise the next run picks
-the same task, fails the same way, forever. Blocked tasks accumulate into a list
-a human can act on.
+Removing the approval gate removes the thing that catches a bad plan, so the
+loop has to catch itself. Four properties, all decided by code in
+`builder_ops.py`, none by a prompt:
 
-And a termination guarantee on top: `record` fingerprints the source tree at the
-start and end of each run. Two consecutive runs that change nothing set
-`stalled`, and the next run routes to a human instead of the work. The
-fingerprint deliberately excludes `PLAN.md`, `JOURNAL.md` and `state.json` —
-those change every run by construction, so counting them would mean the stall
-detector never fires and a scheduled workflow spends money every half hour
-looking healthy.
+**A criterion closes only when the checks pass *and* the slug exists.** An agent
+that names a criterion the charter does not contain closes nothing. This is the
+unattended failure mode specifically: with a person reading output, an invented
+criterion is caught immediately; without one, it silently completes the project.
 
-## Why each run starts cold, and why that is good
+**Absence of a check is a failure.** No `verify.txt`, or an empty one, reports
+`passed: no`. If "nothing checked it" and "it passed" agreed, the loop would
+terminate fastest on a project that never wrote a test.
 
-An agent node's context does not survive a run. That looks like a limitation and
-is the feature: it forces every durable fact into `PLAN.md`, `JOURNAL.md` and the
-source itself. A run that "remembers" why it did something is a run whose
-reasoning cannot be reviewed, resumed, or handed to a different model.
+**Two runs that change no source file halt it.** The fingerprint covers the
+workspace minus `ACCEPTANCE.md`, `JOURNAL.md` and `state.json`, which change
+every run by construction — counting them would mean the bound never fires.
 
-Within a run, `implement` inherits from *itself* across the repair loop, so a
-second attempt remembers the first instead of re-deriving it. That is the whole
-distinction: continuity where it is cheap and inspectable, amnesia where it would
-hide state.
+**Four runs that meet no criterion halt it too.** This is the subtler stall and
+the one that costs money: every run edits files, so the idle counter never
+trips, but nothing is ever achieved. A diff every hour and nothing to show for
+it. Higher than the idle bound because real work can legitimately span runs.
 
-## Where the human sits
+Halting is a state in the workspace, not a person's attention. Once halted or
+complete, `survey` returns `active: no` and the run ends there — **no model is
+called**. That matters because nobody uninstalls the timer on a finished
+project; the finished state has to be free.
 
-Two places, both pauses rather than notifications:
+## Why each run starts cold
 
-- **After the first plan.** The run pauses at `approve` and ends. Approving is a
-  run boundary, not a step inside one — which also means the plan can be edited
-  by hand before the next run picks it up. `PLAN.md` is a file.
-- **On a stall.** `escalate` pauses for `unblock`.
+An agent node's context does not survive a run, which forces every durable fact
+into `ACCEPTANCE.md`, `JOURNAL.md` and the source. A run that "remembers" why it
+did something is a run whose reasoning cannot be reviewed or resumed.
 
-Everything between is unattended.
+Within a run it is the opposite: `implement` inherits from **itself** across the
+repair loop, so a second attempt remembers the first rather than re-deriving it.
+Continuity where it is cheap and inspectable; amnesia where it would hide state.
 
 ## Running it
 
 ```bash
-xdog-flow run service_builder.json --workspace ./my-service
-# ... plans, then pauses at `approve`
-
-xdog-flow run service_builder.json --workspace ./my-service    # one task
-xdog-flow run service_builder.json --workspace ./my-service    # the next
+xdog-flow run service_builder.json --workspace ./my-service    # writes the charter
+xdog-flow run service_builder.json --workspace ./my-service    # one increment
 ```
 
-Or install it on a timer and let it work:
+Or install it and walk away:
 
-```jsonc
-"schedule": {"mode": "timer", "every": "30m"}
+```bash
+xdog-flow scheduling install service_builder.json
 ```
 
-**This workflow cannot be `--confined`.** `verify` shells out to run the
-project's test suite, which is precisely the thing the audit hook cannot follow.
-That is the honest trade: a workflow that builds software has to run software.
-The workspace still bounds every path the hook *can* see, and the agent nodes are
-told where they are.
+**It cannot be `--confined`.** `verify` shells out to run the project's tests,
+which is exactly what the audit hook cannot follow. A workflow that builds
+software has to run software. The workspace still bounds every path the hook
+*can* see.
 
 ## What this does not do
 
-It is worth being exact, because "builds the service automatically" invites more
-belief than the design supports.
+"Builds the service automatically" invites more belief than the design supports.
 
-- **It builds what the plan says.** The plan is written by a model from one
-  paragraph. If the decomposition is wrong, ten perfect runs produce the wrong
-  service. The approval pause exists for exactly this and is the highest-value
-  thirty seconds a human spends.
-- **Its ceiling is one task per run.** A task too large for a single agent turn
-  fails, gets blocked, and waits for a human. That is a feature over a silent
-  half-finish, but it means the plan's granularity determines whether the thing
-  ever finishes.
-- **It cannot tell a passing test suite from a good one.** Tests are written by
-  the same process that writes the code. `verify` proves internal consistency, not
-  fitness for purpose. A human reading `JOURNAL.md` is still the only thing
-  standing between "all tasks ticked" and "this works".
-- **Blocked is where hard problems go to sit.** The design converts "stuck" into
-  "listed and skipped". That keeps the loop alive at the cost of leaving the
-  genuinely difficult work for a person — which is the right default, but it is
-  not autonomy.
+- **It builds what the charter says**, and the charter is written by a model from
+  one paragraph, with nobody checking it. This is the single largest risk in the
+  unattended version, and it is unmitigated by design — you asked for no human,
+  and that is what removing the human costs. Reading `ACCEPTANCE.md` once after
+  run 1 buys back nearly all of it.
+- **It cannot tell a passing suite from a good one.** The same process writes the
+  tests and the code. `verify` proves internal consistency, not fitness.
+- **Its ceiling is one increment per run.** Anything needing a coordinated change
+  across several criteria will fail, burn a barren run, and eventually halt.
+- **Halting is the safe outcome, not a solved problem.** The loop stops with work
+  outstanding and a journal explaining how far it got. That is the correct
+  behaviour for something running unwatched, and it is not the same as finishing.
 
-The useful framing: this automates the *loop*, not the *judgement*. It is a
-tireless junior who reads the plan, does the next thing, runs the tests, writes
-down what happened, and asks for help instead of guessing — and never gets bored
-on run forty.
+The honest framing: this automates the *loop*, not the *judgement*. It is a
+tireless junior who reads the charter, does the next thing, runs the tests,
+writes down what happened, and downs tools when it stops making progress instead
+of thrashing until someone notices.

@@ -5,6 +5,11 @@
     "model": "gpt-5.6-sol"
   },
   "entry": "survey",
+  "schedule": {
+    "mode": "timer",
+    "every": "1h",
+    "timeout": "50m"
+  },
   "state": {
     "idea": "A JSON API that stores short notes: POST /notes, GET /notes/{id}, GET /health."
   },
@@ -14,169 +19,59 @@
       "type": "script",
       "run": "builder_ops:survey",
       "outputs": [
-        {
-          "name": "has_plan",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "open_count",
-          "schema": {
-            "type": "integer"
-          }
-        },
-        {
-          "name": "blocked_count",
-          "schema": {
-            "type": "integer"
-          }
-        },
-        {
-          "name": "stalled",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "run_no",
-          "schema": {
-            "type": "integer"
-          }
-        },
-        {
-          "name": "summary",
-          "schema": {
-            "type": "string"
-          }
-        }
+        {"name": "active", "schema": {"type": "string"}},
+        {"name": "has_charter", "schema": {"type": "string"}},
+        {"name": "unmet_count", "schema": {"type": "integer"}},
+        {"name": "unmet", "schema": {"type": "string"}},
+        {"name": "run_no", "schema": {"type": "integer"}},
+        {"name": "status", "schema": {"type": "string"}}
       ]
     },
     {
-      "id": "plan",
+      "id": "charter",
       "type": "agent",
-      "tools": [
-        "filesystem"
-      ],
-      "inputs": [
-        {
-          "name": "idea",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "system_prompt": "You decompose a product idea into an ordered plan that someone else will execute one item per run, with no memory of this conversation.\n\nRules that make the plan usable:\n- Every task is independently verifiable by a command, not by opinion.\n- The first task always establishes the verification command itself.\n- Order tasks so each one can be finished without the later ones existing.\n- Ten tasks at most. A plan longer than that is a plan nobody finishes.",
-      "prompt": "Write PLAN.md in your workspace for this idea:\n\n{{idea}}\n\nPLAN.md must contain a checklist, one task per line, exactly in this form:\n\n- [ ] 1. <task>\n- [ ] 2. <task>\n\nAlso write verify.txt containing the single shell command that checks the project (for example `python -m pytest -q`). It runs from the workspace root.\n\nReply with a one-line summary of the plan.",
-      "outputs": [
-        {
-          "name": "plan_summary",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ]
+      "tools": ["filesystem"],
+      "inputs": [{"name": "idea", "schema": {"type": "string"}}],
+      "system_prompt": "You turn a product idea into acceptance criteria a machine can check, for a project nobody will supervise.\n\nA criterion is good when a failing test could be written for it before any code exists, and when meeting it does not require meeting a later one first. A criterion like 'the API is well designed' is unusable here: nothing can decide it, so it will be skipped forever or claimed falsely.",
+      "prompt": "Set up the workspace for this idea:\n\n{{idea}}\n\nWrite ACCEPTANCE.md as a checklist, one criterion per line, exactly in this form:\n\n- [ ] health-endpoint: GET /health returns 200\n- [ ] create-note: POST /notes stores a note and returns its id\n\nThe slug before the colon is an identifier: lowercase, hyphenated, stable. Later runs refer to criteria by slug, so renaming one loses its history.\n\nWrite verify.txt containing the single shell command that checks the project, run from the workspace root - for example `python -m pytest -q`. Also create whatever skeleton that command needs to run at all: an empty test suite is fine, a command that cannot start is not.\n\nTwelve criteria at most. Reply with a one-line summary.",
+      "outputs": [{"name": "charter_summary", "schema": {"type": "string"}}]
     },
     {
-      "id": "approve",
-      "type": "human",
-      "signal": "plan-approved",
-      "outputs": [
-        {
-          "name": "ack",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ]
-    },
-    {
-      "id": "pick",
-      "type": "script",
-      "run": "builder_ops:pick",
+      "id": "propose",
+      "type": "agent",
+      "tools": ["filesystem"],
       "inputs": [
-        {
-          "name": "open_count",
-          "schema": {
-            "type": "integer"
-          }
-        }
+        {"name": "unmet", "schema": {"type": "string"}},
+        {"name": "run_no", "schema": {"type": "integer"}}
       ],
+      "system_prompt": "You choose the next increment for a project you have never seen, because you have not: nothing carries between runs except the files. Read ACCEPTANCE.md, JOURNAL.md and the source before deciding.\n\nSize the increment to about an hour of focused work - one behaviour, its tests, nothing else. This is not a style preference. The run is killed at fifty minutes, and a half-applied larger change is left for the next run to inherit with no idea what was intended.\n\nPrefer the criterion that unblocks the most others, and one whose failure would be obvious over one whose success would be invisible. If the journal shows a criterion failing repeatedly, choose a different one and say why.",
+      "prompt": "Run {{run_no}}. Criteria still unmet:\n\n{{unmet}}\n\nChoose exactly one and describe the increment that will meet it. Use the criterion's slug verbatim.",
       "outputs": [
-        {
-          "name": "task",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "found",
-          "schema": {
-            "type": "string"
-          }
-        }
+        {"name": "criterion", "schema": {"type": "string"}},
+        {"name": "task", "schema": {"type": "string"}}
       ]
     },
     {
       "id": "implement",
       "type": "agent",
-      "tools": [
-        "filesystem"
-      ],
+      "tools": ["filesystem"],
+      "inherit": {"from": "implement"},
       "inputs": [
-        {
-          "name": "task",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "report",
-          "schema": {
-            "type": "string"
-          },
-          "required": false
-        }
+        {"name": "task", "schema": {"type": "string"}},
+        {"name": "report", "schema": {"type": "string"}, "required": false}
       ],
-      "system_prompt": "You implement exactly one task in an existing codebase, then stop.\n\nRead before you write: the plan, the journal, and the files you are about to change. Leave the tree runnable \u2014 a half-finished refactor is worse than an untouched one, because the next run inherits it with no idea what you intended.",
-      "prompt": "Implement this task and nothing else:\n\n{{task}}\n\nIf the checks already failed on your last attempt, here is what they said (empty on your first attempt):\n\n{{report}}\n\nFix the cause rather than the symptom. When you are done, reply with the files you changed and why.",
-      "outputs": [
-        {
-          "name": "changes",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "inherit": {
-        "from": "implement"
-      }
+      "system_prompt": "You implement one increment in an existing codebase and then stop.\n\nWrite the test first and watch it fail before making it pass. With nobody reviewing this, a test written after the code is a test written to agree with it.\n\nLeave the tree runnable whatever happens. The next run inherits this directory and cannot ask what you meant.",
+      "prompt": "Implement this increment and nothing else:\n\n{{task}}\n\nIf the checks already failed on your previous attempt, this is what they said (empty on your first attempt):\n\n{{report}}\n\nFix the cause rather than the symptom. Reply with the files you changed and why.",
+      "outputs": [{"name": "changes", "schema": {"type": "string"}}]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "builder_ops:verify",
-      "inputs": [
-        {
-          "name": "task",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
+      "inputs": [{"name": "criterion", "schema": {"type": "string"}}],
       "outputs": [
-        {
-          "name": "passed",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "report",
-          "schema": {
-            "type": "string"
-          }
-        }
+        {"name": "passed", "schema": {"type": "string"}},
+        {"name": "report", "schema": {"type": "string"}}
       ]
     },
     {
@@ -184,224 +79,48 @@
       "type": "script",
       "run": "builder_ops:record",
       "inputs": [
-        {
-          "name": "task",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "passed",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "report",
-          "schema": {
-            "type": "string"
-          }
-        }
+        {"name": "criterion", "schema": {"type": "string"}},
+        {"name": "task", "schema": {"type": "string"}},
+        {"name": "passed", "schema": {"type": "string"}},
+        {"name": "report", "schema": {"type": "string"}}
       ],
       "outputs": [
-        {
-          "name": "outcome",
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "changed",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ]
-    },
-    {
-      "id": "escalate",
-      "type": "human",
-      "signal": "unblock",
-      "outputs": [
-        {
-          "name": "guidance",
-          "schema": {
-            "type": "string"
-          }
-        }
+        {"name": "outcome", "schema": {"type": "string"}},
+        {"name": "halted", "schema": {"type": "string"}}
       ]
     }
   ],
   "edges": [
-    {
-      "from": "$in",
-      "to": "plan",
-      "map": {
-        "idea": "idea"
-      }
-    },
-    {
-      "from": "survey",
-      "to": "escalate",
-      "map": {},
-      "when": {
-        "equals": {
-          "value": "{{stalled}}",
-          "text": "yes"
-        }
-      }
-    },
-    {
-      "from": "survey",
-      "to": "plan",
-      "map": {},
-      "when": {
-        "and": [
-          {
-            "equals": {
-              "value": "{{has_plan}}",
-              "text": "no"
-            }
-          },
-          {
-            "equals": {
-              "value": "{{stalled}}",
-              "text": "no"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "from": "plan",
-      "to": "approve",
-      "map": {}
-    },
-    {
-      "from": "survey",
-      "to": "pick",
-      "map": {
-        "open_count": "open_count"
-      },
-      "when": {
-        "and": [
-          {
-            "equals": {
-              "value": "{{has_plan}}",
-              "text": "yes"
-            }
-          },
-          {
-            "equals": {
-              "value": "{{stalled}}",
-              "text": "no"
-            }
-          },
-          {
-            "gte": {
-              "value": "{{open_count}}",
-              "text": "1"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "from": "pick",
-      "to": "implement",
-      "map": {
-        "task": "task"
-      },
-      "when": {
-        "equals": {
-          "value": "{{found}}",
-          "text": "yes"
-        }
-      }
-    },
-    {
-      "from": "pick",
-      "to": "verify",
-      "map": {
-        "task": "task"
-      },
-      "when": {
-        "equals": {
-          "value": "{{found}}",
-          "text": "yes"
-        }
-      }
-    },
-    {
-      "from": "implement",
-      "to": "verify",
-      "map": {}
-    },
-    {
-      "from": "verify",
-      "to": "record",
-      "map": {
-        "passed": "passed",
-        "report": "report"
-      }
-    },
-    {
-      "from": "pick",
-      "to": "record",
-      "map": {
-        "task": "task"
-      },
-      "when": {
-        "equals": {
-          "value": "{{found}}",
-          "text": "yes"
-        }
-      }
-    },
-    {
-      "from": "record",
-      "to": "$output",
-      "map": {
-        "outcome": "outcome",
-        "changed": "changed"
-      }
-    },
-    {
-      "from": "survey",
-      "to": "$output",
-      "map": {
-        "summary": "progress"
-      }
-    },
-    {
-      "from": "escalate",
-      "to": "$output",
-      "map": {
-        "guidance": "escalated"
-      }
-    },
-    {
-      "from": "verify",
-      "to": "implement",
-      "map": {
-        "report": "report"
-      },
-      "when": {
-        "equals": {
-          "value": "{{passed}}",
-          "text": "no"
-        }
-      },
-      "loop": {
-        "max": 2
-      }
-    },
-    {
-      "from": "approve",
-      "to": "$output",
-      "map": {
-        "ack": "approved"
-      }
-    }
+    {"from": "$in", "to": "charter", "map": {"idea": "idea"}},
+
+    {"from": "survey", "to": "charter", "map": {},
+     "when": {"and": [
+       {"equals": {"value": "{{active}}", "text": "yes"}},
+       {"equals": {"value": "{{has_charter}}", "text": "no"}}
+     ]}},
+
+    {"from": "survey", "to": "propose",
+     "map": {"unmet": "unmet", "run_no": "run_no"},
+     "when": {"and": [
+       {"equals": {"value": "{{active}}", "text": "yes"}},
+       {"equals": {"value": "{{has_charter}}", "text": "yes"}},
+       {"gte": {"value": "{{unmet_count}}", "text": "1"}}
+     ]}},
+
+    {"from": "propose", "to": "implement", "map": {"task": "task"}},
+    {"from": "propose", "to": "verify", "map": {"criterion": "criterion"}},
+    {"from": "propose", "to": "record", "map": {"criterion": "criterion", "task": "task"}},
+
+    {"from": "implement", "to": "verify", "map": {}},
+
+    {"from": "verify", "to": "implement", "map": {"report": "report"},
+     "when": {"equals": {"value": "{{passed}}", "text": "no"}},
+     "loop": {"max": 2}},
+
+    {"from": "verify", "to": "record", "map": {"passed": "passed", "report": "report"}},
+
+    {"from": "record", "to": "$output", "map": {"outcome": "outcome", "halted": "halted"}},
+    {"from": "survey", "to": "$output", "map": {"status": "status"}},
+    {"from": "charter", "to": "$output", "map": {"charter_summary": "charter"}}
   ]
 }

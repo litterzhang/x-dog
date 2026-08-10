@@ -1,12 +1,14 @@
-"""Deterministic half of the self-building service workflow.
+"""Deterministic half of the unattended service-builder workflow.
 
-Everything here is a plain function so it can be read, tested and trusted. The
-division is deliberate: **the model proposes, this module decides.** Progress,
-convergence and stalling are all judged by code, because a workflow that asks an
-agent "are we done?" gets "yes" eventually regardless of the truth.
+No human is in this loop, which changes what the code has to guarantee. With a
+person watching, "it got stuck" is a notification. Without one, the loop must
+**stop itself**, and it must be cheap to keep firing after it stops — a timer
+does not know the project is finished.
 
-State lives in the workspace, not in anyone's context. Each run starts cold, so
-anything that must survive is written down.
+So everything that decides whether work continues is here, in plain functions,
+not in a prompt: what is still unmet, whether the last run achieved anything,
+and when to halt. The model proposes the increment; this module decides whether
+the increment counted.
 """
 
 from __future__ import annotations
@@ -18,48 +20,67 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-PLAN = "PLAN.md"
+CHARTER = "ACCEPTANCE.md"
 STATE = "state.json"
 JOURNAL = "JOURNAL.md"
+VERIFY = "verify.txt"
 
-# A task line: "- [ ] 3. Add /health endpoint" / "- [x] ..." / "- [!] ..." (blocked)
-_TASK = re.compile(r"^- \[(?P<mark>[ x!])\]\s*(?P<body>.+)$")
+#: `- [ ] health-endpoint: GET /health returns 200`
+_CRITERION = re.compile(r"^- \[(?P<mark>[ x])\]\s*(?P<slug>[a-z0-9][a-z0-9-]*)\s*:\s*(?P<text>.+)$")
+
+#: Consecutive runs that changed no source file before the project halts. One is
+#: normal — a run can legitimately fail its checks. Two means it is spinning.
+MAX_IDLE_RUNS = 2
+
+#: Consecutive runs that met no new criterion. Higher than the idle bound because
+#: real work can take more than one run: a run may refactor, add scaffolding, or
+#: half-build something and still be progressing. But four runs of motion with
+#: nothing achieved is not progress, it is a model rewriting the same file.
+MAX_BARREN_RUNS = 4
+
+
+def _defaults() -> dict[str, Any]:
+    return {"runs": 0, "idle_runs": 0, "barren_runs": 0, "halted": "", "run_start": None}
 
 
 def _state(ws: Path) -> dict[str, Any]:
     path = ws / STATE
     if not path.exists():
-        return {"runs": 0, "fingerprint": "", "idle_runs": 0}
+        return _defaults()
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"runs": 0, "fingerprint": "", "idle_runs": 0}
-    return loaded if isinstance(loaded, dict) else {"runs": 0, "fingerprint": "", "idle_runs": 0}
+        return _defaults()  # a half-written file from a killed run must not end the project
+    return {**_defaults(), **loaded} if isinstance(loaded, dict) else _defaults()
 
 
-def _tasks(ws: Path) -> list[tuple[str, str]]:
-    """[(mark, body)] from PLAN.md, in file order. Empty when there is no plan."""
-    path = ws / PLAN
+def _write_state(ws: Path, state: dict[str, Any]) -> None:
+    (ws / STATE).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _criteria(ws: Path) -> list[tuple[str, str, str]]:
+    """[(mark, slug, text)] from ACCEPTANCE.md, in file order."""
+    path = ws / CHARTER
     if not path.exists():
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        m = _TASK.match(line.strip())
+        m = _CRITERION.match(line.strip())
         if m:
-            out.append((m.group("mark"), m.group("body").strip()))
+            out.append((m.group("mark"), m.group("slug"), m.group("text").strip()))
     return out
 
 
 def _fingerprint(ws: Path) -> str:
-    """A digest of the source tree, so "did this run change anything" is a fact.
+    """A digest of the source tree — the workspace minus its own bookkeeping.
 
-    Only the workspace's own files, sorted, content-hashed. `runtime` bookkeeping
-    is excluded: the journal changes every run by construction, so including it
-    would make every run look productive and the stall detector would never fire.
+    ACCEPTANCE/JOURNAL/state change every run by construction. Counting them
+    would make every run look productive, so the halt condition would never fire
+    and an unattended timer would bill forever while looking healthy.
     """
     digest = hashlib.sha256()
     for path in sorted(ws.rglob("*")):
-        if not path.is_file() or path.name in (STATE, JOURNAL, PLAN):
+        if not path.is_file() or path.name in (STATE, JOURNAL, CHARTER):
             continue
         if any(part in {".git", "__pycache__", ".venv", "node_modules"} for part in path.parts):
             continue
@@ -72,72 +93,60 @@ def _fingerprint(ws: Path) -> str:
 
 
 def survey(ctx: Any) -> dict[str, Any]:
-    """What is true at the start of this run. The only entry point that reads
-    everything, so every later node works from one consistent snapshot."""
+    """One consistent snapshot for the rest of the run, and the halt gate.
+
+    Returns `active: no` when the project is finished or halted, which routes the
+    run straight to its end. That path costs no tokens, so leaving the timer
+    installed on a finished project is harmless — which matters, because nobody
+    is going to remember to uninstall it.
+    """
     ws = Path(ctx.workspace)
     ws.mkdir(parents=True, exist_ok=True)
     state = _state(ws)
-    tasks = _tasks(ws)
-    # Stamp the tree as it is *now*, so `record` can answer "did this run change
-    # anything" exactly. Comparing against the previous run's end instead made
-    # the very first run always look productive, because there was no previous
-    # value to differ from -- so a project that never started never stalled.
+    criteria = _criteria(ws)
+    unmet = [(slug, text) for mark, slug, text in criteria if mark == " "]
+
+    halted = str(state.get("halted") or "")
+    if criteria and not unmet and not halted:
+        halted = "complete: every acceptance criterion is met"
+        state["halted"] = halted
     state["run_start"] = _fingerprint(ws)
-    (ws / STATE).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    open_tasks = [b for mark, b in tasks if mark == " "]
-    blocked = [b for mark, b in tasks if mark == "!"]
+    _write_state(ws, state)
+
+    has_charter = "yes" if criteria else "no"
+    active = "no" if halted else "yes"
     return {
-        "has_plan": "yes" if tasks else "no",
-        "open_count": len(open_tasks),
-        "blocked_count": len(blocked),
-        # Two consecutive runs that changed no source file. One is normal (a run
-        # can legitimately end in a blocked task); two means the loop is spinning
-        # and a human should look rather than the schedule burning tokens.
-        "stalled": "yes" if int(state.get("idle_runs", 0)) >= 2 else "no",
+        "active": active,
+        "has_charter": has_charter,
+        "unmet_count": len(unmet),
+        "unmet": "\n".join(f"- {slug}: {text}" for slug, text in unmet),
         "run_no": int(state.get("runs", 0)) + 1,
-        "summary": (
-            f"run {int(state.get('runs', 0)) + 1}: "
-            f"{len(open_tasks)} open, {len(blocked)} blocked, "
-            f"{len([m for m, _ in tasks if m == 'x'])} done"
+        "status": halted or (
+            f"run {int(state.get('runs', 0)) + 1}: {len(unmet)} of {len(criteria)} criteria unmet"
+            if criteria else "no charter yet"
         ),
     }
 
 
-def pick(ctx: Any, open_count: int) -> dict[str, Any]:
-    """The next task, chosen by position rather than by judgement.
-
-    The plan is ordered once, when it is written; picking the first open task
-    keeps that ordering meaningful. Letting an agent choose each run invites it
-    to keep picking the easy one.
-    """
-    _ = open_count
-    ws = Path(ctx.workspace)
-    for mark, body in _tasks(ws):
-        if mark == " ":
-            return {"task": body, "found": "yes"}
-    return {"task": "", "found": "no"}
-
-
-def verify(ctx: Any, task: str) -> dict[str, Any]:
+def verify(ctx: Any, criterion: str) -> dict[str, Any]:
     """Run the project's own checks. The one judgement no agent makes.
 
-    Reads the command from `verify.txt` in the workspace, which the planning step
-    writes. No command means unverified -- reported as a failure, because
-    "nothing checked it" and "it passed" must never look the same.
+    A missing or empty command is a *failure*, not a pass. If "nothing checked
+    it" and "it passed" produced the same answer, an unattended loop would
+    terminate fastest on a project that never wrote a test.
     """
+    _ = criterion
     ws = Path(ctx.workspace)
-    cmd_file = ws / "verify.txt"
-    if not cmd_file.exists():
-        return {"passed": "no", "report": "no verify.txt: nothing checked this work"}
-    command = cmd_file.read_text(encoding="utf-8").strip()
+    cmd_file = ws / VERIFY
+    command = cmd_file.read_text(encoding="utf-8").strip() if cmd_file.exists() else ""
     if not command:
-        return {"passed": "no", "report": "verify.txt is empty: nothing checked this work"}
+        return {"passed": "no", "report": f"no usable {VERIFY}: nothing checked this work"}
     try:
         proc = subprocess.run(  # noqa: S602 - the project's own test command, by design
-            command, shell=True, cwd=ws, capture_output=True, text=True, timeout=600,
+            command, shell=True, cwd=ws, capture_output=True, text=True, timeout=1800,
         )
-    except subprocess.TimeoutExpired:
-        return {"passed": "no", "report": f"verify timed out after 600s: {command}"}
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {"passed": "no", "report": f"verify could not complete: {exc}"}
     tail = (proc.stdout + proc.stderr)[-4000:]
     return {
         "passed": "yes" if proc.returncode == 0 else "no",
@@ -145,41 +154,54 @@ def verify(ctx: Any, task: str) -> dict[str, Any]:
     }
 
 
-def record(ctx: Any, task: str, passed: str, report: str) -> dict[str, Any]:
-    """Write down what happened, and decide whether the run made progress.
+def record(ctx: Any, criterion: str, task: str, passed: str, report: str) -> dict[str, Any]:
+    """Tick what was actually achieved, then decide whether to keep going.
 
-    A passing task is ticked; a failing one is marked blocked rather than left
-    open, so the next run moves on instead of retrying the same wall forever.
+    A criterion is met only when the checks pass **and** the slug the agent named
+    exists in the charter. Without that second condition an agent could close the
+    project by inventing a criterion, which is the unattended failure mode:
+    nobody is reading the output at the moment it happens.
     """
     ws = Path(ctx.workspace)
-    mark = "x" if passed == "yes" else "!"
-    plan_path = ws / PLAN
-    if plan_path.exists() and task:
-        lines = plan_path.read_text(encoding="utf-8").splitlines()
-        for i, line in enumerate(lines):
-            m = _TASK.match(line.strip())
-            if m and m.group("mark") == " " and m.group("body").strip() == task:
-                lines[i] = line.replace("- [ ]", f"- [{mark}]", 1)
-                break
-        plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
     state = _state(ws)
-    now = _fingerprint(ws)
-    started_at = state.get("run_start")
-    changed = now != started_at if started_at is not None else False
-    state["runs"] = int(state.get("runs", 0)) + 1
-    state["fingerprint"] = now
-    state["idle_runs"] = 0 if changed else int(state.get("idle_runs", 0)) + 1
-    (ws / STATE).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    known = {slug for _, slug, _ in _criteria(ws)}
+    achieved = passed == "yes" and criterion in known
 
+    if achieved:
+        path = ws / CHARTER
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            m = _CRITERION.match(line.strip())
+            if m and m.group("mark") == " " and m.group("slug") == criterion:
+                lines[i] = line.replace("- [ ]", "- [x]", 1)
+                break
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    changed = _fingerprint(ws) != state.get("run_start")
+    state["runs"] = int(state.get("runs", 0)) + 1
+    state["idle_runs"] = 0 if changed else int(state.get("idle_runs", 0)) + 1
+    state["barren_runs"] = 0 if achieved else int(state.get("barren_runs", 0)) + 1
+
+    if not state.get("halted"):
+        if state["idle_runs"] >= MAX_IDLE_RUNS:
+            state["halted"] = f"stalled: {MAX_IDLE_RUNS} runs changed no source file"
+        elif state["barren_runs"] >= MAX_BARREN_RUNS:
+            state["halted"] = f"stalled: {MAX_BARREN_RUNS} runs met no acceptance criterion"
+    _write_state(ws, state)
+
+    note = "" if criterion in known else " (named an unknown criterion)"
     with (ws / JOURNAL).open("a", encoding="utf-8") as fh:
         fh.write(
-            f"\n## run {state['runs']} — {task or '(no task)'}\n\n"
-            f"- outcome: {'passed' if passed == 'yes' else 'blocked'}\n"
+            f"\n## run {state['runs']} — {criterion or '(none)'}\n\n"
+            f"- increment: {task}\n"
+            f"- checks: {'passed' if passed == 'yes' else 'failed'}{note}\n"
             f"- source changed: {'yes' if changed else 'no'}\n\n"
             f"```\n{report[:2000]}\n```\n"
         )
     return {
-        "outcome": f"{'done' if passed == 'yes' else 'blocked'}: {task}",
-        "changed": "yes" if changed else "no",
+        "outcome": (
+            f"met {criterion}" if achieved
+            else f"no criterion met{note}: {task}"
+        ),
+        "halted": str(state.get("halted") or ""),
     }
