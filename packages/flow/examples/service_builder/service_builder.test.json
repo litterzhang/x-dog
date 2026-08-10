@@ -1,0 +1,89 @@
+{
+  "cases": [
+    {
+      "name": "first run: no plan yet, so it plans and waits for a human",
+      "inputs": {
+        "idea": "A JSON API that stores short notes."
+      },
+      "signals": [],
+      "scripts": {
+        "survey": {
+          "has_plan": "no",
+          "open_count": 0,
+          "blocked_count": 0,
+          "stalled": "no",
+          "run_no": 1,
+          "summary": "run 1: 0 open, 0 blocked, 0 done"
+        }
+      },
+      "agents": {
+        "plan": {
+          "plan_summary": "6 tasks, verified by `python -m pytest -q`"
+        }
+      },
+      "expect": {
+        "paused": "approve"
+      }
+    },
+    {
+      "name": "a later run advances exactly one task and records the outcome",
+      "inputs": {
+        "idea": "ignored once a plan exists"
+      },
+      "scripts": {
+        "survey": {
+          "has_plan": "yes",
+          "open_count": 4,
+          "blocked_count": 0,
+          "stalled": "no",
+          "run_no": 3,
+          "summary": "run 3: 4 open, 0 blocked, 2 done"
+        },
+        "pick": {
+          "task": "3. Add GET /health",
+          "found": "yes"
+        },
+        "verify": {
+          "passed": "yes",
+          "report": "$ pytest -q\nexit=0\n6 passed"
+        },
+        "record": {
+          "outcome": "done: 3. Add GET /health",
+          "changed": "yes"
+        }
+      },
+      "agents": {
+        "implement": {
+          "changes": "added app/health.py and a test"
+        }
+      },
+      "expect": {
+        "success": true,
+        "output": {
+          "outcome": "done: 3. Add GET /health",
+          "changed": "yes",
+          "progress": "run 3: 4 open, 0 blocked, 2 done"
+        }
+      }
+    },
+    {
+      "name": "two idle runs stop the loop and ask a human instead of burning tokens",
+      "inputs": {
+        "idea": "ignored"
+      },
+      "scripts": {
+        "survey": {
+          "has_plan": "yes",
+          "open_count": 2,
+          "blocked_count": 2,
+          "stalled": "yes",
+          "run_no": 9,
+          "summary": "run 9: 2 open, 2 blocked, 4 done"
+        }
+      },
+      "expect": {
+        "paused": "escalate"
+      }
+    }
+  ]
+}
