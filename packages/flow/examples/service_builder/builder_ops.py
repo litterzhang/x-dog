@@ -178,6 +178,30 @@ def verify(ctx: Any, criterion: str) -> dict[str, Any]:
     }
 
 
+def _tested_slugs(ctx: Any) -> set[str]:
+    """Criterion slugs a test file explicitly claims to cover.
+
+    The convention is a comment `# covers: slug` (or several, comma-separated)
+    beside the test. It is opt-in on purpose: a criterion is credited because
+    some test says it checks it, never because the suite was green and the slug
+    existed. The second rule would let one passing smoke test close the charter.
+    """
+    slugs: set[str] = set()
+    for root in _source_roots(ctx):
+        if not root.exists():
+            continue
+        for path in root.rglob("test_*.py"):
+            if any(part in _NOISE for part in path.parts):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in re.finditer(r"#[ \t]*covers:[ \t]*([a-z0-9,\- \t]+)", text):
+                slugs.update(s.strip() for s in m.group(1).split(",") if s.strip())
+    return slugs
+
+
 def record(ctx: Any, criterion: str, task: str, passed: str, report: str) -> dict[str, Any]:
     """Tick what was actually achieved, then decide whether to keep going.
 
@@ -191,15 +215,28 @@ def record(ctx: Any, criterion: str, task: str, passed: str, report: str) -> dic
     known = {slug for _, slug, _ in _criteria(ws)}
     achieved = passed == "yes" and criterion in known
 
-    if achieved:
+    # Credit the named criterion, and any other whose own test is now passing.
+    #
+    # The suite is run whole, so a green run is evidence about every criterion a
+    # test covers -- not only the one this run happened to name. Ticking one at a
+    # time made the charter lag reality badly: on the first project it read 4 of
+    # 12 while six more were implemented, tested and green, and the loop would
+    # have spent five hours and a few hundred thousand tokens re-confirming
+    # finished work. A criterion still needs a test that names it, so this
+    # credits evidence rather than assuming it.
+    also: list[str] = []
+    if passed == "yes":
+        also = [slug for slug in _tested_slugs(ctx) if slug in known and slug != criterion]
+    closing = ({criterion} if achieved else set()) | set(also)
+    if closing:
         path = ws / CHARTER
         lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             m = _CRITERION.match(line.strip())
-            if m and m.group("mark") == " " and m.group("slug") == criterion:
+            if m and m.group("mark") == " " and m.group("slug") in closing:
                 lines[i] = line.replace("- [ ]", "- [x]", 1)
-                break
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        achieved = achieved or bool(also)
 
     changed = _fingerprint(_source_roots(ctx)) != state.get("run_start")
     state["runs"] = int(state.get("runs", 0)) + 1

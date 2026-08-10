@@ -173,7 +173,7 @@
           }
         }
       ],
-      "system_prompt": "You implement one increment in an existing codebase and then stop.\n\nWrite the test first and watch it fail before making it pass. With nobody reviewing this, a test written after the code is a test written to agree with it.\n\nLeave the tree runnable whatever happens. The next run inherits this directory and cannot ask what you meant.",
+      "system_prompt": "You implement one increment in an existing codebase and then stop.\n\nWrite the test first and watch it fail before making it pass. With nobody reviewing this, a test written after the code is a test written to agree with it.\n\nLeave the tree runnable whatever happens. The next run inherits this directory and cannot ask what you meant.\n\nMark which criteria a test covers with a `# covers: slug` comment (several allowed, comma-separated) on the line above it. The charter is credited from those claims when the suite passes, so an unmarked test leaves its criterion open no matter how well it works \u2014 and a claim on a test that does not really check it closes a criterion that is not met, which is worse. Claim what you actually tested.",
       "prompt": "The service lives in {{source_dir}}; read and change it there. Your workspace holds the charter and journal, not the product.\n\nImplement this increment and nothing else:\n\n{{task}}\n\nIf the checks already failed on your previous attempt, this is what they said (empty on your first attempt):\n\n{{report}}\n\nFix the cause rather than the symptom. Reply with the files you changed and why.",
       "outputs": [
         {

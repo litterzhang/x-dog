@@ -257,3 +257,55 @@ def test_a_non_repository_is_skipped_quietly(tmp_path: Path) -> None:
     _Ctx(ws).allow_paths[0].mkdir(parents=True, exist_ok=True)
 
     assert builder_ops.commit(_Ctx(ws), "x", "")["committed"] == "not a git repository"
+
+
+def test_a_test_that_claims_a_criterion_closes_it_too(tmp_path: Path) -> None:
+    """The suite runs whole, so a green run is evidence about every criterion a
+    test covers — not only the one this run named. Ticking one at a time made the
+    charter lag reality badly: 4 of 12 while six more were built and green."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n- [ ] c: three\n")
+    src = _Ctx(ws).allow_paths[0]
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "test_x.py").write_text(
+        "# covers: a, b\ndef test_x():\n    assert True\n", encoding="utf-8"
+    )
+
+    builder_ops.survey(_Ctx(ws))
+    builder_ops.record(_Ctx(ws), "a", "did a", "yes", "green")
+
+    charter = (ws / "ACCEPTANCE.md").read_text()
+    assert "- [x] a: one" in charter
+    assert "- [x] b: two" in charter, "b's test says it covers b, and the suite passed"
+    assert "- [ ] c: three" in charter, "nothing claims c, so nothing credits it"
+
+
+def test_a_green_suite_alone_closes_nothing(tmp_path: Path) -> None:
+    """The rule that keeps this honest. Crediting every known slug because the
+    suite was green would let one passing smoke test close the whole charter."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n")
+    src = _Ctx(ws).allow_paths[0]
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "test_smoke.py").write_text("def test_s():\n    assert True\n", encoding="utf-8")
+
+    builder_ops.survey(_Ctx(ws))
+    builder_ops.record(_Ctx(ws), "a", "did a", "yes", "green")
+
+    charter = (ws / "ACCEPTANCE.md").read_text()
+    assert "- [x] a: one" in charter, "the named one still closes"
+    assert "- [ ] b: two" in charter, "an unclaimed criterion does not"
+
+
+def test_a_failing_suite_credits_nothing(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n- [ ] b: two\n")
+    src = _Ctx(ws).allow_paths[0]
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "test_x.py").write_text("# covers: a, b\ndef test_x(): ...\n", encoding="utf-8")
+
+    builder_ops.survey(_Ctx(ws))
+    builder_ops.record(_Ctx(ws), "a", "tried", "no", "red")
+
+    assert "- [ ] a: one" in (ws / "ACCEPTANCE.md").read_text()
+    assert "- [ ] b: two" in (ws / "ACCEPTANCE.md").read_text()
