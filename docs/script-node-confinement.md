@@ -151,9 +151,14 @@ bounded.
 
 ## Limits, stated plainly
 
-- **Linux only.** macOS `sandbox_init` is deprecated, Windows has no equivalent.
-  A confined run on those platforms must refuse exactly as it does now — the
-  feature becomes platform-conditional, which is worse than uniform.
+- **Two tiers, two platform stories, and the difference must be visible.** The
+  audit-hook tier runs everywhere. The Landlock tier is Linux-only — macOS
+  `sandbox_init` is deprecated, Windows has no equivalent — so a confined run on
+  macOS gets containment against Python-level code and nothing against a C
+  extension. That is a *weaker guarantee under the same flag*, which is the
+  failure mode this whole feature was built to avoid. Either `--confined` reports
+  which tiers are active, or it refuses where it cannot reach the OS. Silently
+  meaning different things on different machines is not an option.
 - **Kernel 5.13+**, and per-ABI feature gaps (`TRUNCATE` needs ABI 3, network
   rules ABI 4). Probe at startup, refuse when absent; never silently downgrade,
   because a run that quietly stops enforcing is the failure this whole feature
