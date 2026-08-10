@@ -229,3 +229,57 @@ def record(ctx: Any, criterion: str, task: str, passed: str, report: str) -> dic
         ),
         "halted": str(state.get("halted") or ""),
     }
+
+
+def commit(ctx: Any, outcome: str, halted: str) -> dict[str, Any]:
+    """Record the run in version control, and push if the remote is reachable.
+
+    Without this the builder writes files and nothing remembers which run wrote
+    them. A journal entry saying "source changed: yes" is not a record you can
+    read, revert, or bisect — and an unattended process is exactly the one whose
+    work you will later want to undo one increment at a time.
+
+    Every outcome is committed, including failures. A run that tried and could
+    not is the most interesting entry in the history, and dropping it would make
+    the log claim a smooth ascent that did not happen.
+
+    Git problems are reported, never raised. The work is on disk either way, and
+    failing the run over an unreachable remote would burn a barren run and move
+    the project closer to halting for a reason that has nothing to do with it.
+    """
+    root = _source_roots(ctx)[0]
+    if not (root / ".git").exists():
+        return {"committed": "not a git repository"}
+
+    def git(*args: str, timeout: int = 120) -> tuple[int, str]:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(root), *args],
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            return 1, str(exc)
+        return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+    code, out = git("add", "-A")
+    if code != 0:
+        return {"committed": f"git add failed: {out[:200]}"}
+    if git("diff", "--cached", "--quiet")[0] == 0:
+        return {"committed": "nothing to commit"}
+
+    runs = int(_state(Path(ctx.workspace)).get("runs", 0))
+    subject = f"run {runs}: {outcome}"[:72]
+    body = (
+        f"Written by the unattended builder, not by a person.\n\n"
+        f"{outcome}\n"
+    )
+    if halted:
+        body += f"\nThe project halted after this run: {halted}\n"
+    code, out = git("commit", "-m", subject, "-m", body)
+    if code != 0:
+        return {"committed": f"git commit failed: {out[:200]}"}
+
+    code, out = git("push", "origin", "HEAD", timeout=180)
+    if code != 0:
+        return {"committed": f"committed locally; push failed: {out[:200]}"}
+    return {"committed": f"committed and pushed: {subject}"}

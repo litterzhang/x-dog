@@ -51,6 +51,9 @@
         "record": {
           "outcome": "met health-endpoint",
           "halted": ""
+        },
+        "commit": {
+          "committed": "committed and pushed: run 4: met health-endpoint"
         }
       },
       "agents": {
@@ -68,7 +71,8 @@
         "output": {
           "outcome": "met health-endpoint",
           "halted": "",
-          "status": "run 4: 5 of 7 criteria unmet"
+          "status": "run 4: 5 of 7 criteria unmet",
+          "committed": "committed and pushed: run 4: met health-endpoint"
         }
       }
     },
@@ -106,6 +110,9 @@
         "record": {
           "outcome": "met create-note",
           "halted": ""
+        },
+        "commit": {
+          "committed": "committed and pushed: run 4: met health-endpoint"
         }
       },
       "agents": {
@@ -133,7 +140,8 @@
         "success": true,
         "output": {
           "outcome": "met create-note",
-          "halted": ""
+          "halted": "",
+          "committed": "committed and pushed: run 4: met health-endpoint"
         }
       }
     },

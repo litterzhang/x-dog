@@ -195,3 +195,65 @@ def test_a_corrupt_state_file_does_not_end_the_project(tmp_path: Path) -> None:
 
     assert out["run_no"] == 1
     assert out["active"] == "yes"
+
+
+def _git_repo(root: Path) -> None:
+    import subprocess
+    root.mkdir(parents=True, exist_ok=True)
+    for args in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "T"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+def test_every_run_is_committed_including_the_ones_that_failed(tmp_path: Path) -> None:
+    """A run that tried and could not is the most interesting entry in the
+    history. Committing only successes would make the log claim a smooth ascent
+    that did not happen."""
+    import subprocess
+
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n")
+    src = _Ctx(ws).allow_paths[0]
+    _git_repo(src)
+    (src / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    out = builder_ops.commit(_Ctx(ws), "no criterion met: tried and failed", "")
+
+    assert "committed" in out["committed"]
+    log = subprocess.run(["git", "-C", str(src), "log", "--oneline"],
+                         capture_output=True, text=True).stdout
+    assert "no criterion met" in log
+
+
+def test_an_unchanged_tree_is_not_committed(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n")
+    src = _Ctx(ws).allow_paths[0]
+    _git_repo(src)
+    builder_ops.commit(_Ctx(ws), "first", "")
+
+    assert builder_ops.commit(_Ctx(ws), "second", "")["committed"] == "nothing to commit"
+
+
+def test_a_git_failure_is_reported_not_raised(tmp_path: Path) -> None:
+    """Failing the run over an unreachable remote would burn a barren run and
+    move the project toward halting for a reason unrelated to the project."""
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n")
+    src = _Ctx(ws).allow_paths[0]
+    _git_repo(src)
+    (src / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    out = builder_ops.commit(_Ctx(ws), "did a thing", "")
+
+    assert "push failed" in out["committed"], "no remote configured, so the push cannot work"
+    assert "committed locally" in out["committed"]
+
+
+def test_a_non_repository_is_skipped_quietly(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    _charter(ws, "- [ ] a: one\n")
+    _Ctx(ws).allow_paths[0].mkdir(parents=True, exist_ok=True)
+
+    assert builder_ops.commit(_Ctx(ws), "x", "")["committed"] == "not a git repository"

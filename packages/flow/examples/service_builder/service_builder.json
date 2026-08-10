@@ -255,6 +255,33 @@
           }
         }
       ]
+    },
+    {
+      "id": "commit",
+      "type": "script",
+      "run": "builder_ops:commit",
+      "inputs": [
+        {
+          "name": "outcome",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "halted",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "committed",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     }
   ],
   "edges": [
@@ -372,14 +399,6 @@
       }
     },
     {
-      "from": "record",
-      "to": "$output",
-      "map": {
-        "outcome": "outcome",
-        "halted": "halted"
-      }
-    },
-    {
       "from": "survey",
       "to": "$output",
       "map": {
@@ -391,6 +410,29 @@
       "to": "$output",
       "map": {
         "charter_summary": "charter"
+      }
+    },
+    {
+      "from": "record",
+      "to": "commit",
+      "map": {
+        "outcome": "outcome",
+        "halted": "halted"
+      }
+    },
+    {
+      "from": "record",
+      "to": "$output",
+      "map": {
+        "outcome": "outcome",
+        "halted": "halted"
+      }
+    },
+    {
+      "from": "commit",
+      "to": "$output",
+      "map": {
+        "committed": "committed"
       }
     }
   ]
