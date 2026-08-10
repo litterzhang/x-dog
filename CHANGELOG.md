@@ -12,6 +12,42 @@ Nothing yet.
 
 ---
 
+## [2.0.1] — 2026-08-10
+
+### Fixed
+
+- **A non-required loop-carried input port broke the compiled engine.** The
+  interpreter passes every declared port, defaulting an unfed one to `""`; the
+  generated module builds its inputs from the edges that actually fired, so a
+  port that is absent by design on the first loop pass was missing entirely and
+  the node function took it positionally:
+
+  ```
+  TypeError: node_implement() missing 1 required positional argument: 'report'
+  ```
+
+  The workflow ran correctly interpreted and died compiled. It had passed
+  `validate`, passed its test suite, and run by hand three times; it failed
+  inside a systemd timer, which is the environment least able to explain itself.
+  Generated signatures now default their optional ports.
+
+### Changed
+
+- `scheduling install` can record a workspace without `--confined`. Tying the
+  two together made one of them unreachable: a workflow whose script nodes shell
+  out cannot be confined — which includes anything that runs a test suite — and
+  such a workflow had no way to say *where* it should work. It silently got the
+  bundle's own directory.
+
+### Added
+
+- `packages/flow/examples/service_builder/` — an unattended workflow that builds
+  a service from a one-paragraph idea, one hour-sized increment per run, halting
+  itself when the acceptance criteria are met or when it stops making progress.
+  See [`docs/service-builder.md`](docs/service-builder.md).
+
+---
+
 ## [2.0.0] — 2026-08-10
 
 A run now has a **workspace**, and each node kind is held to it differently. This
