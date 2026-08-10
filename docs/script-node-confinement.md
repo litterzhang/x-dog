@@ -74,26 +74,65 @@ No root, no daemon, no extra dependency.
 Against an LLM call measured in seconds, this does not register. It matters only
 for a fan-out of hundreds of trivial script nodes, which is not what they are for.
 
-## The cheaper tier, and why it is not a boundary
+## The portable tier: audit hooks, not a patched file API
 
-PEP 578 audit hooks (`sys.addaudithook`) enforce in-process, scoped to the script
-node with a `ContextVar` so the executor's own I/O is untouched. Tested:
+The obvious cross-platform move is to inject Python's file API — replace
+`builtins.open`, `io.open`, `os.open` — and check paths there. **That is strictly
+weaker than what CPython already gives you**, and measurably so. The same four
+escapes, against each mechanism:
 
-| | |
-|---|---|
-| `open("/tmp/x","w")` | blocked |
-| `os.system(...)`, `ctypes.CDLL(...)`, `shutil.rmtree(...)` | blocked |
-| `sys.audit = lambda *a: None` then `open(...)` | **still blocked** — the C layer calls `PySys_Audit` directly; the Python name is decoration |
-| `os.remove("/tmp/victim.txt")` | **deleted the file** |
+| Escape | patched `io.open`/`os.open` | `sys.addaudithook` |
+|---|---|---|
+| `open(path, "w")` | blocked | blocked |
+| `os.open(path, O_CREAT)` | blocked | blocked |
+| `sqlite3.connect(path)` | **wrote the file** | blocked (`sqlite3.connect`) |
+| `ctypes.CDLL("libc.so.6").fopen(...)` | **wrote the file** | blocked (`ctypes.dlopen`) |
+| files created anyway | `a.db`, `d.txt` | none |
 
-That last row is the verdict. `os.remove` succeeded because the hook did not name
-that event — an audit hook is a **denylist of events you remembered to list**,
-and the list is long, versioned, and grows with CPython. It took one forgotten
-entry to delete a file outside the workspace, and it was found by trying, not by
-reading.
+Patching only sees calls that go *through Python*. `sqlite3` opens its file in C
+and never touches `os.open`; `ctypes` goes straight to libc. Audit events are
+raised from inside CPython's own C implementation, so they fire on both.
 
-Audit hooks are worth having as defense in depth. They must never be described as
-the boundary, for exactly the reason the README already avoids the word sandbox.
+Two more properties that matter for a boundary, both verified:
+
+- **The hook cannot be removed.** There is no `sys.removeaudithook`.
+- **It cannot be neutered from Python.** Reassigning `sys.audit` succeeds and
+  changes nothing — the C layer calls `PySys_Audit` directly. A patched
+  `io.open`, by contrast, is one `importlib.reload(io)` from gone.
+
+And audit hooks are **already cross-platform** — Windows, macOS, Linux — which is
+the property the patched-API idea was reaching for.
+
+### Correcting the earlier draft of this document
+
+An earlier version of this file reported that `os.remove` "fired no audit event"
+and treated that as a hole in CPython. That was wrong, and wrong in the direction
+that flatters the person writing it: the event exists. Every path-mutating call
+raises one:
+
+```
+os.remove -> ['os.remove']      os.mkdir    -> ['os.mkdir']
+os.rename -> ['os.rename']      os.truncate -> ['os.truncate']
+os.rmdir  -> ['os.rmdir']       os.symlink  -> ['os.symlink']
+open(w)   -> ['open']           os.chmod    -> ['os.chmod']
+```
+
+The file got deleted because *my hook did not handle that event*, not because
+CPython failed to raise it. The lesson survives — a hook is an enumeration you
+have to complete — but it is a much smaller lesson than "there are holes in the
+mechanism", and the mechanism deserves the correction.
+
+### The hole that does remain
+
+Coverage of C libraries is by **explicit annotation, not interception**.
+`sqlite3.connect` is caught because someone added that event to CPython by hand —
+note it raises `sqlite3.connect`, not `open`. A third-party extension that writes
+via libc from its own already-linked C code raises nothing, needs no `dlopen`, and
+is invisible. That is structural and no amount of care in the hook fixes it.
+
+So: audit hooks are a real containment boundary against Python-level code,
+portable, and unremovable — and still not an OS boundary. Landlock is. They
+compose: same policy, two enforcement layers, in the same child process.
 
 ## What this would change
 
@@ -131,12 +170,13 @@ bounded.
 
 | Step | Work | Est. |
 |---|---|---|
+| 0. Audit-hook policy (portable) | one hook handling the path-mutating event table above, scoped to the child; works on Windows/macOS/Linux | 1–2d |
 | 1. `landlock.py` in `xdog-agent` | the ~60 lines above, plus ABI probe and a clean "unavailable" path | 1d |
 | 2. Script-node child runner | serialize `(code or run, ctx, kwargs)` → child → JSON back; map a non-zero exit onto the existing `WorkflowExecutionError` | 2d |
 | 3. Wire into `--confined` | drop inline `code` from `unconfinable_reasons`, add the platform/kernel refusal, mirror in codegen — **the recurring tax on anything touching execution** | 1–2d |
 | 4. Tests | the probe table above becomes the suite; plus a codegen parity test, since this is exactly where the two engines drifted last time | 1d |
 
-**~5 days**, against the 2–3 weeks the existing doc estimates for confining a
+**~6–7 days**, against the 2–3 weeks the existing doc estimates for confining a
 run. The difference is entirely that script nodes never needed the provider.
 
 ## Recommendation
@@ -146,7 +186,10 @@ which is the [tasks service](./tasks-service.md)'s first real requirement, and
 does not exist yet. Until then the refusal is the correct behaviour, because it
 is the honest one.
 
-If it is built: **step 1 and 2 only, behind the existing `--confined` flag.** Do
+If it is built: **step 0 and 2 first** — the audit hook plus the child process
+give a portable boundary against Python-level code, which is the realistic
+failure. Landlock (step 1) then layers underneath on Linux for the C-extension
+hole that a hook structurally cannot see. Do
 not add a second flag, do not add a "partial" mode, and do not ship the audit-hook
 tier as though it were the boundary. One flag that either confines or refuses is
 the property worth keeping.
