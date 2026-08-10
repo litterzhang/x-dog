@@ -15,6 +15,7 @@ import importlib.resources
 import pprint
 import re
 import string
+import textwrap
 
 from xdog.flow.checkpoint import render_checkpoint_interceptor
 from xdog.flow.frontier import build_frontier_spec, render_frontier_runtime
@@ -597,12 +598,27 @@ def _rename_inline_fn(code: str, alias: str) -> str:
 
 
 def _render_inline_scripts(wf: WorkflowDef, safe_ids: dict[str, str]) -> str:
-    """Emit each inline-``code`` script node's function as a top-level ``_script_<id>``."""
+    """Emit each inline-``code`` script node's function as a top-level ``_script_<id>``.
+
+    Wrapped in ``script_bound`` because a script node's ``code`` is not only its
+    function: any other top-level statement in it runs too, here at import time,
+    before ``main()`` is ever called.  Unwrapped, a workflow could put its
+    filesystem access at module level and step around the bound entirely -- which
+    it could, and did, until this was tested.
+
+    ``with`` introduces no scope in Python, so ``_script_<id>`` is still a
+    module-level name and every call site is unchanged.
+    """
     blocks: list[str] = []
     for node in wf.nodes:
         if node.type == "script" and node.code is not None:
             alias = f"_script_{safe_ids[node.id]}"
-            blocks.append(_rename_inline_fn(node.code, alias))
+            body = textwrap.indent(_rename_inline_fn(node.code, alias), "    ")
+            blocks.append(
+                "with script_bound(_workspace_dir(), _granted_paths(),\n"
+                "                  confined=_confinement_roots() is not None):\n"
+                f"{body}"
+            )
     return "\n\n\n".join(blocks)
 
 

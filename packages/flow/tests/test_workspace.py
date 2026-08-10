@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
 from xdog.flow.models import NodeDef
 from xdog.flow.runners import SdkRunner
@@ -574,3 +575,100 @@ def test_a_script_node_is_told_where_its_workspace_is(tmp_path: Path) -> None:
 
     assert result.runtime["out"]["r"] == str(ws)
     assert (ws / "out.txt").read_text() == "written", "and writing there is allowed"
+
+
+def test_a_scripts_top_level_is_bounded_too(tmp_path: Path) -> None:
+    """A script node's `code` is not only its function.
+
+    Any other top-level statement runs as well, and it ran *unbounded* until this
+    was tested -- so a workflow could put its filesystem access at module level
+    and step around the audit hook entirely, `--confined` or not. Both engines
+    had it, which is why it was easy to miss: nothing looked inconsistent.
+    """
+    import asyncio
+
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
+
+    escape = tmp_path / "ESCAPED_AT_TOP_LEVEL.txt"
+    wf = parse_workflow({
+        "name": "t", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "outputs": ["r"], "code":
+                   "from pathlib import Path\n"
+                   f"Path({str(escape)!r}).write_text('escaped')\n"
+                   "def s(ctx):\n    return 'ran'"}],
+        "edges": [{"from": "s", "to": "$output", "map": {"r": "result"}}],
+    })
+
+    with pytest.raises(PermissionError):
+        asyncio.run(execute(wf, workspace=tmp_path / "runtime", timeout=10))
+
+    assert not escape.exists()
+
+
+def test_the_generated_module_bounds_its_top_level_at_import(tmp_path: Path) -> None:
+    """And the compiled half, where it is worse: the inlined top level runs when
+    the module is imported, before `main()` is called at all."""
+    import os
+
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    escape = tmp_path / "ESCAPED_AT_IMPORT.txt"
+    wf = parse_workflow({
+        "name": "t", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "outputs": ["r"], "code":
+                   "from pathlib import Path\n"
+                   f"Path({str(escape)!r}).write_text('escaped')\n"
+                   "def s(ctx):\n    return 'ran'"}],
+        "edges": [{"from": "s", "to": "$output", "map": {"r": "result"}}],
+    })
+    source = generate(wf)
+    assert "with script_bound(" in source
+
+    old = os.environ.get("FLOW_WORKSPACE")
+    os.environ["FLOW_WORKSPACE"] = str(tmp_path / "runtime")
+    try:
+        with pytest.raises(PermissionError):
+            exec(compile(source, "<gen>", "exec"), {})  # noqa: S102 - our own output
+    finally:
+        if old is None:
+            os.environ.pop("FLOW_WORKSPACE", None)
+        else:
+            os.environ["FLOW_WORKSPACE"] = old
+
+    assert not escape.exists()
+
+
+def test_a_run_ref_modules_import_is_deliberately_not_bounded(tmp_path: Path) -> None:
+    """The asymmetry, stated so it is a decision rather than a discovery.
+
+    `run: module:callable` loads a file from disk. Its import-time code is no
+    more bounded than any other dependency's, because that is what importing is;
+    the bound applies to the *call*. Inline `code` is different: it is text
+    carried inside the workflow, which is the thing that may have been generated.
+    """
+    import asyncio
+    import sys
+
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
+
+    at_import = tmp_path / "at_import.txt"
+    (tmp_path / "modref.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(at_import)!r}).write_text('import time')\n"
+        "def go(ctx):\n"
+        "    return str(ctx.workspace)\n",
+        encoding="utf-8",
+    )
+    sys.modules.pop("modref", None)
+    wf = parse_workflow({
+        "name": "t", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "run": "modref:go", "outputs": ["r"]}],
+        "edges": [{"from": "s", "to": "$output", "map": {"r": "result"}}],
+    })
+
+    asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path / "runtime", timeout=10))
+
+    assert at_import.exists(), "import-time code runs unbounded, like any dependency"

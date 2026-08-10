@@ -881,8 +881,14 @@ async def execute(
             stubbed = stubs.script(node, inputs=ins, step=step, fan_index=fan_index)
             if stubbed is not None:
                 return _coerce_script_output(node, node_id, _script_stub_value(node, stubbed))
+        # Inline `code` is exec'd inside the bound: its top-level statements are
+        # part of the script, carried in the workflow file, and ran unbounded
+        # until this was tested. A `run:` ref is imported outside it -- that is
+        # loading a module from disk, with the same trust as any other
+        # dependency, and its import-time code is no more bounded than theirs.
         if node.code is not None:
-            fn = _resolve_script_fn(node, base_dir)
+            with script_bound(_workspace, allow_paths or (), confined=confined):
+                fn = _resolve_script_fn(node, base_dir)
         elif script_resolver is not None:
             fn = script_resolver(node.run or "")
         else:

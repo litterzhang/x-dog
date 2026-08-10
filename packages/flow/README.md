@@ -541,6 +541,18 @@ def report(ctx, rows):
 Reads from the interpreter's own trees stay open — otherwise no script could
 `import` anything.
 
+The bound covers a script node's **whole `code`**, not just its function body.
+Any other top-level statement runs too — at import time, in the compiled engine,
+before `main()` is called — so it is held to the same bound. Otherwise a workflow
+could put its filesystem access at module level and step around the hook
+entirely.
+
+One deliberate asymmetry: with `run: module:callable`, the **call** is bounded
+and the **import is not**. Importing a module from disk is the same trust as any
+other dependency, whose import-time code is equally unbounded. Inline `code` is
+different because it is text carried inside the workflow — the part that may have
+been generated.
+
 ### What `--confined` adds
 
 Some calls leave the region a hook can see: `subprocess`, `os.system`, `ctypes`.
