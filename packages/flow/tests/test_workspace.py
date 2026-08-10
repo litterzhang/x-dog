@@ -462,3 +462,44 @@ async def test_a_node_with_no_tools_is_told_nothing(
     prompt = await _prompt_for(monkeypatch, workspace=tmp_path / "runtime")
 
     assert prompt == ""
+
+
+def test_the_two_engines_default_their_workspace_to_different_places(tmp_path: Path) -> None:
+    """The one place `interpret == compile` deliberately does not mean "the same
+    path", and it is worth pinning so it stays deliberate.
+
+    Both engines apply the same rule — `runtime/` beside the artifact — but the
+    artifact differs: the interpreter's is the workflow file, the compiled one's
+    is the module. Making the module use the workflow file's directory would be
+    worse than the difference, since a bundle routinely runs on a machine where
+    that file does not exist. Anyone who needs them to agree names the workspace
+    explicitly, which is what `--workspace` and `FLOW_WORKSPACE` are for.
+    """
+    import os
+
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "c", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go", "tools": ["filesystem"],
+                   "outputs": ["out"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    })
+    namespace: dict[str, Any] = {}
+    old = os.environ.pop("FLOW_WORKSPACE", None)
+    try:
+        exec(compile(generate(wf), "<gen>", "exec"), namespace)  # noqa: S102 - our own output
+
+        # Same rule, different anchor.
+        assert namespace["_workspace_dir"]().name == "runtime"
+        assert namespace["_workspace_dir"]() != tmp_path / "runtime"
+
+        # And naming it explicitly makes them agree, which is the escape hatch.
+        os.environ["FLOW_WORKSPACE"] = str(tmp_path / "runtime")
+        assert namespace["_workspace_dir"]() == tmp_path / "runtime"
+    finally:
+        if old is None:
+            os.environ.pop("FLOW_WORKSPACE", None)
+        else:
+            os.environ["FLOW_WORKSPACE"] = old

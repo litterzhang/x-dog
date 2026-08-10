@@ -544,6 +544,13 @@ FLOW_WORKSPACE=./runtime python workflow.py                   # workspace only
 FLOW_CONFINED=1 FLOW_ALLOW_PATHS=/data python workflow.py     # and walls
 ```
 
+One deliberate difference between the two engines: the default workspace is
+`runtime/` beside *the artifact*, and the artifact differs — the workflow file
+for `xdog-flow run`, the module for a compiled one. Pointing the module at the
+workflow file's directory would be worse, since a bundle routinely runs where
+that file does not exist. Set `--workspace` / `FLOW_WORKSPACE` when they need to
+agree.
+
 ### What it refuses, and why that is the point
 
 `--confined` will not run a workflow it cannot actually confine:
