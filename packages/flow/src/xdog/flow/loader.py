@@ -1199,29 +1199,25 @@ class _ErrorCollector:
 def unconfinable_reasons(wf: WorkflowDef) -> list[str]:
     """Why this workflow cannot be confined to a workspace, if it cannot.
 
-    Cooperative confinement works by routing every filesystem access through a
-    tool that checks the path.  Three things route around that check, and each
-    one silently reduces `--confined` to a promise nothing keeps:
+    What is left here is what runs **outside this process**, because that is the
+    boundary of what can be enforced:
 
-    * an inline ``code`` script node — ``executor`` runs it with ``exec`` in its
-      own process, so ``open("/etc/passwd")`` never meets a check;
     * the ``bash`` tool — a shell is a general-purpose escape;
     * a CLI backend — the subprocess owns its own filesystem access.
 
-    A ``run: module:callable`` script node is *not* listed: it imports reviewed
-    code from disk rather than executing text carried in the workflow, which is
-    the same trust as any other dependency.
+    Script nodes used to be listed and are not any more. They run in the
+    executor's own interpreter, which is exactly why an audit hook can hold them:
+    :func:`xdog.agent.workspace.script_bound` refuses paths outside the workspace
+    for every script node, confined or not, and under ``--confined`` also refuses
+    the calls it cannot follow — ``subprocess``, ``ctypes``, ``os.system``. So an
+    inline script is no longer a reason to refuse the whole workflow; it is a
+    thing that gets stopped when it actually reaches for something.
 
     Returns one human-readable reason per offending node, empty when the
     workflow can be confined.
     """
     reasons: list[str] = []
     for node in wf.nodes:
-        if node.type == "script" and node.code is not None:
-            reasons.append(
-                f"node {node.id!r}: an inline 'code' script runs unrestricted Python "
-                f"in the executor's own process"
-            )
         if node.backend is not None:
             reasons.append(
                 f"node {node.id!r}: the {node.backend!r} backend owns its own session "

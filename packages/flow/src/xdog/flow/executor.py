@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from xdog.agent.core import StreamFn, WebSearchFn
+from xdog.agent.workspace import script_bound
 from xdog.flow.checkpoint import CheckpointInterceptor, CheckpointStore
 from xdog.flow.coerce import to_python, to_state
 from xdog.flow.conditions import evaluate
@@ -689,6 +690,13 @@ async def execute(
             checkpoint=checkpoint,
             run_id=child_run_id,
             max_tokens=child_budget,
+            # The workspace and its grants travel into the child, so a subflow
+            # writes where its parent writes rather than inventing a
+            # `runtime/runtime/` of its own.  The child applies the same rules to
+            # its own nodes; nothing here inspects it more deeply than that.
+            workspace=_workspace,
+            allow_paths=allow_paths,
+            confined=confined,
             # Inherited so an UNSTUBBED child can never construct a real provider:
             # the stubs object knows only the parent's node ids, so any agent node
             # in here raises "no stub" instead of reaching the network.
@@ -879,10 +887,25 @@ async def execute(
             fn = script_resolver(node.run or "")
         else:
             fn = _resolve_script_fn(node, base_dir)
-        ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=wf.name)
+        ctx = RuntimeContext(
+            step=step, node_id=node_id, workflow_name=wf.name,
+            workspace=_workspace, allow_paths=tuple(allow_paths or ()), confined=confined,
+        )
         kwargs = {p.name: to_python(ins.get(p.name, ""), p.type) for p in node.input_ports}
-        raw = fn(ctx, **kwargs)
-        value = await asyncio.wait_for(raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout)
+        # A script node is the one place flow runs code it cannot otherwise see,
+        # so it is the one place an audit hook is worth its cost.  The bound is
+        # applied whether or not the run is confined -- `--confined` only adds the
+        # refusal of calls the hook cannot follow.  `base_dir` is readable because
+        # a `run: module:callable` node has to import itself from there.
+        # Only the workspace and the paths a human granted. `base_dir` is
+        # deliberately NOT added: it is the workflow's own directory, so granting
+        # it would let every workflow write beside itself -- and it is not needed,
+        # because `_resolve_script_fn` imports above this line, outside the bound.
+        with script_bound(_workspace, allow_paths or (), confined=confined):
+            raw = fn(ctx, **kwargs)
+            value = await asyncio.wait_for(
+                raw if inspect.isawaitable(raw) else _wrap_sync(raw), timeout=timeout
+            )
         return _coerce_script_output(node, node_id, value)
 
     _sdk_runner_cache: list[SdkRunner] = []

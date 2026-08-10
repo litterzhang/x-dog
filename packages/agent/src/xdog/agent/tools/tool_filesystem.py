@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import defaultdict
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -81,44 +80,6 @@ def _resolve(path: str, ctx: dict[str, Any]) -> str:
     if workspace is None or not path or Path(path).is_absolute():
         return path
     return str(Path(workspace) / path)
-
-
-def workspace_briefing(
-    workspace: object,
-    confine_to: Sequence[object] | None,
-    *,
-    uses_files: bool,
-) -> str:
-    """The lines to append to a system prompt describing an agent's workspace.
-
-    A bound the model cannot see is one it can only discover by tripping over
-    it, which costs a turn and reads to the model as a malfunction rather than a
-    rule. Telling it up front is both cheaper and more honest: it can put its
-    output in the right place the first time, and when it genuinely needs a path
-    it has not been granted it can say so instead of retrying variations.
-
-    This lives here, beside the keys it describes, because both of flow's
-    engines need it and the generated module cannot import flow. Two copies of
-    this text would drift, and the copy that drifts is the one nobody reads.
-    """
-    if workspace is None or not uses_files:
-        return ""
-    lines = [
-        "",
-        "",
-        f"Your workspace is {workspace}. Relative paths resolve there, and that "
-        "is where files you produce belong.",
-    ]
-    granted = [p for p in (confine_to or ()) if str(p) != str(workspace)]
-    if granted:
-        lines.append("You may also read and write these: " + ", ".join(str(p) for p in granted) + ".")
-    if confine_to is not None:
-        lines.append(
-            "Every other path is refused: a tool call outside those directories "
-            "returns an error and touches nothing. If the task needs a path you "
-            "have not been given, say so rather than trying variations of it."
-        )
-    return "\n".join(lines)
 
 
 class FilesystemTool(ToolDef):

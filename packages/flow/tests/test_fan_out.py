@@ -332,7 +332,7 @@ def _conc_tracking_map_reduce(n: int, fan_cap: int, probe: str) -> dict[str, Any
 async def test_fan_cap_limits_peak_concurrency(tmp_path: pathlib.Path) -> None:
     probe = str(tmp_path / "conc.json")
     wf = parse_workflow(_conc_tracking_map_reduce(8, fan_cap=2, probe=probe))
-    await execute(wf, stream_fn_factory=_stub_factory("X"))
+    await execute(wf, stream_fn_factory=_stub_factory("X"), workspace=tmp_path)
     import json
 
     peak = json.loads(pathlib.Path(probe).read_text())["max"]
@@ -342,7 +342,7 @@ async def test_fan_cap_limits_peak_concurrency(tmp_path: pathlib.Path) -> None:
 async def test_fan_cap_zero_is_unlimited(tmp_path: pathlib.Path) -> None:
     probe = str(tmp_path / "conc.json")
     wf = parse_workflow(_conc_tracking_map_reduce(6, fan_cap=0, probe=probe))
-    await execute(wf, stream_fn_factory=_stub_factory("X"))
+    await execute(wf, stream_fn_factory=_stub_factory("X"), workspace=tmp_path)
     import json
 
     peak = json.loads(pathlib.Path(probe).read_text())["max"]

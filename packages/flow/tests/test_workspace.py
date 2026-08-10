@@ -174,20 +174,31 @@ def test_a_confinable_workflow_has_no_reasons() -> None:
     assert unconfinable_reasons(wf) == []
 
 
-def test_an_inline_script_cannot_be_confined() -> None:
-    """`exec(node.code, namespace)` runs in the executor's own process, so no
-    path check is ever consulted. Confining a workflow containing one would be a
-    promise nothing keeps."""
+def test_an_inline_script_is_no_longer_a_reason_to_refuse() -> None:
+    """This used to refuse, and the reasoning was right at the time: `exec` in
+    the executor's own process met no check. The audit hook is that check. A
+    script node now runs and gets stopped when it reaches for something, which
+    is a better answer than refusing the workflow that contains it."""
     from xdog.flow.loader import unconfinable_reasons
 
     wf = _wf(
         [{"id": "s", "type": "script", "code": "def s(ctx):\n    return 1", "outputs": ["out"]}],
         [{"from": "s", "to": "$output", "map": {"out": "r"}}],
     )
-    reasons = unconfinable_reasons(wf)
 
-    assert len(reasons) == 1
-    assert "unrestricted Python" in reasons[0]
+    assert unconfinable_reasons(wf) == []
+
+
+def test_what_still_refuses_is_what_leaves_this_process() -> None:
+    """The remaining rules are not a list of bad things; they are the boundary of
+    what an in-process hook can see."""
+    from xdog.flow.loader import unconfinable_reasons
+
+    wf = _wf(
+        [{"id": "a", "type": "agent", "prompt": "go", "tools": ["bash"], "outputs": ["out"]}],
+        [{"from": "a", "to": "$output", "map": {"out": "r"}}],
+    )
+    assert unconfinable_reasons(wf), "a shell is a child process; the hook cannot follow it"
 
 
 def test_a_run_ref_script_can_be_confined() -> None:
@@ -221,16 +232,16 @@ def test_bash_and_cli_backends_cannot_be_confined() -> None:
 
 
 def test_a_subflow_hides_nothing() -> None:
-    """A child workflow runs in the parent's process too, so an inline script
-    buried in one is exactly as unconfinable — and much easier to miss."""
+    """A child runs in the parent's process, so a `bash` tool buried in one is
+    exactly as unconfinable as at the top level — and much easier to miss."""
     from xdog.flow.loader import unconfinable_reasons
 
     wf = _wf(
         [{"id": "outer", "type": "subflow", "subflow": {
             "name": "child", "provider": "p", "defaults": {"model": "m"},
             "entry": "inner",
-            "nodes": [{"id": "inner", "type": "script",
-                       "code": "def inner(ctx):\n    return 1", "outputs": ["out"]}],
+            "nodes": [{"id": "inner", "type": "agent", "prompt": "go",
+                       "tools": ["bash"], "outputs": ["out"]}],
             "edges": [{"from": "inner", "to": "$output", "map": {"out": "out"}}],
         }}],
         [{"from": "outer", "to": "$output", "map": {"out": "r"}}],
@@ -280,6 +291,7 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
 
     roots = namespace["_confinement_roots"]
     workspace_dir = namespace["_workspace_dir"]
+    _granted = namespace["_granted_paths"]
     workspace = tmp_path / "runtime"
 
     old_ws = os.environ.pop("FLOW_WORKSPACE", None)
@@ -305,14 +317,14 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
         # function — which is the point. The assertion that carries weight is
         # that it calls it at all, and with this run's workspace and roots
         # rather than a string of its own.
-        from xdog.agent.tools.tool_filesystem import workspace_briefing
+        from xdog.agent.workspace import workspace_briefing
 
         assert "workspace_briefing(" in source, "the module briefs rather than staying silent"
         assert "_workspace_dir()" in source and "_roots" in source, (
             "and briefs from the live values, not from anything baked into its text"
         )
-        assert workspace_briefing(workspace_dir(), roots(), uses_files=True) == (
-            workspace_briefing(workspace, [workspace, tmp_path / "data"], uses_files=True)
+        assert workspace_briefing(workspace_dir(), _granted(), confined=True) == (
+            workspace_briefing(workspace, [tmp_path / "data"], confined=True)
         )
     finally:
         os.environ.pop("FLOW_ALLOW_PATHS", None)
@@ -372,7 +384,7 @@ def test_installing_an_unconfinable_workflow_confined_is_refused(tmp_path: Path)
     from xdog.flow.scheduler.install import Installer
     from xdog.flow.scheduler.systemd import ConfineGrant
 
-    wf = _scheduled({"id": "s", "type": "script", "code": "def s(ctx):\n    return 1",
+    wf = _scheduled({"id": "s", "type": "agent", "prompt": "go", "tools": ["bash"],
                      "outputs": ["out"]})
     installer = Installer(unit_dir=tmp_path / "units", data_dir=tmp_path / "data")
 
@@ -435,7 +447,10 @@ async def test_the_agent_is_told_where_its_workspace_is(
     )
 
     assert str(workspace) in prompt
-    assert "Every other path is refused" not in prompt, "nothing is refused yet"
+    assert "Do not read or write anything outside" in prompt, (
+        "the instruction is the point: unconfined, this is all we have"
+    )
+    assert "This run is confined" not in prompt, "nothing is actually refused yet"
 
 
 async def test_a_confined_agent_is_told_the_walls_and_the_grants(
@@ -451,17 +466,22 @@ async def test_a_confined_agent_is_told_the_walls_and_the_grants(
 
     assert str(workspace) in prompt
     assert str(granted) in prompt, "a grant it is not told about is a grant it cannot use"
-    assert "Every other path is refused" in prompt
+    assert "This run is confined" in prompt
 
 
-async def test_a_node_with_no_tools_is_told_nothing(
+async def test_even_a_node_with_no_declared_tools_is_briefed(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
-    """Most nodes never touch a file. Spending prompt on a workspace they cannot
-    use trains them to ignore the paragraph the file-touching nodes depend on."""
+    """This started out keyed off the tool list and that was a guess.
+
+    A node's declared tools do not bound what it can touch: a custom tool can
+    write files, so can an MCP server, and a model can name a path for a
+    downstream node to use. The workspace is where this run's files belong,
+    which is true of a node whether or not we can see how it writes them.
+    """
     prompt = await _prompt_for(monkeypatch, workspace=tmp_path / "runtime")
 
-    assert prompt == ""
+    assert str(tmp_path / "runtime") in prompt
 
 
 def test_the_two_engines_default_their_workspace_to_different_places(tmp_path: Path) -> None:
@@ -503,3 +523,54 @@ def test_the_two_engines_default_their_workspace_to_different_places(tmp_path: P
             os.environ.pop("FLOW_WORKSPACE", None)
         else:
             os.environ["FLOW_WORKSPACE"] = old
+
+
+def test_the_generated_guard_enforces_the_same_events() -> None:
+    """The generated module carries its own copy of the audit guard, because a
+    script-only bundle installs no xdog-agent. Two copies of a security-relevant
+    table is exactly the drift that let codegen ship unconfined once already, so
+    the tables are compared rather than trusted.
+    """
+    from xdog.agent import workspace as lib
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "outputs": ["out"],
+                   "code": "def s(ctx):\n    return 1"}],
+        "edges": [{"from": "s", "to": "$output", "map": {"out": "r"}}],
+    })
+    namespace: dict[str, Any] = {}
+    exec(compile(generate(wf), "<gen>", "exec"), namespace)  # noqa: S102 - our own output
+
+    assert namespace["_WRITE_EVENTS"] == lib._WRITE_EVENTS, (
+        "an event enforced in one engine and not the other is a bound that "
+        "depends on how the workflow was run"
+    )
+    assert namespace["_UNAUDITABLE"] == lib._UNAUDITABLE
+
+
+def test_a_script_node_is_told_where_its_workspace_is(tmp_path: Path) -> None:
+    """Being refused for writing outside a directory you were never told about
+    is a trap, not a rule — and relative paths are no help, since nodes run
+    concurrently and the executor cannot chdir on a script's behalf."""
+    import asyncio
+
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "s",
+        "nodes": [{"id": "s", "type": "script", "outputs": ["ws_path"], "code":
+                   "def s(ctx):\n"
+                   "    (ctx.workspace / 'out.txt').write_text('written')\n"
+                   "    return str(ctx.workspace)"}],
+        "edges": [{"from": "s", "to": "$output", "map": {"ws_path": "r"}}],
+    })
+    ws = tmp_path / "runtime"
+
+    result = asyncio.run(execute(wf, workspace=ws, timeout=10))
+
+    assert result.runtime["out"]["r"] == str(ws)
+    assert (ws / "out.txt").read_text() == "written", "and writing there is allowed"

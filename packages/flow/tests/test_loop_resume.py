@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import pathlib
 import sys
 import types
@@ -62,10 +63,18 @@ def _count_loop_wf(loop_max: int = 10, exit_at: int = 5, crash_code: str = "") -
     }
 
 
-def _run_gen(src: str, mod_name: str = "_gen_loop") -> dict[str, Any]:
+def _run_gen(src: str, mod_name: str = "_gen_loop", workspace: Any = None) -> dict[str, Any]:
+    if workspace is not None:
+        # The generated module reads its workspace from the environment; a
+        # script node writing into the test's tmp_path needs it to point there.
+        os.environ["FLOW_WORKSPACE"] = str(workspace)
     mod = types.ModuleType(mod_name)
     exec(compile(src, "<gen_loop>", "exec"), mod.__dict__)  # noqa: S102
-    asyncio.run(mod.main())  # type: ignore[attr-defined]
+    try:
+        asyncio.run(mod.main())  # type: ignore[attr-defined]
+    finally:
+        if workspace is not None:
+            os.environ.pop("FLOW_WORKSPACE", None)
     return dict(mod._RUNTIME)  # type: ignore[attr-defined]
 
 
@@ -166,9 +175,9 @@ def test_interpreter_resume_preserves_while_non_convergence(tmp_path: pathlib.Pa
     message = "while loop 'b'->'a' did not converge within 1 iterations"
 
     with pytest.raises(Exception, match=message):
-        asyncio.run(execute(wf, checkpoint=store, run_id="strict"))
+        asyncio.run(execute(wf, checkpoint=store, run_id="strict", workspace=tmp_path))
     with pytest.raises(Exception, match=message):
-        asyncio.run(execute(wf, checkpoint=store, run_id="strict"))
+        asyncio.run(execute(wf, checkpoint=store, run_id="strict", workspace=tmp_path))
 
 
 def test_generated_loop_persists_counter(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
@@ -207,6 +216,7 @@ def test_generated_loop_crash_resumes_midloop(tmp_path: pathlib.Path, monkeypatc
     ck.mkdir()
     monkeypatch.setenv("FLOW_RUN_ID", "c")
     monkeypatch.setenv("FLOW_CHECKPOINT_DIR", str(ck))
+    monkeypatch.setenv("FLOW_WORKSPACE", str(tmp_path))
 
     # Run 1 crashes on the 3rd execution of 'a'.
     mod = types.ModuleType("_crash")
@@ -342,6 +352,11 @@ def _repair_loop(strict: bool) -> dict[str, Any]:
 
 
 def _write_repair_module(tmp_path: pathlib.Path) -> None:
+    # Evict any copy left by an earlier test. `run: repairmod:gate` imports by
+    # name, so sys.modules keeps the first test's file -- and with it that
+    # test's tmp_path -- for every test after it. These tests were sharing one
+    # counter file and passing anyway; the workspace bound is what surfaced it.
+    sys.modules.pop("repairmod", None)
     (tmp_path / "repairmod.py").write_text(
         "from pathlib import Path\n"
         "_C = Path(__file__).parent / 'attempts'\n"
@@ -361,7 +376,7 @@ def _write_repair_module(tmp_path: pathlib.Path) -> None:
 def test_repair_loop_exits_forward_as_soon_as_the_check_passes(tmp_path: pathlib.Path) -> None:
     _write_repair_module(tmp_path)
     wf = parse_workflow(_repair_loop(strict=False))
-    result = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 2}))
+    result = asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path, inputs={"pass_on": 2}))
     assert result.runtime["out"] == {"final": "shipped"}
     # Nothing stopped it early — it ran out of work the ordinary way.
     assert result.runtime["stopped_by"] is None
@@ -375,7 +390,7 @@ def test_plain_loop_exhaustion_is_reported_rather_than_silent(tmp_path: pathlib.
     """
     _write_repair_module(tmp_path)
     wf = parse_workflow(_repair_loop(strict=False))
-    result = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+    result = asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path, inputs={"pass_on": 99}))
     assert result.runtime["out"] == {}
     assert result.runtime["stopped_by"] == {"reason": "loop_exhausted", "edge": "fix->gate"}
 
@@ -385,7 +400,7 @@ def test_strict_while_exhaustion_fails_instead(tmp_path: pathlib.Path) -> None:
     _write_repair_module(tmp_path)
     wf = parse_workflow(_repair_loop(strict=True))
     with pytest.raises(WorkflowExecutionError, match="did not converge"):
-        asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+        asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path, inputs={"pass_on": 99}))
 
 
 def test_both_engines_report_the_same_stop_reason(tmp_path: pathlib.Path) -> None:
@@ -399,15 +414,19 @@ def test_both_engines_report_the_same_stop_reason(tmp_path: pathlib.Path) -> Non
     wf = parse_workflow(_repair_loop(strict=False))
 
     (tmp_path / "attempts").unlink(missing_ok=True)
-    interpreted = asyncio.run(execute(wf, base_dir=tmp_path, inputs={"pass_on": 99}))
+    interpreted = asyncio.run(execute(wf, base_dir=tmp_path, workspace=tmp_path, inputs={"pass_on": 99}))
 
     module = types.ModuleType("gen_repair")
+    # The generated module reads its workspace from the environment, so the
+    # parity run has to be given the same one the interpreter was handed.
+    os.environ["FLOW_WORKSPACE"] = str(tmp_path)
     sys.path.insert(0, str(tmp_path))
     try:
         (tmp_path / "attempts").unlink(missing_ok=True)
         exec(compile(generate(wf), "<repair>", "exec"), module.__dict__)  # noqa: S102
         asyncio.run(module.main())
     finally:
+        os.environ.pop("FLOW_WORKSPACE", None)
         sys.path.remove(str(tmp_path))
 
     assert module._STOPPED_BY == interpreted.runtime["stopped_by"]

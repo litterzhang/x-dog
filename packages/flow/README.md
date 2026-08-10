@@ -500,56 +500,80 @@ the CLI owns its own session, and flow can neither read nor seed it.
 
 ## The workspace, and confining a run to it
 
-**Every run has a workspace.** It defaults to `<workflow dir>/runtime`, a
-relative path resolves inside it, and it is where a node's output belongs. That
-is on by default and enforces nothing — it exists so a workflow run by hand and
-the same workflow run from a timer put their files in the same place, instead of
-wherever each process happened to start. It is not created until something writes
-to it, so a run that writes nothing leaves nothing behind.
-
-**`--confined` is the separate question of whether leaving it is refused.**
+**Every run has a workspace.** It defaults to `<workflow dir>/runtime`, and it is
+where this run's files belong. That is on by default. `--confined` is the
+separate question of how hard the edges are.
 
 ```bash
-xdog-flow run examples/workspace_triage.json                  # workspace, no walls
-xdog-flow run examples/workspace_triage.json --confined       # and now walls
-xdog-flow run report.json --confined --workspace ./scratch
-xdog-flow run report.json --confined --allow-path ~/data      # grant another tree
+xdog-flow run wf.json                       # workspace, enforced for scripts
+xdog-flow run wf.json --confined            # and unauditable calls refused
+xdog-flow run wf.json --workspace ./scratch
+xdog-flow run wf.json --allow-path ~/data   # grant another tree (repeatable)
 ```
 
-The agent is told which of these it got. A node with file tools gets its
-workspace, any granted trees, and — when confined — the fact that everything else
-is refused, appended to its system prompt. A bound the model cannot see is one it
-can only find by tripping over it, which costs a turn and reads to the model as a
-malfunction rather than a rule.
+### The two node kinds are held to it differently, on purpose
 
-`examples/workspace_triage.json` is the worked example: three agent nodes that
-read crash reports out of the workspace, rank them, and write the report back
-into it. Nothing in the file mentions a workspace — the same file runs bounded or
-unbounded, and cannot tell which happened.
+| | How | Enforced? |
+|---|---|---|
+| **agent** | workspace + granted dirs are named in its system prompt, with an instruction not to go outside them | **No.** A promise the model keeps. |
+| **script** | a PEP 578 audit hook refuses reads and writes outside the bound | **Yes**, against code that is not trying to escape |
 
-A scheduled install records the same grant in the unit it writes:
+**An agent node is told, not checked** — every agent node, whatever tools it
+declares. Keying the briefing off the tool list would be a guess: a custom tool
+can touch the filesystem, so can an MCP server, and a model can name a path for a
+downstream node to use. There is no chokepoint where every possible tool's file
+access could be inspected, so the honest thing is to state where the files go and
+say plainly that nothing verifies it. (When a run is `--confined`, the built-in
+`filesystem` tool *does* enforce an allowlist — but that is one tool, not the
+node.)
 
-```bash
-xdog-flow scheduling install report.json --confined --allow-path ~/data
-# ... Environment=FLOW_CONFINED=1
+**A script node is audited.** `ctx.workspace` tells the script where it is —
+being refused for writing outside a directory you were never told about is a
+trap, not a rule, and relative paths are no help since nodes run concurrently and
+the executor cannot `chdir` on one script's behalf:
+
+```python
+def report(ctx, rows):
+    (ctx.workspace / "out.csv").write_text(...)   # allowed
+    open("/etc/passwd").read()                    # PermissionError
 ```
 
-**The grant is never part of the workflow.** A workflow that could declare its
-own access would not be confined by it — and these are shareable artifacts that
-an agent may have written. The same applies to a compiled module, which reads
-both halves from the environment rather than its own source:
+Reads from the interpreter's own trees stay open — otherwise no script could
+`import` anything.
 
-```bash
-FLOW_WORKSPACE=./runtime python workflow.py                   # workspace only
-FLOW_CONFINED=1 FLOW_ALLOW_PATHS=/data python workflow.py     # and walls
+### What `--confined` adds
+
+Some calls leave the region a hook can see: `subprocess`, `os.system`, `ctypes`.
+Unconfined they are allowed. Under `--confined` they are refused where they
+happen, naming the call:
+
+```
+subprocess.Popen cannot be audited, and this run is confined.
+Remove it, or run without --confined.
 ```
 
-One deliberate difference between the two engines: the default workspace is
-`runtime/` beside *the artifact*, and the artifact differs — the workflow file
-for `xdog-flow run`, the module for a compiled one. Pointing the module at the
-workflow file's directory would be worse, since a bundle routinely runs where
-that file does not exist. Set `--workspace` / `FLOW_WORKSPACE` when they need to
-agree.
+And a workflow whose *agent* nodes leave the process is refused before anything
+runs — the `bash` tool, or a CLI backend. Those are not a list of bad things;
+they are the boundary of what an in-process hook can reach.
+
+### Containment, not a sandbox
+
+The hook runs in the executor's own interpreter, where it is a reachable, mutable
+object. A script that *wants* out can reassign the closure cell holding the roots
+or overwrite the hook's `__code__`, in about two lines each — tested, not assumed;
+immutable roots and hiding the name do not help. What it stops completely is the
+realistic failure: a script that wanders, builds a path from bad input, or was
+written without knowing where it was allowed to write.
+
+If you need a bound that holds against a script written to defeat it, that needs
+a child process and an OS bound — scoped in
+[`docs/script-node-confinement.md`](../../docs/script-node-confinement.md).
+
+### Subflows
+
+A subflow inherits its parent's workspace, grants and confined flag, so a child
+writes where its parent writes instead of nesting a `runtime/runtime/`. The child
+applies these same rules to its own nodes; nothing inspects it more deeply.
 
 ### What it refuses, and why that is the point
 

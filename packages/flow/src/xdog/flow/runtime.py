@@ -11,7 +11,8 @@ new needs appear.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -26,3 +27,26 @@ class RuntimeContext:
 
     workflow_name: str
     """The ``name`` of the workflow being executed."""
+
+    workspace: Path | None = None
+    """Where this run's files belong, or ``None`` when the caller set no workspace.
+
+    A script node is held to this bound by an audit hook, so it has to be able to
+    find out what the bound *is* — being refused for writing outside a directory
+    whose path you were never given is not a rule, it is a trap. Relative paths
+    are no help either: nodes run concurrently, so the executor cannot ``chdir``
+    into the workspace on a script's behalf without corrupting its siblings.
+
+    Use it: ``(ctx.workspace / "report.md").write_text(...)``.
+    """
+
+    allow_paths: tuple[Path, ...] = field(default_factory=tuple)
+    """Directories granted in addition to the workspace, by ``--allow-path``."""
+
+    confined: bool = False
+    """True when this run also refuses calls the audit hook cannot follow.
+
+    A script that shells out or loads a C library will be stopped rather than
+    quietly escaping the bound, so a script with an optional fast path can check
+    this and take the auditable branch instead of failing.
+    """

@@ -211,11 +211,8 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
-        from xdog.agent.tools.tool_filesystem import (
-            CONFINE_CTX_KEY,
-            WORKSPACE_CTX_KEY,
-            workspace_briefing,
-        )
+        from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
+        from xdog.agent.workspace import workspace_briefing
         from xdog.ai.types import AssistantMessage, TextContent
 
         stream_fn = self._stream_fn_factory(model)
@@ -228,8 +225,15 @@ class SdkRunner:
             ctx_bits[CONFINE_CTX_KEY] = [str(p) for p in self._confine_to]
         tool_ctx: dict[str, object] | None = ctx_bits or None
         sink: dict[str, object] = {}
+        # Every agent node is briefed, whatever tools it declares. Keying this
+        # off the tool list would be a guess: a custom tool can touch the
+        # filesystem, so can an MCP server, and a model can name a path for a
+        # downstream node to use. We tell it where its files go; we cannot audit
+        # that it obeys.
         final_sys_prompt = system_prompt + workspace_briefing(
-            self._workspace, self._confine_to, uses_files=bool(resolved_tools)
+            self._workspace,
+            [p for p in (self._confine_to or ()) ],
+            confined=self._confine_to is not None,
         )
         structured = agent_is_structured(node)
         if structured:

@@ -7,14 +7,19 @@ distribution. This module itself is yours.
 """
 
 import asyncio
+import contextlib
+import contextvars
 ${hashlib_import}${inspect_import}import json
 import logging
 import os
 import re
 import shutil
+import site
+import sys
+import sysconfig
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -61,12 +66,141 @@ class RuntimeContext:
     sys.modules[cls.__module__], which fails there.
     """
 
-    __slots__ = ("step", "node_id", "workflow_name")
+    __slots__ = ("step", "node_id", "workflow_name", "workspace", "allow_paths", "confined")
 
-    def __init__(self, step: int, node_id: str, workflow_name: str) -> None:
+    def __init__(
+        self,
+        step: int,
+        node_id: str,
+        workflow_name: str,
+        workspace: "Path | None" = None,
+        allow_paths: "tuple[Path, ...]" = (),
+        confined: bool = False,
+    ) -> None:
         self.step = step
         self.node_id = node_id
         self.workflow_name = workflow_name
+        # A script held to a workspace has to be able to find out where it is;
+        # being refused for writing outside a directory you were never told about
+        # is a trap, not a rule. Nodes run concurrently, so the executor cannot
+        # chdir there on a script's behalf without corrupting its siblings.
+        self.workspace = workspace
+        self.allow_paths = allow_paths
+        self.confined = confined
+
+
+
+# --- Script-node audit bound (equivalent to xdog.agent.workspace) ------------
+# Inlined for the same reason RuntimeContext and to_python are: a script-only
+# bundle installs no xdog-agent.  The two copies are held together by
+# test_workspace.py::test_the_generated_guard_enforces_the_same_events, which
+# compares these tables against the library's rather than trusting them to match.
+_WRITE_EVENTS: dict[str, tuple[int, ...]] = {
+    "os.remove": (0,), "os.rename": (0, 1), "os.rmdir": (0,), "os.mkdir": (0,),
+    "os.truncate": (0,), "os.chmod": (0,), "os.chown": (0,), "os.symlink": (0, 1),
+    "os.link": (0, 1), "os.utime": (0,), "shutil.copyfile": (0, 1),
+    "shutil.copymode": (0, 1), "shutil.copystat": (0, 1), "shutil.move": (0, 1),
+    "shutil.rmtree": (0,),
+}
+_UNAUDITABLE = frozenset({
+    "subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn",
+    "os.fork", "os.forkpty", "pty.spawn", "ctypes.dlopen", "ctypes.dlsym",
+    "ctypes.dlsym/handle", "ctypes.call_function", "ctypes.addressof",
+    "cpython.run_file",
+})
+
+
+class UnauditableCall(PermissionError):
+    """A confined script reached for something the audit hook cannot follow."""
+
+
+_SCRIPT_BOUND: "contextvars.ContextVar[Any]" = contextvars.ContextVar("xdog_script_bound", default=None)
+_HOOK_INSTALLED = [False]
+
+
+def _import_roots() -> "tuple[Path, ...]":
+    """Trees a script must be able to read, or it cannot import anything."""
+    candidates = [sys.prefix, sys.base_prefix, sysconfig.get_path("stdlib") or ""]
+    try:
+        candidates.extend(site.getsitepackages())
+        candidates.append(site.getusersitepackages())
+    except Exception:
+        pass
+    candidates.extend(p for p in sys.path if p)
+    roots = []
+    for c in candidates:
+        try:
+            roots.append(Path(c).resolve())
+        except (OSError, ValueError):
+            pass
+    return tuple(dict.fromkeys(roots))
+
+
+def _within(path: object, roots: "Sequence[Path]") -> bool:
+    if not isinstance(path, (str, bytes)):
+        return True
+    text = path.decode("utf-8", "replace") if isinstance(path, bytes) else path
+    if not text:
+        return True
+    try:
+        resolved = Path(text).resolve()
+    except (OSError, ValueError):
+        return False
+    return any(resolved == r or r in resolved.parents for r in roots)
+
+
+def _script_hook(event: str, args: "tuple[Any, ...]") -> None:
+    bound = _SCRIPT_BOUND.get()
+    if bound is None:
+        return
+    write_roots, read_roots, confined = bound
+    if event in _UNAUDITABLE:
+        if confined:
+            raise UnauditableCall(
+                f"{event} cannot be audited, and this run is confined. "
+                f"Remove it, or run without FLOW_CONFINED."
+            )
+        return
+    if event == "open":
+        path = args[0] if args else None
+        mode = args[1] if len(args) > 1 else ""
+        writing = isinstance(mode, str) and any(c in mode for c in "wxa+")
+        if not _within(path, write_roots if writing else read_roots):
+            allowed = ", ".join(str(r) for r in write_roots) or "<nothing>"
+            verb = "write" if writing else "read"
+            raise PermissionError(
+                f"Cannot {verb} {path}: outside this run's workspace. Allowed: {allowed}"
+            )
+        return
+    indices = _WRITE_EVENTS.get(event)
+    if indices is None:
+        return
+    for i in indices:
+        if i < len(args) and not _within(args[i], write_roots):
+            allowed = ", ".join(str(r) for r in write_roots) or "<nothing>"
+            raise PermissionError(
+                f"Cannot {event} {args[i]}: outside this run's workspace. Allowed: {allowed}"
+            )
+
+
+@contextlib.contextmanager
+def script_bound(
+    workspace: "Path | None", allow_paths: "Sequence[Path]" = (), *, confined: bool = False
+) -> "Iterator[None]":
+    """Hold the code inside this block to *workspace* plus *allow_paths*."""
+    if workspace is None:
+        yield
+        return
+    workspace.mkdir(parents=True, exist_ok=True)
+    if not _HOOK_INSTALLED[0]:
+        sys.addaudithook(_script_hook)
+        _HOOK_INSTALLED[0] = True
+    write_roots = tuple(dict.fromkeys([workspace.resolve(), *(p.resolve() for p in allow_paths)]))
+    token = _SCRIPT_BOUND.set((write_roots, write_roots + _import_roots(), confined))
+    try:
+        yield
+    finally:
+        _SCRIPT_BOUND.reset(token)
 
 
 _COERCE_TRUE = {"true", "1", "yes", "on"}
@@ -284,6 +418,12 @@ def _workspace_dir() -> Path:
     # path on disk would pass its own tests and fail nowhere useful.
     here = globals().get("__file__")
     return (Path(here).resolve().parent if here else Path.cwd()) / "runtime"
+
+
+def _granted_paths() -> tuple[Path, ...]:
+    """Extra trees granted by FLOW_ALLOW_PATHS, as the script node sees them."""
+    granted = os.environ.get("FLOW_ALLOW_PATHS", "")
+    return tuple(Path(part).resolve() for part in granted.split(os.pathsep) if part)
 
 
 def _confinement_roots() -> list[str] | None:
@@ -614,7 +754,11 @@ async def _drive(
     _last_exc: BaseException | None = None
     _outputs: dict[str, object] = {}
     _tokens = 0
-    _ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    _ctx = RuntimeContext(
+        step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME,
+        workspace=_workspace_dir(), allow_paths=_granted_paths(),
+        confined=_confinement_roots() is not None,
+    )
     for _attempt in range(retry_max):
         try:
             _outputs, _tokens = await node_fn(provider=_PROVIDER, ctx=_ctx, **ins)
@@ -674,7 +818,11 @@ async def _drive_fan(
         "NodeStarted node=%s step=%d | %s", node_id, step, preview_ports(ins) or "-"
     )
     _t0 = time.monotonic()
-    _ctx = RuntimeContext(step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME)
+    _ctx = RuntimeContext(
+        step=step, node_id=node_id, workflow_name=_WORKFLOW_NAME,
+        workspace=_workspace_dir(), allow_paths=_granted_paths(),
+        confined=_confinement_roots() is not None,
+    )
     _fan_sem: asyncio.Semaphore | None = asyncio.Semaphore(fan_cap) if fan_cap > 0 else None
 
     async def _one(_x: object) -> tuple[dict[str, object], int]:

@@ -51,7 +51,7 @@ _SDK_IMPORTS = (
     "from xdog.agent.events import TurnEndEvent\n"
     "from xdog.agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
     "from xdog.agent.tools import create_submit_result_tool\n"
-    "from xdog.agent.tools.tool_filesystem import workspace_briefing\n"
+    "from xdog.agent.workspace import workspace_briefing\n"
     "from xdog.ai.types import AssistantMessage, TextContent\n"
 )
 
@@ -162,8 +162,12 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     _tool_ctx: dict[str, object] | None = {"fs_workspace": str(_workspace_dir())}
     if _roots is not None:
         _tool_ctx["fs_confine_to"] = _roots
+    # Every agent node is briefed, whatever tools it declares -- keying this off
+    # the tool list would be a guess, since a custom tool or an MCP server can
+    # touch the filesystem too. We tell it where its files go; we cannot audit
+    # that it obeys, which is the honest difference from a script node.
     _sys = system_prompt + workspace_briefing(
-        _workspace_dir(), _roots, uses_files=bool(tools)
+        _workspace_dir(), _granted_paths(), confined=_roots is not None
     )
     if output_schema is not None:
         tools = tools + (create_submit_result_tool(),)
@@ -555,13 +559,19 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
         call_args.append(f"{p.name}=_in_{p.name}")
     is_async = _script_is_async(node)
     await_kw = "await " if is_async else ""
-    core = f"    _val = {await_kw}_script_{safe}({', '.join(call_args)})"
+    # The audit bound wraps the call in both engines. It has to be inside the
+    # script node's own function rather than around `node_fn`, because that
+    # generic driver also runs agent and subflow nodes, which are governed by a
+    # prompt and by their own child run respectively -- not by this hook.
+    lines.append("    with script_bound(_workspace_dir(), _granted_paths(),")
+    lines.append("                      confined=_confinement_roots() is not None):")
+    core = f"        _val = {await_kw}_script_{safe}({', '.join(call_args)})"
     lines.append(core if len(core) <= 120 else core + "  # noqa: E501")
     if is_async is None:
         # A run-ref may be sync or async; decide at run time exactly as the
         # interpreter's _node_script does.
-        lines.append("    if inspect.isawaitable(_val):")
-        lines.append("        _val = await _val")
+        lines.append("        if inspect.isawaitable(_val):")
+        lines.append("            _val = await _val")
     lines.append("    _out: dict[str, object] = {}")
     if len(node.output_ports) <= 1:
         if node.output_ports:

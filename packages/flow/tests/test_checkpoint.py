@@ -108,7 +108,7 @@ async def test_executor_rejects_incomplete_checkpoint_schema(tmp_path: Path) -> 
         edges=(),
     )
     with pytest.raises(Exception, match="does not match the current schema"):
-        await execute(wf, checkpoint=store, run_id="old")
+        await execute(wf, checkpoint=store, run_id="old", workspace=tmp_path)
 
 
 class RecordingCheckpointStore:
@@ -272,7 +272,10 @@ def node2(ctx, val: str) -> str:
 
     # Run 1: should complete node1 (checkpoint saved) then fail on node2.
     with pytest.raises(RuntimeError, match="intentional failure"):
-        await execute(wf, checkpoint=store, run_id=run_id, stream_fn_factory=lambda m: (lambda *a, **k: None))
+        await execute(
+            wf, checkpoint=store, run_id=run_id,
+            stream_fn_factory=lambda m: (lambda *a, **k: None), workspace=tmp_path,
+        )
 
     node1_count = int(counter_file.read_text().strip())
     assert node1_count == 1, "node1 should have run exactly once in attempt 1"
@@ -325,7 +328,10 @@ def node2(ctx, val: str) -> str:
     )
 
     # Run 2: node1 should be skipped (checkpoint), node2 should run.
-    result = await execute(wf2, checkpoint=store, run_id=run_id, stream_fn_factory=lambda m: (lambda *a, **k: None))
+    result = await execute(
+        wf2, checkpoint=store, run_id=run_id,
+        stream_fn_factory=lambda m: (lambda *a, **k: None), workspace=tmp_path,
+    )
     assert isinstance(result, ExecResult)
 
     node1_count_after = int(counter_file.read_text().strip())

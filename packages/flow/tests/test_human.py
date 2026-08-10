@@ -91,7 +91,10 @@ async def _pause_then_resume(tmp_path: Path) -> None:
 
     # First run — no signals → should raise WorkflowPaused
     with pytest.raises(WorkflowPaused) as exc_info:
-        await execute(wf, checkpoint=store, run_id=run_id, stream_fn_factory=_FAKE_STREAM_FACTORY)
+        await execute(
+            wf, checkpoint=store, run_id=run_id,
+            stream_fn_factory=_FAKE_STREAM_FACTORY, workspace=tmp_path,
+        )
 
     paused = exc_info.value
     assert paused.node_id == "gate"
@@ -127,7 +130,9 @@ def test_signal_present_up_front(tmp_path: Path) -> None:
 async def _signal_present_up_front(tmp_path: Path) -> None:
     wf, counter_file = _make_workflow(tmp_path)
 
-    result = await execute(wf, signals={"approval"}, stream_fn_factory=_FAKE_STREAM_FACTORY)
+    result = await execute(
+        wf, signals={"approval"}, stream_fn_factory=_FAKE_STREAM_FACTORY, workspace=tmp_path,
+    )
     assert result.runtime["state"]["finish"]["done"].startswith("finished_")
     assert int(counter_file.read_text().strip()) == 1
 
