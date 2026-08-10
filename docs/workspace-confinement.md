@@ -63,6 +63,13 @@ xdog-flow run report.json --confined --allow-read ~/data
 
 | Refused | Why |
 |---|---|
+> **Update.** The claim below that script nodes cannot be confined is correct
+> *in-process* but wrong as a conclusion. A script node's contract is already a
+> pure JSON → JSON function, so it can be moved into a Landlocked child without
+> the provider/credentials problem that makes confining an *agent* node
+> expensive. Verified prototype and a ~5-day estimate in
+> [`script-node-confinement.md`](./script-node-confinement.md).
+
 | a `script` node with inline `code` | `executor.py:129` is `exec(node.code, namespace)`, carrying the comment *"inline workflow code, trusted author"*. That comment **is** the current security model, and it stops being true the moment an AI writes the workflow. |
 | the `bash` tool | a shell is a general-purpose escape; there is no cooperative version of confining it |
 | a CLI backend | the subprocess owns its own filesystem access |
