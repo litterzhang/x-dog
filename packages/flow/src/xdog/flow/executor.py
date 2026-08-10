@@ -202,6 +202,7 @@ async def execute(
     max_concurrency: int | None = None,
     workspace: Path | None = None,
     allow_paths: Sequence[Path] | None = None,
+    confined: bool = False,
     signals: set[str] | None = None,
     max_tokens: int | None = None,
     stubs: NodeStubs | None = None,
@@ -283,13 +284,21 @@ async def execute(
     # the reserved $in source carrying the workflow's initial values; run-time
     # ``inputs`` override those defaults key-by-key.  Only modified while holding
     # _state_lock or before/after concurrency.
-    # A run is either confined or it is not, and `None` is the historical
-    # unconfined behaviour every existing caller relies on.  Passing a workspace
-    # opts in; the workspace plus any granted trees are the whole allowance.
+    # Every run has a workspace: the directory a relative path resolves inside,
+    # and where a node's output belongs. It defaults to `<workflow dir>/runtime`
+    # so a workflow run from two places still writes to one predictable spot. It
+    # is not created here — `_fs_write` makes its parents — so a run that writes
+    # nothing leaves nothing behind.
+    #
+    # Confinement is the separate, opt-in half. A workspace says where "here" is;
+    # `confined=True` says the walls are real, and then the workspace plus any
+    # granted trees are the whole allowance. Without it the workspace is a
+    # convention, which is the historical behaviour every existing caller relies
+    # on.
+    _workspace = workspace if workspace is not None else (base_dir or Path.cwd()) / "runtime"
     _confinement_roots: list[Path] | None = None
-    if workspace is not None:
-        workspace.mkdir(parents=True, exist_ok=True)
-        _confinement_roots = [workspace, *(allow_paths or ())]
+    if confined:
+        _confinement_roots = [_workspace, *(allow_paths or ())]
 
     seed: dict[str, object] = dict(wf.initial_state)
     if inputs:
@@ -902,6 +911,7 @@ async def execute(
                     stream_fn_factory=stream_fn_factory,
                     tool_registry=tool_registry,
                     web_search_fn_factory=web_search_fn_factory,
+                    workspace=_workspace,
                     confine_to=_confinement_roots,
                 )
             )

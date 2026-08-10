@@ -268,25 +268,40 @@ _FLOW_CHECKPOINT_DIR: str | None = None
 _CHECKPOINT_LOADED = False
 
 
+def _workspace_dir() -> Path:
+    """This run's workspace — where a relative path resolves.
+
+    Every run has one, exactly as in the interpreter. It defaults to `runtime/`
+    beside this module rather than the process's cwd, so a scheduled run and a
+    hand-run land in the same place. It is not created here; writing to it makes
+    it, so a run that writes nothing leaves nothing behind.
+    """
+    override = os.environ.get("FLOW_WORKSPACE")
+    if override:
+        return Path(override)
+    # `globals()` rather than `__file__` directly: the parity tests exec this
+    # source with no file behind it, and a module that only works when it has a
+    # path on disk would pass its own tests and fail nowhere useful.
+    here = globals().get("__file__")
+    return (Path(here).resolve().parent if here else Path.cwd()) / "runtime"
+
+
 def _confinement_roots() -> list[str] | None:
     """Directories this run may touch, or None when it is unconfined.
 
-    Mirrors the interpreter's `execute(workspace=..., allow_paths=...)`. The
+    Mirrors the interpreter's `execute(confined=..., allow_paths=...)`. The
     grant comes from the environment because it is a property of *this run*, not
     of the workflow: a module that could read its own allowance out of its own
     source would not be confined by it.
 
-        FLOW_WORKSPACE=./runtime FLOW_ALLOW_PATHS=/data python workflow.py
+        FLOW_CONFINED=1 FLOW_ALLOW_PATHS=/data python workflow.py
 
-    Absent means unconfined. Present-but-empty still confines — to nothing —
-    because a bound that computed empty must close the door, not open it.
+    Having a workspace and being confined to it are separate: unset means the
+    workspace is a convention and nothing is refused, which is the default.
     """
-    workspace = os.environ.get("FLOW_WORKSPACE")
-    if workspace is None:
+    if os.environ.get("FLOW_CONFINED", "") not in ("1", "true", "yes"):
         return None
-    root = Path(workspace)
-    root.mkdir(parents=True, exist_ok=True)
-    roots = [str(root.resolve())]
+    roots = [str(_workspace_dir().resolve())]
     granted = os.environ.get("FLOW_ALLOW_PATHS", "")
     roots.extend(str(Path(part).resolve()) for part in granted.split(os.pathsep) if part)
     return roots

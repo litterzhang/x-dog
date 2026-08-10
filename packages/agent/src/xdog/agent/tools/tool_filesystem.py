@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,13 @@ _file_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 #: xdog-coding and xdog-claw rely on.
 CONFINE_CTX_KEY = "fs_confine_to"
 
+#: Key a caller puts in ``tool_ctx`` to give this tool a working directory.
+#: A relative path then resolves inside it instead of being rejected. This is
+#: independent of :data:`CONFINE_CTX_KEY`: a workspace says where "here" is, a
+#: confinement says where the walls are, and a run can have the first without
+#: the second.
+WORKSPACE_CTX_KEY = "fs_workspace"
+
 
 def _confinement(ctx: dict[str, Any]) -> list[Path] | None:
     """The roots this call may touch, or None when the caller set no bound.
@@ -60,6 +68,59 @@ def _confinement(ctx: dict[str, Any]) -> list[Path] | None:
     return [Path(r) for r in roots]
 
 
+def _resolve(path: str, ctx: dict[str, Any]) -> str:
+    """Make *path* absolute, relative to the caller's workspace when there is one.
+
+    Without a workspace a relative path is left alone and ``validate_path``
+    rejects it, which is the historical behaviour. With one, "notes.md" means
+    the workspace's notes.md — so a model that reasons in relative paths, as
+    they do, lands somewhere predictable rather than in whatever directory the
+    process happened to start in.
+    """
+    workspace = ctx.get(WORKSPACE_CTX_KEY)
+    if workspace is None or not path or Path(path).is_absolute():
+        return path
+    return str(Path(workspace) / path)
+
+
+def workspace_briefing(
+    workspace: object,
+    confine_to: Sequence[object] | None,
+    *,
+    uses_files: bool,
+) -> str:
+    """The lines to append to a system prompt describing an agent's workspace.
+
+    A bound the model cannot see is one it can only discover by tripping over
+    it, which costs a turn and reads to the model as a malfunction rather than a
+    rule. Telling it up front is both cheaper and more honest: it can put its
+    output in the right place the first time, and when it genuinely needs a path
+    it has not been granted it can say so instead of retrying variations.
+
+    This lives here, beside the keys it describes, because both of flow's
+    engines need it and the generated module cannot import flow. Two copies of
+    this text would drift, and the copy that drifts is the one nobody reads.
+    """
+    if workspace is None or not uses_files:
+        return ""
+    lines = [
+        "",
+        "",
+        f"Your workspace is {workspace}. Relative paths resolve there, and that "
+        "is where files you produce belong.",
+    ]
+    granted = [p for p in (confine_to or ()) if str(p) != str(workspace)]
+    if granted:
+        lines.append("You may also read and write these: " + ", ".join(str(p) for p in granted) + ".")
+    if confine_to is not None:
+        lines.append(
+            "Every other path is refused: a tool call outside those directories "
+            "returns an error and touches nothing. If the task needs a path you "
+            "have not been given, say so rather than trying variations of it."
+        )
+    return "\n".join(lines)
+
+
 class FilesystemTool(ToolDef):
     name = "filesystem"
     description = (
@@ -73,6 +134,7 @@ class FilesystemTool(ToolDef):
             offset=Param("integer", description="Line number to start from (1-based)"),
             limit=Param("integer", description=f"Max lines to return. Default: {_DEFAULT_READ_LIMIT}"))
     async def read(self, ctx: dict[str, Any], path: str, offset: int = 1, limit: int = _DEFAULT_READ_LIMIT) -> str | AgentToolResult:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -82,6 +144,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Absolute file path"),
             content=Param("string", required=True, description="Content to write"))
     async def write(self, ctx: dict[str, Any], path: str, content: str) -> str:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -90,6 +153,7 @@ class FilesystemTool(ToolDef):
     @action("delete", description="Delete a file",
             path=Param("string", required=True, description="Absolute file path"))
     async def delete(self, ctx: dict[str, Any], path: str) -> str:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -106,6 +170,7 @@ class FilesystemTool(ToolDef):
             replace_all=Param("boolean", description="Replace all occurrences"))
     async def edit(self, ctx: dict[str, Any], path: str, old_string: str = "", new_string: str = "",
                    edits: list[Any] | None = None, replace_all: bool = False) -> str | AgentToolResult:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -119,6 +184,7 @@ class FilesystemTool(ToolDef):
             path=Param("string", required=True, description="Absolute directory path"),
             show_hidden=Param("boolean", description="Include hidden files"))
     async def ls(self, ctx: dict[str, Any], path: str, show_hidden: bool = False) -> str | AgentToolResult:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -134,6 +200,7 @@ class FilesystemTool(ToolDef):
             multiline=Param("boolean"),
             head_limit=Param("integer"))
     async def grep(self, ctx: dict[str, Any], path: str, pattern: str, **kwargs: Any) -> str:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error
@@ -144,6 +211,7 @@ class FilesystemTool(ToolDef):
             pattern=Param("string", required=True, description="Glob pattern"),
             head_limit=Param("integer"))
     async def find(self, ctx: dict[str, Any], path: str, pattern: str, head_limit: int = _DEFAULT_FIND_LIMIT) -> str:
+        path = _resolve(path, ctx)
         error = validate_path(path, confine_to=_confinement(ctx))
         if error:
             return error

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY
+from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
 from xdog.flow.models import NodeDef
 from xdog.flow.runners import SdkRunner
 from xdog.flow.tools import ToolRegistry
@@ -22,8 +22,12 @@ class _CapturingAgent:
 
     seen: dict[str, Any] = {}
 
+    prompt_seen: str = ""
+
     def __init__(self, stream_fn: Any, **kwargs: Any) -> None:
         _CapturingAgent.seen = dict(kwargs.get("tool_ctx") or {})
+        config = kwargs.get("config")
+        _CapturingAgent.prompt_seen = str(getattr(config, "system_prompt", "") or "")
         self._kwargs = kwargs
 
     @property
@@ -44,21 +48,25 @@ class _CapturingAgent:
         return _Empty()
 
 
-async def _tool_ctx_for(monkeypatch: Any, **runner_kwargs: Any) -> dict[str, Any]:
+async def _tool_ctx_for(
+    monkeypatch: Any, *, node_tools: tuple[str, ...] = (), **runner_kwargs: Any
+) -> dict[str, Any]:
     """Run one agent turn and return the tool_ctx the Agent was constructed with."""
     import xdog.agent.agent as agent_module
+    from xdog.flow.tools import default_registry
 
     monkeypatch.setattr(agent_module, "Agent", _CapturingAgent)
     _CapturingAgent.seen = {}
+    _CapturingAgent.prompt_seen = ""
 
     runner = SdkRunner(
         stream_fn_factory=lambda _m: object(),  # type: ignore[arg-type,return-value]
-        tool_registry=ToolRegistry(),
+        tool_registry=default_registry() if node_tools else ToolRegistry(),
         web_search_fn_factory=None,
         **runner_kwargs,
     )
     await runner.run(
-        NodeDef(id="n"),
+        NodeDef(id="n", tools=node_tools),
         system_prompt="",
         user_prompt="go",
         model="m",
@@ -260,8 +268,9 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
 
     # The generated module reads its bound from the environment, never from its
     # own source — a module told by its own text what it may touch is not bound.
-    assert "FLOW_WORKSPACE" in source
+    assert "FLOW_CONFINED" in source
     assert "fs_confine_to" in source
+    assert "fs_workspace" in source
     assert not re.search(r'fs_confine_to["\']\s*:\s*\[["\']/', source), (
         "a hard-coded root would mean the workflow granted its own access"
     )
@@ -270,23 +279,48 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
     exec(compile(source, "<gen>", "exec"), namespace)  # noqa: S102 - our own output
 
     roots = namespace["_confinement_roots"]
+    workspace_dir = namespace["_workspace_dir"]
     workspace = tmp_path / "runtime"
 
-    old = os.environ.pop("FLOW_WORKSPACE", None)
+    old_ws = os.environ.pop("FLOW_WORKSPACE", None)
+    old_conf = os.environ.pop("FLOW_CONFINED", None)
     try:
-        assert roots() is None, "unset means unconfined, matching the interpreter"
+        # A workspace always exists — that is the half that is not opt-in.
+        assert workspace_dir().name == "runtime"
+        assert roots() is None, "but nothing is enforced until asked, as in the interpreter"
 
         os.environ["FLOW_WORKSPACE"] = str(workspace)
+        assert workspace_dir() == workspace
+        assert roots() is None, "naming a workspace still does not confine to it"
+
+        os.environ["FLOW_CONFINED"] = "1"
         assert roots() == [str(workspace.resolve())]
 
         os.environ["FLOW_ALLOW_PATHS"] = str(tmp_path / "data")
         assert roots() == [str(workspace.resolve()), str((tmp_path / "data").resolve())]
+        # And the briefing: both engines must tell the model the same thing.
+        # A generated module that confines correctly but describes the bound
+        # differently produces a *different run*, since the prompt is an input.
+        # The equality is near-tautological once codegen calls the shared
+        # function — which is the point. The assertion that carries weight is
+        # that it calls it at all, and with this run's workspace and roots
+        # rather than a string of its own.
+        from xdog.agent.tools.tool_filesystem import workspace_briefing
+
+        assert "workspace_briefing(" in source, "the module briefs rather than staying silent"
+        assert "_workspace_dir()" in source and "_roots" in source, (
+            "and briefs from the live values, not from anything baked into its text"
+        )
+        assert workspace_briefing(workspace_dir(), roots(), uses_files=True) == (
+            workspace_briefing(workspace, [workspace, tmp_path / "data"], uses_files=True)
+        )
     finally:
         os.environ.pop("FLOW_ALLOW_PATHS", None)
-        if old is None:
-            os.environ.pop("FLOW_WORKSPACE", None)
-        else:
-            os.environ["FLOW_WORKSPACE"] = old
+        for key, old in (("FLOW_WORKSPACE", old_ws), ("FLOW_CONFINED", old_conf)):
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
 
 
 # -- the grant in the scheduling unit ----------------------------------------
@@ -364,3 +398,67 @@ def test_a_hook_workflow_gets_its_grant_through_the_registry(tmp_path: Path) -> 
     router.deliver_http("/h", b'{"x": 1}')
 
     assert fired[0]["FLOW_WORKSPACE"] == str(tmp_path / "ws")
+
+
+# -- the workspace is on by default; confinement is not ----------------------
+
+
+async def _prompt_for(monkeypatch: Any, **runner_kwargs: Any) -> str:
+    await _tool_ctx_for(monkeypatch, **runner_kwargs)
+    return _CapturingAgent.prompt_seen
+
+
+async def test_a_default_run_gets_a_workspace_but_no_bound(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The two halves, and why they are separate. Every run has a workspace so
+    relative paths land somewhere predictable; only `--confined` makes leaving it
+    an error. Collapsing these — as the first implementation did — means an
+    ordinary workflow has no workspace at all until someone asks to be confined."""
+    workspace = tmp_path / "runtime"
+
+    ctx = await _tool_ctx_for(monkeypatch, workspace=workspace)
+
+    assert ctx[WORKSPACE_CTX_KEY] == str(workspace)
+    assert CONFINE_CTX_KEY not in ctx, "a workspace is a convention until confined"
+
+
+async def test_the_agent_is_told_where_its_workspace_is(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A bound the model cannot see is one it can only find by tripping over it,
+    which costs a turn and looks to the model like a malfunction."""
+    workspace = tmp_path / "runtime"
+
+    prompt = await _prompt_for(
+        monkeypatch, node_tools=("filesystem",), workspace=workspace
+    )
+
+    assert str(workspace) in prompt
+    assert "Every other path is refused" not in prompt, "nothing is refused yet"
+
+
+async def test_a_confined_agent_is_told_the_walls_and_the_grants(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "runtime"
+    granted = tmp_path / "data"
+
+    prompt = await _prompt_for(
+        monkeypatch, node_tools=("filesystem",), workspace=workspace,
+        confine_to=[workspace, granted],
+    )
+
+    assert str(workspace) in prompt
+    assert str(granted) in prompt, "a grant it is not told about is a grant it cannot use"
+    assert "Every other path is refused" in prompt
+
+
+async def test_a_node_with_no_tools_is_told_nothing(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Most nodes never touch a file. Spending prompt on a workspace they cannot
+    use trains them to ignore the paragraph the file-touching nodes depend on."""
+    prompt = await _prompt_for(monkeypatch, workspace=tmp_path / "runtime")
+
+    assert prompt == ""

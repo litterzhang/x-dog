@@ -100,3 +100,51 @@ def test_the_tool_helper_also_treats_absent_and_empty_differently() -> None:
 def test_the_denylist_still_applies_inside_a_workspace(tmp_path: Path) -> None:
     """Confinement narrows; it does not re-permit."""
     assert validate_path("/etc/passwd", confine_to=[Path("/etc")]) is not None
+
+
+# -- the workspace, which is not the same thing as a bound --------------------
+
+
+def test_a_relative_path_resolves_inside_the_workspace(tmp_path: Path) -> None:
+    """The half of the design that is on by default. A model reasons in relative
+    paths — "write it to report.md" — and without a workspace those either error
+    or land in whatever directory the process started in, which differs between
+    running a workflow by hand and running it from a timer."""
+    from xdog.agent.tools.tool_filesystem import WORKSPACE_CTX_KEY, _resolve
+
+    ctx = {WORKSPACE_CTX_KEY: str(tmp_path / "runtime")}
+
+    assert _resolve("report.md", ctx) == str(tmp_path / "runtime" / "report.md")
+    assert _resolve("a/b.txt", ctx) == str(tmp_path / "runtime" / "a" / "b.txt")
+
+
+def test_an_absolute_path_is_left_alone(tmp_path: Path) -> None:
+    """A workspace says where "here" is; it does not rewrite what the caller
+    spelled out in full. Silently relocating an absolute path would make the
+    confinement error message describe a path the model never asked for."""
+    from xdog.agent.tools.tool_filesystem import WORKSPACE_CTX_KEY, _resolve
+
+    ctx = {WORKSPACE_CTX_KEY: str(tmp_path / "runtime")}
+
+    assert _resolve("/etc/hosts", ctx) == "/etc/hosts"
+
+
+def test_without_a_workspace_a_relative_path_is_untouched() -> None:
+    """xdog-coding and xdog-claw set no workspace, and must keep the behaviour
+    they have: a relative path reaches validate_path and is rejected there."""
+    from xdog.agent.tools.tool_filesystem import _resolve
+
+    assert _resolve("report.md", {}) == "report.md"
+    assert validate_path("report.md") == "Error: file path must be absolute."
+
+
+def test_a_workspace_alone_does_not_confine(tmp_path: Path) -> None:
+    """The distinction the whole redesign turns on. Having a workspace is the
+    default; being unable to leave it is opt-in. A workspace that quietly
+    confined would break every unconfined workflow that writes to a real path."""
+    from xdog.agent.tools.tool_filesystem import WORKSPACE_CTX_KEY, _confinement
+
+    ctx = {WORKSPACE_CTX_KEY: str(tmp_path / "runtime")}
+
+    assert _confinement(ctx) is None
+    assert validate_path("/tmp/elsewhere.txt", confine_to=_confinement(ctx)) is None

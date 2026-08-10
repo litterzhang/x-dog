@@ -216,7 +216,14 @@ async def _cmd_run(
 
         base_dir = Path(config_path).resolve().parent
 
-        confine_kwargs: dict[str, object] = {}
+        # The workspace is not optional — every run gets one, defaulting to
+        # `<workflow dir>/runtime`, so relative paths land somewhere predictable
+        # whether or not anything is enforced. `--confined` is the separate
+        # question of whether leaving it is refused.
+        confine_kwargs: dict[str, object] = {
+            "workspace": Path(workspace).resolve() if workspace else base_dir / "runtime",
+            "allow_paths": [Path(p).resolve() for p in (allow_paths or ())],
+        }
         if confined:
             reasons = unconfinable_reasons(wf)
             if reasons:
@@ -226,10 +233,7 @@ async def _cmd_run(
                 for reason in reasons:
                     print(f"  - {reason}")
                 raise SystemExit(2)
-            confine_kwargs = {
-                "workspace": Path(workspace).resolve() if workspace else base_dir / "runtime",
-                "allow_paths": [Path(p).resolve() for p in (allow_paths or ())],
-            }
+            confine_kwargs["confined"] = True
 
         if dry_run:
             result = await execute(

@@ -498,39 +498,50 @@ session for a reference already known to be sound.
 CLI backends (`claude-cli`, `codex-cli`) cannot take part in either direction:
 the CLI owns its own session, and flow can neither read nor seed it.
 
-## Workspace confinement (`--confined`)
+## The workspace, and confining a run to it
 
-A run can be bounded to a directory. Its tools may then read and write inside
-that workspace and nowhere else.
+**Every run has a workspace.** It defaults to `<workflow dir>/runtime`, a
+relative path resolves inside it, and it is where a node's output belongs. That
+is on by default and enforces nothing — it exists so a workflow run by hand and
+the same workflow run from a timer put their files in the same place, instead of
+wherever each process happened to start. It is not created until something writes
+to it, so a run that writes nothing leaves nothing behind.
+
+**`--confined` is the separate question of whether leaving it is refused.**
 
 ```bash
-xdog-flow run examples/workspace_triage.json --confined       # <workflow dir>/runtime
+xdog-flow run examples/workspace_triage.json                  # workspace, no walls
+xdog-flow run examples/workspace_triage.json --confined       # and now walls
 xdog-flow run report.json --confined --workspace ./scratch
 xdog-flow run report.json --confined --allow-path ~/data      # grant another tree
 ```
 
+The agent is told which of these it got. A node with file tools gets its
+workspace, any granted trees, and — when confined — the fact that everything else
+is refused, appended to its system prompt. A bound the model cannot see is one it
+can only find by tripping over it, which costs a turn and reads to the model as a
+malfunction rather than a rule.
+
 `examples/workspace_triage.json` is the worked example: three agent nodes that
 read crash reports out of the workspace, rank them, and write the report back
 into it. Nothing in the file mentions a workspace — the same file runs bounded or
-unbounded, and cannot tell which happened. Run it without `--confined` and a
-wandering agent writes wherever it likes; run it with, and the write comes back
-as `Error: /tmp/x.md is outside this run's workspace. Allowed: …/runtime`, which
-the model reads and can act on.
+unbounded, and cannot tell which happened.
 
 A scheduled install records the same grant in the unit it writes:
 
 ```bash
 xdog-flow scheduling install report.json --confined --allow-path ~/data
-# ... Environment=FLOW_WORKSPACE=/path/to/runtime
+# ... Environment=FLOW_CONFINED=1
 ```
 
 **The grant is never part of the workflow.** A workflow that could declare its
 own access would not be confined by it — and these are shareable artifacts that
 an agent may have written. The same applies to a compiled module, which reads
-its bound from the environment rather than its own source:
+both halves from the environment rather than its own source:
 
 ```bash
-FLOW_WORKSPACE=./runtime FLOW_ALLOW_PATHS=/data python workflow.py
+FLOW_WORKSPACE=./runtime python workflow.py                   # workspace only
+FLOW_CONFINED=1 FLOW_ALLOW_PATHS=/data python workflow.py     # and walls
 ```
 
 ### What it refuses, and why that is the point

@@ -51,6 +51,7 @@ _SDK_IMPORTS = (
     "from xdog.agent.events import TurnEndEvent\n"
     "from xdog.agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
     "from xdog.agent.tools import create_submit_result_tool\n"
+    "from xdog.agent.tools.tool_filesystem import workspace_briefing\n"
     "from xdog.ai.types import AssistantMessage, TextContent\n"
 )
 
@@ -153,15 +154,17 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # Structured output: register submit_result + a result sink, and instruct the
     # agent to call it.  The submitted object becomes the node's structured output.
     _sink: dict[str, object] = {}
-    # Confinement is a run-time decision, so it arrives from the environment
-    # rather than from the workflow — a generated module that could be told by
-    # its own source which directories it may touch would not be confined by it.
-    # Kept identical to the interpreter: absent means unconfined, present means
-    # the workspace plus any granted trees are the whole allowance.
-    _tool_ctx: dict[str, object] | None = (
-        {"fs_confine_to": _confinement_roots()} if _confinement_roots() is not None else None
+    # The workspace is unconditional; confinement is not. Both arrive from the
+    # environment rather than from the workflow — a generated module that could
+    # be told by its own source which directories it may touch would not be
+    # confined by it. Kept identical to the interpreter.
+    _roots = _confinement_roots()
+    _tool_ctx: dict[str, object] | None = {"fs_workspace": str(_workspace_dir())}
+    if _roots is not None:
+        _tool_ctx["fs_confine_to"] = _roots
+    _sys = system_prompt + workspace_briefing(
+        _workspace_dir(), _roots, uses_files=bool(tools)
     )
-    _sys = system_prompt
     if output_schema is not None:
         tools = tools + (create_submit_result_tool(),)
         _tool_ctx = {
@@ -171,7 +174,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
         }
         _props = output_schema.get("properties")
         _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
-        _sys = system_prompt + (
+        _sys = _sys + (
             "\\nWhen finished, you MUST call the submit_result tool"
             f" with an object containing these fields: {_fields}."
         )

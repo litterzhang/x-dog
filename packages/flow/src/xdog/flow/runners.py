@@ -166,7 +166,6 @@ class StubRunner:
         return value, tokens
 
 
-
 class SdkRunner:
     """The default backend: the in-process ``agent`` + ``ai`` SDK.
 
@@ -181,11 +180,15 @@ class SdkRunner:
         stream_fn_factory: Callable[[str], StreamFn],
         tool_registry: ToolRegistry,
         web_search_fn_factory: Callable[[str], WebSearchFn] | None,
+        workspace: Path | None = None,
         confine_to: Sequence[Path] | None = None,
     ) -> None:
         self._stream_fn_factory = stream_fn_factory
         self._tool_registry = tool_registry
         self._web_search_fn_factory = web_search_fn_factory
+        # Where "here" is. A relative path resolves inside it; None leaves the
+        # tool's historical behaviour, where a relative path is an error.
+        self._workspace = workspace
         # None means unconfined, which is what every caller got before this
         # existed. A list — even an empty one — is a bound.
         self._confine_to = confine_to
@@ -208,19 +211,26 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
-        from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY
+        from xdog.agent.tools.tool_filesystem import (
+            CONFINE_CTX_KEY,
+            WORKSPACE_CTX_KEY,
+            workspace_briefing,
+        )
         from xdog.ai.types import AssistantMessage, TextContent
 
         stream_fn = self._stream_fn_factory(model)
         resolved_tools: tuple[AgentTool, ...] = self._tool_registry.resolve(node.tools)
 
-        tool_ctx: dict[str, object] | None = (
-            {CONFINE_CTX_KEY: [str(p) for p in self._confine_to]}
-            if self._confine_to is not None
-            else None
-        )
+        ctx_bits: dict[str, object] = {}
+        if self._workspace is not None:
+            ctx_bits[WORKSPACE_CTX_KEY] = str(self._workspace)
+        if self._confine_to is not None:
+            ctx_bits[CONFINE_CTX_KEY] = [str(p) for p in self._confine_to]
+        tool_ctx: dict[str, object] | None = ctx_bits or None
         sink: dict[str, object] = {}
-        final_sys_prompt = system_prompt
+        final_sys_prompt = system_prompt + workspace_briefing(
+            self._workspace, self._confine_to, uses_files=bool(resolved_tools)
+        )
         structured = agent_is_structured(node)
         if structured:
             from xdog.agent.tools import create_submit_result_tool
