@@ -543,6 +543,24 @@ def _entry_guards(node_id: str) -> list[str]:
     ]
 
 
+def _param_list(node: NodeDef) -> list[str]:
+    """Signature params for a node function, required ports first.
+
+    A non-required port gets a default, because the generated module builds its
+    `ins` from edges that fired and the interpreter passes every declared port
+    with `ins.get(name, "")`. Without the default, a loop-carried optional port
+    -- absent by design on the first pass -- raised TypeError in the compiled
+    engine and worked in the interpreter. It surfaced inside a systemd timer,
+    which is the environment least able to explain it.
+
+    Required first because Python rejects a non-default after a default; call
+    sites pass everything by keyword, so the order is free.
+    """
+    required = [p.name for p in node.input_ports if p.required]
+    optional = [p.name for p in node.input_ports if not p.required]
+    return [f"{name}: object" for name in required] + [f'{name}: object = ""' for name in optional]
+
+
 def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef) -> str:
     """Render a script node as a pure function: (provider, ctx, **inputs) -> (outputs, 0).
 
@@ -551,7 +569,7 @@ def _render_script_node(node: NodeDef, fn_name: str, safe: str, wf: WorkflowDef)
     Storing/retry/events are the driver's job.
     """
     params = ["provider: object", "ctx: RuntimeContext"]
-    params += [f"{p.name}: object" for p in node.input_ports]
+    params += _param_list(node)
     sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
     lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
     call_args = ["ctx"]
@@ -662,7 +680,7 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     """
     model = node.model or wf.default_model
     params = ["provider: object", "ctx: RuntimeContext"]
-    params += [f"{p.name}: object" for p in node.input_ports]
+    params += _param_list(node)
     sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
     lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
     if node.input_ports:
@@ -720,7 +738,7 @@ def _render_cli_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     """
     model = node.model or wf.default_model
     params = ["provider: object", "ctx: RuntimeContext"]
-    params += [f"{p.name}: object" for p in node.input_ports]
+    params += _param_list(node)
     sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
     lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
     if node.input_ports:
@@ -777,7 +795,7 @@ def _render_subflow_node(node: NodeDef, fn_name: str, safe: str) -> str:
     in_names = [p.name for p in node.input_ports]
     out_names = [p.name for p in node.output_ports]
     params = ["provider: object", "ctx: RuntimeContext"]
-    params += [f"{p.name}: object" for p in node.input_ports]
+    params += _param_list(node)
     sig = f"async def {fn_name}({', '.join(params)}) -> tuple[dict[str, object], int]:"
     lines = [sig if len(sig) <= 120 else sig + "  # noqa: E501"]
     lines.append("    from xdog.flow.executor import execute as _flow_execute")

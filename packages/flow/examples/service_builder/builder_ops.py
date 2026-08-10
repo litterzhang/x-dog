@@ -71,24 +71,40 @@ def _criteria(ws: Path) -> list[tuple[str, str, str]]:
     return out
 
 
-def _fingerprint(ws: Path) -> str:
-    """A digest of the source tree — the workspace minus its own bookkeeping.
+#: Directories that are never part of the product being built.
+_NOISE = {".git", ".flow", "__pycache__", ".venv", ".pytest_cache", "node_modules", ".mypy_cache"}
 
-    ACCEPTANCE/JOURNAL/state change every run by construction. Counting them
-    would make every run look productive, so the halt condition would never fire
-    and an unattended timer would bill forever while looking healthy.
+
+def _source_roots(ctx: Any) -> tuple[Path, ...]:
+    """Where the service being built actually lives.
+
+    The granted trees, not the workspace. The workspace holds this workflow's own
+    bookkeeping -- the charter, the journal, the run counters -- and measuring
+    that would be measuring ourselves: those files change every run by
+    construction, so every run would look productive and the halt condition would
+    never fire. An unattended timer would bill forever while looking healthy.
+
+    Falls back to the workspace when nothing was granted, so the example still
+    works when someone runs it without `--allow-path`.
     """
+    granted = tuple(Path(p) for p in getattr(ctx, "allow_paths", ()) or ())
+    return granted or (Path(ctx.workspace),)
+
+
+def _fingerprint(roots: tuple[Path, ...]) -> str:
+    """A digest of the product tree: does it differ from when this run started?"""
     digest = hashlib.sha256()
-    for path in sorted(ws.rglob("*")):
-        if not path.is_file() or path.name in (STATE, JOURNAL, CHARTER):
+    for root in roots:
+        if not root.exists():
             continue
-        if any(part in {".git", "__pycache__", ".venv", "node_modules"} for part in path.parts):
-            continue
-        digest.update(str(path.relative_to(ws)).encode())
-        try:
-            digest.update(path.read_bytes())
-        except OSError:
-            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or any(part in _NOISE for part in path.parts):
+                continue
+            digest.update(str(path.relative_to(root)).encode())
+            try:
+                digest.update(path.read_bytes())
+            except OSError:
+                continue
     return digest.hexdigest()[:16]
 
 
@@ -110,14 +126,21 @@ def survey(ctx: Any) -> dict[str, Any]:
     if criteria and not unmet and not halted:
         halted = "complete: every acceptance criterion is met"
         state["halted"] = halted
-    state["run_start"] = _fingerprint(ws)
+    state["run_start"] = _fingerprint(_source_roots(ctx))
     _write_state(ws, state)
 
+    # The agent is briefed that its *workspace* is where its files belong, which
+    # is true of this workflow's bookkeeping and wrong for the service. Naming
+    # the product directory explicitly is the only thing that separates them --
+    # the first run without this put the whole skeleton in the workspace, which
+    # is exactly what it had been told to do.
+    source_dir = str(_source_roots(ctx)[0])
     has_charter = "yes" if criteria else "no"
     active = "no" if halted else "yes"
     return {
         "active": active,
         "has_charter": has_charter,
+        "source_dir": source_dir,
         "unmet_count": len(unmet),
         "unmet": "\n".join(f"- {slug}: {text}" for slug, text in unmet),
         "run_no": int(state.get("runs", 0)) + 1,
@@ -137,13 +160,14 @@ def verify(ctx: Any, criterion: str) -> dict[str, Any]:
     """
     _ = criterion
     ws = Path(ctx.workspace)
+    where = _source_roots(ctx)[0]
     cmd_file = ws / VERIFY
     command = cmd_file.read_text(encoding="utf-8").strip() if cmd_file.exists() else ""
     if not command:
         return {"passed": "no", "report": f"no usable {VERIFY}: nothing checked this work"}
     try:
         proc = subprocess.run(  # noqa: S602 - the project's own test command, by design
-            command, shell=True, cwd=ws, capture_output=True, text=True, timeout=1800,
+            command, shell=True, cwd=where, capture_output=True, text=True, timeout=1800,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {"passed": "no", "report": f"verify could not complete: {exc}"}
@@ -177,7 +201,7 @@ def record(ctx: Any, criterion: str, task: str, passed: str, report: str) -> dic
                 break
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    changed = _fingerprint(ws) != state.get("run_start")
+    changed = _fingerprint(_source_roots(ctx)) != state.get("run_start")
     state["runs"] = int(state.get("runs", 0)) + 1
     state["idle_runs"] = 0 if changed else int(state.get("idle_runs", 0)) + 1
     state["barren_runs"] = 0 if achieved else int(state.get("barren_runs", 0)) + 1

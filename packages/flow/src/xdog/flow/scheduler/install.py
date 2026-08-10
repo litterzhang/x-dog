@@ -105,7 +105,7 @@ class Installer:
         """
         if wf.schedule is None:
             raise ValueError(f"workflow {wf.name!r} has no 'schedule' block to install")
-        if confine is not None:
+        if confine is not None and confine.confined:
             reasons = unconfinable_reasons(wf)
             if reasons:
                 joined = "\n  - ".join(reasons)

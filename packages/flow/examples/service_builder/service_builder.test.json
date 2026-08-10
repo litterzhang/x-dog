@@ -12,7 +12,8 @@
           "unmet_count": 0,
           "unmet": "",
           "run_no": 1,
-          "status": "no charter yet"
+          "status": "no charter yet",
+          "source_dir": "/srv/notes"
         }
       },
       "agents": {
@@ -40,7 +41,8 @@
           "unmet_count": 5,
           "unmet": "- health-endpoint: GET /health returns 200",
           "run_no": 4,
-          "status": "run 4: 5 of 7 criteria unmet"
+          "status": "run 4: 5 of 7 criteria unmet",
+          "source_dir": "/srv/notes"
         },
         "verify": {
           "passed": "yes",
@@ -54,7 +56,8 @@
       "agents": {
         "propose": {
           "criterion": "health-endpoint",
-          "task": "add GET /health returning 200, with a test"
+          "task": "add GET /health returning 200, with a test",
+          "source_dir": "/srv/notes"
         },
         "implement": {
           "changes": "app/health.py, tests/test_health.py"
@@ -81,7 +84,8 @@
           "unmet_count": 1,
           "unmet": "- create-note: POST /notes returns an id",
           "run_no": 6,
-          "status": "run 6: 1 of 7 criteria unmet"
+          "status": "run 6: 1 of 7 criteria unmet",
+          "source_dir": "/srv/notes"
         },
         "verify": [
           {
@@ -107,7 +111,8 @@
       "agents": {
         "propose": {
           "criterion": "create-note",
-          "task": "POST /notes"
+          "task": "POST /notes",
+          "source_dir": "/srv/notes"
         },
         "implement": [
           {
@@ -144,7 +149,8 @@
           "unmet_count": 0,
           "unmet": "",
           "run_no": 12,
-          "status": "complete: every acceptance criterion is met"
+          "status": "complete: every acceptance criterion is met",
+          "source_dir": "/srv/notes"
         }
       },
       "expect": {

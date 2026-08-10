@@ -40,14 +40,24 @@ class ConfineGrant:
 
     workspace: Path
     allow_paths: tuple[Path, ...] = ()
+    confined: bool = True
+    """Whether to also enforce the bound, or only record where the run works.
+
+    These are separate questions, and tying them together made one of them
+    unreachable: a workflow that cannot be confined -- anything whose script
+    nodes shell out, which includes anything that runs a test suite -- had no
+    way to say *where* it should work. It got the bundle's own directory.
+    """
 
     def env(self) -> dict[str, str]:
-        """The variables the bundle reads — the same two the interpreter uses."""
-        # FLOW_CONFINED is what the bundle actually gates on. Without it this
-        # recorded a workspace the bundle would have defaulted to anyway, so
+        """The variables the bundle reads — the same ones the interpreter uses."""
+        # FLOW_CONFINED is what the bundle gates on. Without it this recorded a
+        # workspace the bundle would have defaulted to anyway, so
         # `install --confined` refused unconfinable workflows and then ran the
         # rest unconfined -- the flag was inert.
-        out = {"FLOW_CONFINED": "1", "FLOW_WORKSPACE": str(self.workspace)}
+        out = {"FLOW_WORKSPACE": str(self.workspace)}
+        if self.confined:
+            out["FLOW_CONFINED"] = "1"
         if self.allow_paths:
             out["FLOW_ALLOW_PATHS"] = os.pathsep.join(str(p) for p in self.allow_paths)
         return out

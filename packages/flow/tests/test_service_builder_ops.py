@@ -17,8 +17,14 @@ import builder_ops  # noqa: E402
 
 
 class _Ctx:
+    """The workflow's own bookkeeping lives in `workspace`; the service being
+    built lives in the granted tree. Keeping them apart is what lets the halt
+    detector measure the product rather than measuring itself."""
+
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
+        self.allow_paths = (workspace.parent / "src",)
+        self.confined = False
         self.step = 0
         self.node_id = "n"
         self.workflow_name = "service-builder"
@@ -33,7 +39,9 @@ def _run(ws: Path, criterion: str, passed: str, *, touches: str | None = None) -
     """One whole run: survey stamps the tree, work happens, record judges it."""
     builder_ops.survey(_Ctx(ws))
     if touches is not None:
-        (ws / touches).write_text(f"# {criterion}\n", encoding="utf-8")
+        src = _Ctx(ws).allow_paths[0]
+        src.mkdir(parents=True, exist_ok=True)
+        (src / touches).write_text(f"# {criterion}\n", encoding="utf-8")
     return builder_ops.record(_Ctx(ws), criterion, f"do {criterion}", passed, "report")
 
 
@@ -154,6 +162,7 @@ def test_unverified_work_is_a_failure_not_a_pass(tmp_path: Path) -> None:
     close fastest on a project that never wrote a test."""
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
+    _Ctx(ws).allow_paths[0].mkdir(parents=True)   # the product tree the checks run in
 
     assert builder_ops.verify(_Ctx(ws), "a")["passed"] == "no"
 
@@ -165,8 +174,9 @@ def test_unverified_work_is_a_failure_not_a_pass(tmp_path: Path) -> None:
 
 
 def test_bookkeeping_alone_is_not_progress(tmp_path: Path) -> None:
-    """ACCEPTANCE/JOURNAL/state change every run by construction. Counting them
-    would mean the idle bound never fires."""
+    """The charter, journal and counters change every run by construction. They
+    live outside the product tree so they cannot be mistaken for progress —
+    otherwise the idle bound would never fire."""
     ws = tmp_path / "ws"
     _charter(ws, "- [ ] a: one\n- [ ] b: two\n")
 

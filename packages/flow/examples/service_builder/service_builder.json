@@ -19,59 +19,196 @@
       "type": "script",
       "run": "builder_ops:survey",
       "outputs": [
-        {"name": "active", "schema": {"type": "string"}},
-        {"name": "has_charter", "schema": {"type": "string"}},
-        {"name": "unmet_count", "schema": {"type": "integer"}},
-        {"name": "unmet", "schema": {"type": "string"}},
-        {"name": "run_no", "schema": {"type": "integer"}},
-        {"name": "status", "schema": {"type": "string"}}
+        {
+          "name": "active",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source_dir",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "has_charter",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "unmet_count",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "unmet",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "run_no",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "status",
+          "schema": {
+            "type": "string"
+          }
+        }
       ]
     },
     {
       "id": "charter",
       "type": "agent",
-      "tools": ["filesystem"],
-      "inputs": [{"name": "idea", "schema": {"type": "string"}}],
+      "tools": [
+        "filesystem"
+      ],
+      "inputs": [
+        {
+          "name": "idea",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source_dir",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "system_prompt": "You turn a product idea into acceptance criteria a machine can check, for a project nobody will supervise.\n\nA criterion is good when a failing test could be written for it before any code exists, and when meeting it does not require meeting a later one first. A criterion like 'the API is well designed' is unusable here: nothing can decide it, so it will be skipped forever or claimed falsely.",
-      "prompt": "Set up the workspace for this idea:\n\n{{idea}}\n\nWrite ACCEPTANCE.md as a checklist, one criterion per line, exactly in this form:\n\n- [ ] health-endpoint: GET /health returns 200\n- [ ] create-note: POST /notes stores a note and returns its id\n\nThe slug before the colon is an identifier: lowercase, hyphenated, stable. Later runs refer to criteria by slug, so renaming one loses its history.\n\nWrite verify.txt containing the single shell command that checks the project, run from the workspace root - for example `python -m pytest -q`. Also create whatever skeleton that command needs to run at all: an empty test suite is fine, a command that cannot start is not.\n\nTwelve criteria at most. Reply with a one-line summary.",
-      "outputs": [{"name": "charter_summary", "schema": {"type": "string"}}]
+      "prompt": "The service you are chartering lives in {{source_dir}}. Put every source file, test and config for the service **there**, not in your workspace -- your workspace is for this build process's own records.\n\nSet up the project for this idea:\n\n{{idea}}\n\nWrite ACCEPTANCE.md **in your workspace** as a checklist, one criterion per line, exactly in this form:\n\n- [ ] health-endpoint: GET /health returns 200\n- [ ] create-note: POST /notes stores a note and returns its id\n\nThe slug before the colon is an identifier: lowercase, hyphenated, stable. Later runs refer to criteria by slug, so renaming one loses its history.\n\nWrite verify.txt **in your workspace**, containing the single shell command that checks the project. It runs from {{source_dir}} on a machine where the project's dependencies are NOT installed and nobody will install them, so the command must provision its own \u2014 for example `uv run --with-requirements requirements.txt pytest -q`. A command that assumes a prepared environment fails identically forever, and the run that discovers this is indistinguishable from a run that wrote bad code. In {{source_dir}}, create whatever skeleton that command needs to run at all: an empty test suite is fine, a command that cannot start is not.\n\nTwelve criteria at most. Reply with a one-line summary.",
+      "outputs": [
+        {
+          "name": "charter_summary",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     {
       "id": "propose",
       "type": "agent",
-      "tools": ["filesystem"],
+      "tools": [
+        "filesystem"
+      ],
       "inputs": [
-        {"name": "unmet", "schema": {"type": "string"}},
-        {"name": "run_no", "schema": {"type": "integer"}}
+        {
+          "name": "unmet",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "run_no",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "source_dir",
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "system_prompt": "You choose the next increment for a project you have never seen, because you have not: nothing carries between runs except the files. Read ACCEPTANCE.md, JOURNAL.md and the source before deciding.\n\nSize the increment to about an hour of focused work - one behaviour, its tests, nothing else. This is not a style preference. The run is killed at fifty minutes, and a half-applied larger change is left for the next run to inherit with no idea what was intended.\n\nPrefer the criterion that unblocks the most others, and one whose failure would be obvious over one whose success would be invisible. If the journal shows a criterion failing repeatedly, choose a different one and say why.",
-      "prompt": "Run {{run_no}}. Criteria still unmet:\n\n{{unmet}}\n\nChoose exactly one and describe the increment that will meet it. Use the criterion's slug verbatim.",
+      "prompt": "The service lives in {{source_dir}}; read and change it there. Your workspace holds the charter and journal, not the product.\n\nRun {{run_no}}. Criteria still unmet:\n\n{{unmet}}\n\nChoose exactly one and describe the increment that will meet it. Use the criterion's slug verbatim.",
       "outputs": [
-        {"name": "criterion", "schema": {"type": "string"}},
-        {"name": "task", "schema": {"type": "string"}}
+        {
+          "name": "criterion",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "task",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source_dir",
+          "schema": {
+            "type": "string"
+          }
+        }
       ]
     },
     {
       "id": "implement",
       "type": "agent",
-      "tools": ["filesystem"],
-      "inherit": {"from": "implement"},
+      "tools": [
+        "filesystem"
+      ],
+      "inherit": {
+        "from": "implement"
+      },
       "inputs": [
-        {"name": "task", "schema": {"type": "string"}},
-        {"name": "report", "schema": {"type": "string"}, "required": false}
+        {
+          "name": "task",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          },
+          "required": false
+        },
+        {
+          "name": "source_dir",
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "system_prompt": "You implement one increment in an existing codebase and then stop.\n\nWrite the test first and watch it fail before making it pass. With nobody reviewing this, a test written after the code is a test written to agree with it.\n\nLeave the tree runnable whatever happens. The next run inherits this directory and cannot ask what you meant.",
-      "prompt": "Implement this increment and nothing else:\n\n{{task}}\n\nIf the checks already failed on your previous attempt, this is what they said (empty on your first attempt):\n\n{{report}}\n\nFix the cause rather than the symptom. Reply with the files you changed and why.",
-      "outputs": [{"name": "changes", "schema": {"type": "string"}}]
+      "prompt": "The service lives in {{source_dir}}; read and change it there. Your workspace holds the charter and journal, not the product.\n\nImplement this increment and nothing else:\n\n{{task}}\n\nIf the checks already failed on your previous attempt, this is what they said (empty on your first attempt):\n\n{{report}}\n\nFix the cause rather than the symptom. Reply with the files you changed and why.",
+      "outputs": [
+        {
+          "name": "changes",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     {
       "id": "verify",
       "type": "script",
       "run": "builder_ops:verify",
-      "inputs": [{"name": "criterion", "schema": {"type": "string"}}],
+      "inputs": [
+        {
+          "name": "criterion",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "outputs": [
-        {"name": "passed", "schema": {"type": "string"}},
-        {"name": "report", "schema": {"type": "string"}}
+        {
+          "name": "passed",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          }
+        }
       ]
     },
     {
@@ -79,48 +216,182 @@
       "type": "script",
       "run": "builder_ops:record",
       "inputs": [
-        {"name": "criterion", "schema": {"type": "string"}},
-        {"name": "task", "schema": {"type": "string"}},
-        {"name": "passed", "schema": {"type": "string"}},
-        {"name": "report", "schema": {"type": "string"}}
+        {
+          "name": "criterion",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "task",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "passed",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "report",
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "outputs": [
-        {"name": "outcome", "schema": {"type": "string"}},
-        {"name": "halted", "schema": {"type": "string"}}
+        {
+          "name": "outcome",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "halted",
+          "schema": {
+            "type": "string"
+          }
+        }
       ]
     }
   ],
   "edges": [
-    {"from": "$in", "to": "charter", "map": {"idea": "idea"}},
-
-    {"from": "survey", "to": "charter", "map": {},
-     "when": {"and": [
-       {"equals": {"value": "{{active}}", "text": "yes"}},
-       {"equals": {"value": "{{has_charter}}", "text": "no"}}
-     ]}},
-
-    {"from": "survey", "to": "propose",
-     "map": {"unmet": "unmet", "run_no": "run_no"},
-     "when": {"and": [
-       {"equals": {"value": "{{active}}", "text": "yes"}},
-       {"equals": {"value": "{{has_charter}}", "text": "yes"}},
-       {"gte": {"value": "{{unmet_count}}", "text": "1"}}
-     ]}},
-
-    {"from": "propose", "to": "implement", "map": {"task": "task"}},
-    {"from": "propose", "to": "verify", "map": {"criterion": "criterion"}},
-    {"from": "propose", "to": "record", "map": {"criterion": "criterion", "task": "task"}},
-
-    {"from": "implement", "to": "verify", "map": {}},
-
-    {"from": "verify", "to": "implement", "map": {"report": "report"},
-     "when": {"equals": {"value": "{{passed}}", "text": "no"}},
-     "loop": {"max": 2}},
-
-    {"from": "verify", "to": "record", "map": {"passed": "passed", "report": "report"}},
-
-    {"from": "record", "to": "$output", "map": {"outcome": "outcome", "halted": "halted"}},
-    {"from": "survey", "to": "$output", "map": {"status": "status"}},
-    {"from": "charter", "to": "$output", "map": {"charter_summary": "charter"}}
+    {
+      "from": "$in",
+      "to": "charter",
+      "map": {
+        "idea": "idea"
+      }
+    },
+    {
+      "from": "survey",
+      "to": "charter",
+      "map": {
+        "source_dir": "source_dir"
+      },
+      "when": {
+        "and": [
+          {
+            "equals": {
+              "value": "{{active}}",
+              "text": "yes"
+            }
+          },
+          {
+            "equals": {
+              "value": "{{has_charter}}",
+              "text": "no"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "from": "survey",
+      "to": "propose",
+      "map": {
+        "unmet": "unmet",
+        "run_no": "run_no",
+        "source_dir": "source_dir"
+      },
+      "when": {
+        "and": [
+          {
+            "equals": {
+              "value": "{{active}}",
+              "text": "yes"
+            }
+          },
+          {
+            "equals": {
+              "value": "{{has_charter}}",
+              "text": "yes"
+            }
+          },
+          {
+            "gte": {
+              "value": "{{unmet_count}}",
+              "text": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "from": "propose",
+      "to": "implement",
+      "map": {
+        "task": "task",
+        "source_dir": "source_dir"
+      }
+    },
+    {
+      "from": "propose",
+      "to": "verify",
+      "map": {
+        "criterion": "criterion"
+      }
+    },
+    {
+      "from": "propose",
+      "to": "record",
+      "map": {
+        "criterion": "criterion",
+        "task": "task"
+      }
+    },
+    {
+      "from": "implement",
+      "to": "verify",
+      "map": {}
+    },
+    {
+      "from": "verify",
+      "to": "implement",
+      "map": {
+        "report": "report"
+      },
+      "when": {
+        "equals": {
+          "value": "{{passed}}",
+          "text": "no"
+        }
+      },
+      "loop": {
+        "max": 2
+      }
+    },
+    {
+      "from": "verify",
+      "to": "record",
+      "map": {
+        "passed": "passed",
+        "report": "report"
+      }
+    },
+    {
+      "from": "record",
+      "to": "$output",
+      "map": {
+        "outcome": "outcome",
+        "halted": "halted"
+      }
+    },
+    {
+      "from": "survey",
+      "to": "$output",
+      "map": {
+        "status": "status"
+      }
+    },
+    {
+      "from": "charter",
+      "to": "$output",
+      "map": {
+        "charter_summary": "charter"
+      }
+    }
   ]
 }

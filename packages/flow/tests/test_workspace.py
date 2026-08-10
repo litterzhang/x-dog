@@ -782,3 +782,47 @@ def test_a_confined_install_actually_turns_confinement_on(tmp_path: Path) -> Non
     service = render_timer_units("s", tmp_path / "b", wf.schedule, confine=grant).files["s.service"]  # type: ignore[arg-type]
 
     assert "Environment=FLOW_CONFINED=1" in service
+
+
+def test_an_optional_loop_carried_port_does_not_break_the_compiled_engine() -> None:
+    """`interpret == compile` for a port that is absent by design.
+
+    The interpreter passes every declared port, defaulting an unfed one to "".
+    The generated module builds `ins` from the edges that actually fired, so a
+    non-required loop-carried port is simply missing on the first pass — and the
+    node function required it positionally. The workflow ran fine interpreted and
+    raised TypeError compiled, which surfaced inside a systemd timer: the
+    environment least able to explain itself.
+    """
+    import asyncio
+
+    from xdog.flow.codegen import generate
+    from xdog.flow.executor import execute
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "opt", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [
+            {"id": "a", "type": "script", "outputs": ["seed"],
+             "code": "def a(ctx):\n    return 'go'"},
+            {"id": "b", "type": "script",
+             "inputs": [
+                 {"name": "seed", "schema": {"type": "string"}},
+                 {"name": "carried", "schema": {"type": "string"}, "required": False},
+             ],
+             "outputs": ["out"],
+             "code": "def b(ctx, seed, carried):\n    return f'{seed}/{carried!r}'"},
+        ],
+        "edges": [
+            {"from": "a", "to": "b", "map": {"seed": "seed"}},
+            {"from": "b", "to": "$output", "map": {"out": "r"}},
+        ],
+    })
+
+    interpreted = asyncio.run(execute(wf, timeout=10)).runtime["out"]["r"]
+
+    namespace: dict[str, Any] = {}
+    exec(compile(generate(wf), "<gen>", "exec"), namespace)  # noqa: S102 - our own output
+    asyncio.run(namespace["main"]())
+
+    assert namespace["_OUTPUT"]["r"] == interpreted

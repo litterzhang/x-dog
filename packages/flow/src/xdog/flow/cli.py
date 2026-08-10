@@ -440,13 +440,14 @@ def _cmd_scheduling_install(
         print(str(exc))
         raise SystemExit(1)
     grant = None
-    if confined:
+    if confined or workspace or allow_paths:
         from xdog.flow.scheduler.systemd import ConfineGrant
 
         base_dir = Path(config_path).resolve().parent
         grant = ConfineGrant(
             workspace=Path(workspace).resolve() if workspace else base_dir / "runtime",
             allow_paths=tuple(Path(p).resolve() for p in (allow_paths or ())),
+            confined=confined,
         )
     try:
         installed = _scheduling_installer(python).install(
