@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "name": "reads the workspace, ranks, writes the report back into it",
+      "inputs": {
+        "since": "the last release"
+      },
+      "agents": {
+        "collect": {
+          "summary": "Three reports: a null deref in the parser (41 users), a timeout on upload (6), a font glitch (2)."
+        },
+        "rank": {
+          "ranking": "1. parser null deref (41) 2. upload timeout (6) 3. font glitch (2) — ordered by affected users."
+        },
+        "write_report": {
+          "report_path": "triage-report.md"
+        }
+      },
+      "expect": {
+        "success": true,
+        "output": {
+          "report": "triage-report.md"
+        }
+      }
+    }
+  ]
+}

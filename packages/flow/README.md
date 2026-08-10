@@ -504,10 +504,18 @@ A run can be bounded to a directory. Its tools may then read and write inside
 that workspace and nowhere else.
 
 ```bash
-xdog-flow run report.json --confined                      # <workflow dir>/runtime
+xdog-flow run examples/workspace_triage.json --confined       # <workflow dir>/runtime
 xdog-flow run report.json --confined --workspace ./scratch
-xdog-flow run report.json --confined --allow-path ~/data  # grant another tree
+xdog-flow run report.json --confined --allow-path ~/data      # grant another tree
 ```
+
+`examples/workspace_triage.json` is the worked example: three agent nodes that
+read crash reports out of the workspace, rank them, and write the report back
+into it. Nothing in the file mentions a workspace — the same file runs bounded or
+unbounded, and cannot tell which happened. Run it without `--confined` and a
+wandering agent writes wherever it likes; run it with, and the write comes back
+as `Error: /tmp/x.md is outside this run's workspace. Allowed: …/runtime`, which
+the model reads and can act on.
 
 A scheduled install records the same grant in the unit it writes:
 

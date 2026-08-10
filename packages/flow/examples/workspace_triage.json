@@ -1,0 +1,79 @@
+{
+  "name": "workspace-triage",
+  "provider": "copilot",
+  "defaults": {
+    "model": "gpt-5.6-sol"
+  },
+  "entry": "collect",
+  "state": {
+    "since": "the last release"
+  },
+  "nodes": [
+    {
+      "id": "collect",
+      "type": "agent",
+      "tools": [
+        "filesystem"
+      ],
+      "inputs": [
+        "since"
+      ],
+      "system_prompt": "You triage crash reports. Every file you touch lives in this run's workspace; read what is there and do not go looking elsewhere on this machine.",
+      "prompt": "List the crash reports in the workspace and read them. Summarize what has been failing {{$.since}}.",
+      "outputs": [
+        "summary"
+      ]
+    },
+    {
+      "id": "rank",
+      "type": "agent",
+      "inherit": {
+        "from": "collect"
+      },
+      "prompt": "Rank what you just read by how many users it affects. Explain the ordering.",
+      "outputs": [
+        "ranking"
+      ]
+    },
+    {
+      "id": "write_report",
+      "type": "agent",
+      "tools": [
+        "filesystem"
+      ],
+      "inherit": {
+        "from": "rank"
+      },
+      "prompt": "Write your ranking to triage-report.md in the workspace, then reply with the path you wrote.",
+      "outputs": [
+        "report_path"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "$in",
+      "to": "collect",
+      "map": {
+        "since": "since"
+      }
+    },
+    {
+      "from": "collect",
+      "to": "rank",
+      "map": {}
+    },
+    {
+      "from": "rank",
+      "to": "write_report",
+      "map": {}
+    },
+    {
+      "from": "write_report",
+      "to": "$output",
+      "map": {
+        "report_path": "report"
+      }
+    }
+  ]
+}
