@@ -108,6 +108,20 @@ for two people with no way to tell from the file. An unresolvable name fails
 `validate`, because an agent asked to produce a format it was never shown does
 not fail — it produces something plausible and wrong.
 
+**Declared, not discovered — and so loaded eagerly.** The body goes into the
+system prompt when the node is built, rather than behind a "load this skill"
+tool the model may call. Two-step disclosure exists to solve *which of the
+hundred skills on this machine do I need*, and a workflow that names its skills
+has already answered that. Making the guarantee depend on the model choosing to
+read its own instructions reintroduces exactly the failure the field exists to
+prevent: a node gets one shot at producing a format, and one that skips the load
+produces something plausible and wrong.
+
+The cost is real — `flow-workflows` is ~2,500 tokens, resent on every API call
+that node makes — so declare a skill on the node that produces the artifact, not
+on every node in the workflow. The saving is in not declaring it where it is not
+needed, which is exact, rather than in lazy loading, which is a guess.
+
 **Ports.** A required string port may use the bare shorthand (`"topic"`). Typed,
 structured, or non-required ports use the canonical object form
 `{"name": "sum", "schema": {"type": "integer"}, "required": true}`. Values are
