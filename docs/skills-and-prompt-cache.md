@@ -54,13 +54,34 @@ it costs in this codebase.
 So this is not one bug with one fix. It is: *static skills belong in the prefix,
 dynamic skills belong after it*, and coding currently puts both in the prefix.
 
-## Before changing coding
+## Resolved: do not migrate coding or claw
 
-- Measure it. Count cache hits with and without an active turn-scoped skill; the
-  cost may be small if sessions are short.
-- Check whether the summary section (one line per skill on disk) is stable. If it
-  is, it can stay in the system prompt regardless — it is only the *bodies* that
-  come and go.
-- Keep `expires_after_turn` working. Unloading exists so a skill's instructions
-  stop applying, and moving where the body lives must not quietly make it
-  permanent.
+Measured, as this note told itself to. Neither is wrong.
+
+**claw was already right.** Its skill bodies come back through `tool_skill.py`
+as a *tool result*, which is a message — after the prefix, exactly the shape this
+note was going to recommend. Only the stable one-line summary sits in its system
+prompt.
+
+**coding's cache is not being thrashed.** `build_system_prompt` takes
+`(config, tools, file_entries, extra_context)` and contains no clock, uuid or
+cwd, so the rebuild before every turn produces byte-identical text and the cache
+hits. Rebuilding is free; *changing* is what costs, and the text only changes
+when the user runs `/skill` or `/unload`.
+
+**And moving it would break what it is for.** `activate_skill`'s docstring says
+bodies live in the system prompt because a message cannot be taken back out of a
+conversation — that is what makes `/unload` work. Trading a working feature for a
+cache problem that does not occur is a bad deal.
+
+## The one thing still worth doing, if it ever matters
+
+No skill anywhere sets `scope: turn`, so the expiry path never fires. If one ever
+does, coding will rebuild its system prompt *every turn*, and that is the case
+this note was worried about — a real cliff, currently unreachable.
+
+The fix then is not to move everything: it is to route only turn-scoped bodies
+through `Agent(skills=...)`, which already places them as messages, and leave
+session-scoped ones in the system prompt where `/unload` can reach them. Small,
+and worth doing at the moment the first turn-scoped skill is written rather than
+before.
