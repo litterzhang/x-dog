@@ -221,7 +221,7 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
-        from xdog.agent.skills import skills_preamble
+        from xdog.agent.skills import resolve_skills
         from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
         from xdog.agent.workspace import workspace_briefing
         from xdog.ai.types import AssistantMessage, TextContent
@@ -241,7 +241,7 @@ class SdkRunner:
         # filesystem, so can an MCP server, and a model can name a path for a
         # downstream node to use. We tell it where its files go; we cannot audit
         # that it obeys.
-        final_sys_prompt = skills_preamble(node.skills, self._skill_dirs) + system_prompt + workspace_briefing(
+        final_sys_prompt = system_prompt + workspace_briefing(
             self._workspace, self._allow_paths, confined=self._confine_to is not None
         )
         structured = agent_is_structured(node)
@@ -272,6 +272,7 @@ class SdkRunner:
             config=AgentConfig(model=model, system_prompt=final_sys_prompt),
             tools=resolved_tools,
             tool_ctx=tool_ctx,
+            skills=resolve_skills(node.skills, self._skill_dirs),
             web_search_fn=web_search_fn,
         )
 

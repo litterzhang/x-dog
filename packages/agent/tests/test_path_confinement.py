@@ -148,3 +148,66 @@ def test_a_workspace_alone_does_not_confine(tmp_path: Path) -> None:
 
     assert _confinement(ctx) is None
     assert validate_path("/tmp/elsewhere.txt", confine_to=_confinement(ctx)) is None
+
+
+# -- skill placement belongs to the Agent, not to each caller ----------------
+
+
+def _skill(tmp_path: Path, name: str, body: str, *, expires: bool = False) -> object:
+    from xdog.agent.skills import resolve_skills
+
+    d = tmp_path / "skills" / name
+    d.mkdir(parents=True, exist_ok=True)
+    meta = "\nscope: turn" if expires else ""
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: d{meta}\n---\n\n{body}\n", encoding="utf-8"
+    )
+    return resolve_skills([name], [tmp_path / "skills"])[0]
+
+
+def _agent(**kw: object) -> object:
+    from xdog.agent.agent import Agent
+    from xdog.agent.core import AgentConfig
+
+    return Agent(
+        lambda *a, **k: None,  # type: ignore[arg-type]
+        config=AgentConfig(model="m", system_prompt="THE TASK"),
+        **kw,  # type: ignore[arg-type]
+    )
+
+
+def test_a_fixed_skill_goes_in_the_cacheable_prefix(tmp_path: Path) -> None:
+    """It is the same for every request of the session, so it belongs where the
+    prompt cache can keep it: the front of the system prompt."""
+    agent = _agent(skills=[_skill(tmp_path, "house", "USE TABS")])
+
+    assert "USE TABS" in agent.state.system_prompt  # type: ignore[attr-defined]
+    assert agent.state.system_prompt.strip().endswith("THE TASK")  # type: ignore[attr-defined]
+    assert agent.state.messages == ()  # type: ignore[attr-defined]
+
+
+def test_a_turn_scoped_skill_goes_after_the_prefix(tmp_path: Path) -> None:
+    """It is going to be removed again. Putting it in the system prompt costs a
+    full uncached re-send when it arrives and another when it leaves, because
+    caching keys on the prefix and the system prompt is the front of it."""
+    agent = _agent(skills=[_skill(tmp_path, "temp", "JUST THIS TURN", expires=True)])
+
+    assert "JUST THIS TURN" not in (agent.state.system_prompt or "")  # type: ignore[attr-defined]
+    assert any("JUST THIS TURN" in str(m.content) for m in agent.state.messages)  # type: ignore[attr-defined]
+
+
+def test_both_kinds_can_be_given_at_once(tmp_path: Path) -> None:
+    agent = _agent(skills=[
+        _skill(tmp_path, "fixed", "ALWAYS"),
+        _skill(tmp_path, "temp", "FOR NOW", expires=True),
+    ])
+
+    assert "ALWAYS" in agent.state.system_prompt  # type: ignore[attr-defined]
+    assert "FOR NOW" not in agent.state.system_prompt  # type: ignore[attr-defined]
+    assert any("FOR NOW" in str(m.content) for m in agent.state.messages)  # type: ignore[attr-defined]
+
+
+def test_no_skills_changes_nothing(tmp_path: Path) -> None:
+    """Every existing caller passes none, and must be unaffected."""
+    assert _agent().state.system_prompt == "THE TASK"  # type: ignore[attr-defined]
+    assert _agent().state.messages == ()  # type: ignore[attr-defined]

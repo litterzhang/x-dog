@@ -1,9 +1,21 @@
 # Where a skill's body belongs, for prompt caching
 
-Status: **note, not investigated** · Raised while adding `skills:` to flow agent
+Status: **partly done** — `Agent` now owns placement; `coding` not yet migrated · Raised while adding `skills:` to flow agent
 nodes · Owner: whoever next touches `xdog-coding`'s system prompt
 
-## What is true today
+## Done since this was written
+
+`Agent` takes `skills=[...]` and decides placement itself: a session-scoped skill
+goes in the system prompt, a `scope: turn` one goes in as a message. Resolution
+stays with the caller — flow looks beside its workflow and in packages, coding in
+its group and shared directories — because only the caller knows where to look.
+Placement is the same everywhere because only one place decides it.
+
+flow is migrated. **`coding` is not**: it still builds a skills section into
+`build_system_prompt` and calls `_rebuild_system_prompt()` when the active set
+changes, which is the case this note is about.
+
+## What was true when this was written
 
 **flow** (`skills_preamble` in `SdkRunner` / `_run_agent`): the body goes at the
 **front of the system prompt**, and a node's system prompt is built once and

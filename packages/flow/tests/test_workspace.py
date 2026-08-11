@@ -837,12 +837,11 @@ def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tm
     scheduling workflow was written with an invented node type by an agent with
     no access to the skill describing the format, and every downstream check
     passed."""
-    from xdog.agent.skills import skills_preamble
+    from xdog.agent.skills import resolve_skills
     from xdog.flow.codegen import generate
     from xdog.flow.loader import parse_workflow
 
-    preamble = skills_preamble(["flow-workflows"])
-    assert preamble.strip(), "the skill must resolve from the installed package"
+    assert resolve_skills(["flow-workflows"]), "the skill must resolve from the package"
 
     wf = parse_workflow({
         "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
@@ -853,9 +852,11 @@ def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tm
     assert wf.nodes[0].skills == ("flow-workflows",)
 
     source = generate(wf)
-    assert "skills_preamble(skills, _skill_dirs())" in source, "compiled engine renders it too"
+    assert "skills=resolve_skills(skills, _skill_dirs())" in source, (
+        "the compiled engine hands skills to the Agent rather than placing them itself"
+    )
     assert "skills=('flow-workflows',)" in source, "with this node's skills"
-    assert "from xdog.agent.skills import skills_preamble" in source
+    assert "from xdog.agent.skills import resolve_skills" in source
 
 
 def test_a_generated_module_does_not_import_flow_for_skills() -> None:
@@ -917,7 +918,6 @@ def test_a_skill_beside_the_workflow_resolves_and_travels(tmp_path: Path) -> Non
     the file."""
     import json
 
-    from xdog.agent.skills import skills_preamble
     from xdog.flow.builder.io import load_any
     from xdog.flow.bundle import build_bundle
 
@@ -933,7 +933,10 @@ def test_a_skill_beside_the_workflow_resolves_and_travels(tmp_path: Path) -> Non
     }), encoding="utf-8")
 
     wf = load_any(str(tmp_path / "wf.json"))          # validates, so it resolved
-    assert "NEVER use tabs" in skills_preamble(["house-style"], [tmp_path / "skills"])
+    from xdog.agent.skills import render_skill_body, resolve_skills
+
+    local = resolve_skills(["house-style"], [tmp_path / "skills"])
+    assert local and "NEVER use tabs" in render_skill_body(local[0])
 
     build_bundle(wf, tmp_path / "bundle", base_dir=tmp_path)
     assert (tmp_path / "bundle" / "skills" / "house-style" / "SKILL.md").exists(), (

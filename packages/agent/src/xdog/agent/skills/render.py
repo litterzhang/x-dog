@@ -19,6 +19,10 @@ standard actually recommends — resolve too, with no change to the skill.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xdog.agent.skills.types import Skill
 from pathlib import Path
 
 from xdog.agent.skills.types import Skill
@@ -45,6 +49,31 @@ def render_skill_body(skill: Skill) -> str:
         "`scripts/y.sh` — resolve there, not against the working directory.\n\n"
         f"{body}"
     )
+
+
+def resolve_skills(slugs: "Sequence[str]", search_dirs: "Sequence[Path]" = ()) -> "list[Skill]":
+    """The skills named by *slugs*, searched in *search_dirs* then packages.
+
+    Returns objects rather than text: *resolution* is the caller's business,
+    because only it knows where to look -- flow beside its workflow, coding in
+    its group and shared directories -- while *placement* is the Agent's, so
+    every caller gets the same prompt-cache behaviour without deciding it.
+    """
+    from xdog.agent.skills.discovery import load_packaged_skill
+    from xdog.agent.skills.manager import _load_skill_from_dir
+
+    found = []
+    for slug in slugs:
+        skill = None
+        for directory in search_dirs:
+            skill = _load_skill_from_dir(Path(directory) / slug, slug=slug)
+            if skill is not None:
+                break
+        if skill is None:
+            skill = load_packaged_skill(slug)
+        if skill is not None:
+            found.append(skill)
+    return found
 
 
 def skills_preamble(slugs: "Sequence[str]", search_dirs: "Sequence[Path]" = ()) -> str:

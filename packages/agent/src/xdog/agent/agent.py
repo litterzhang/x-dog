@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xdog.agent.skills.types import Skill
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -81,6 +85,24 @@ EventListener = Callable[[AgentEvent], None]
 # Agent
 # ---------------------------------------------------------------------------
 
+def _transient_messages(skills: "Sequence[Skill]") -> "tuple[UserMessage, ...]":
+    """Turn-scoped skills, as messages rather than as system-prompt text.
+
+    They are going to be removed again, and the system prompt is the cached
+    prefix: adding one there and taking it away costs a full re-send of
+    everything behind it, twice. As messages they sit after the prefix, so the
+    prefix stays cached and removing them is a message edit.
+    """
+    if not skills:
+        return ()
+    from xdog.agent.skills.render import render_skill_body
+
+    return tuple(
+        UserMessage(content=f"## Active skill: {sk.name}\n\n{render_skill_body(sk)}")
+        for sk in skills
+    )
+
+
 class Agent:
     """High-level agent with state management, event subscriptions, and queuing.
 
@@ -123,6 +145,7 @@ class Agent:
         config: AgentConfig | None = None,
         tools: tuple[AgentTool, ...] | list[AgentTool] | None = None,
         tool_ctx: dict[str, Any] | None = None,
+        skills: "Sequence[Skill]" = (),
         embed_fn: EmbedFn | None = None,
         web_search_fn: WebSearchFn | None = None,
         convert_to_llm: ConvertToLlmFn | None = None,
@@ -131,6 +154,34 @@ class Agent:
         after_tool_call: AfterToolCallFn | None = None,
     ) -> None:
         cfg = config or AgentConfig()
+
+        # Where a skill's instructions go is decided here, not by each caller.
+        #
+        # It used to be the caller's problem: the skills module handed back a
+        # string and flow, coding and claw each chose where to concatenate it.
+        # They chose differently, and one of them re-sent the whole conversation
+        # uncached on every turn -- because prompt caching keys on the prefix,
+        # and the system prompt is the front of it.
+        #
+        # The information needed to decide has always been on the skill itself.
+        # One that never expires is fixed for the session, so it belongs in the
+        # cacheable prefix. One that expires after a turn is going to move, and
+        # editing the prefix to add or remove it invalidates everything behind
+        # it -- so it goes after, where messages accumulate.
+        #
+        # Resolution stays with the caller, which is the real seam: flow looks
+        # beside its workflow and in installed packages, coding looks in its
+        # group and shared directories. Placement is the same everywhere.
+        _fixed = [sk for sk in skills if not sk.expires_after_turn]
+        _transient = [sk for sk in skills if sk.expires_after_turn]
+        if _fixed:
+            from xdog.agent.skills.render import render_skill_body
+
+            _preamble = "\n\n".join(render_skill_body(sk) for sk in _fixed)
+            _existing = cfg.system_prompt
+            if isinstance(_existing, str) or _existing is None:
+                cfg = replace(cfg, system_prompt=_preamble + "\n\n" + (_existing or ""))
+
 
         # Build tools list — start with user-provided tools
         tools_list = list(tools) if tools else []
@@ -148,7 +199,7 @@ class Agent:
             system_prompt=cfg.system_prompt,
             model=cfg.model,
             tools=tuple(tools_list),
-            messages=(),
+            messages=_transient_messages(_transient),
         )
 
         self._stream_fn = stream_fn

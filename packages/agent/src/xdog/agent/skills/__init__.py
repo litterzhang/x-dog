@@ -15,7 +15,12 @@ write flow workflows.
 
 from xdog.agent.skills.discovery import load_packaged_skill, packaged_skills
 from xdog.agent.skills.manager import SkillManager
-from xdog.agent.skills.render import render_skill_body, resolvable_skill, skills_preamble
+from xdog.agent.skills.render import (
+    render_skill_body,
+    resolvable_skill,
+    resolve_skills,
+    skills_preamble,
+)
 from xdog.agent.skills.types import Skill
 
 __all__ = [
@@ -25,5 +30,6 @@ __all__ = [
     "packaged_skills",
     "render_skill_body",
     "resolvable_skill",
+    "resolve_skills",
     "skills_preamble",
 ]
