@@ -12,6 +12,8 @@ Usage::
     xdog-flow generate <config> --portable -o DIR  Emit a self-contained bundle
     xdog-flow graph <config.json|.svg> [--mermaid|--svg]  Print workflow graph
     xdog-flow scheduling install <config.json|.svg>     Install a schedule
+    xdog-flow scheduling stop <name>                    Disarm without uninstalling
+    xdog-flow scheduling start <name>                   Arm it again
     xdog-flow scheduling uninstall <name>               Uninstall a schedule
     xdog-flow scheduling list                           List schedules
 """
@@ -429,6 +431,7 @@ def _cmd_scheduling_install(
     dry_run: bool,
     python: str | None = None,
     no_venv: bool = False,
+    no_start: bool = False,
     confined: bool = False,
     workspace: str | None = None,
     allow_paths: list[str] | None = None,
@@ -457,11 +460,32 @@ def _cmd_scheduling_install(
             base_dir=Path(config_path).resolve().parent,
             venv=not no_venv,
             confine=grant,
+            start=not no_start,
         )
     except ValueError as exc:
         print(str(exc))
         raise SystemExit(1)
     print(f"Installed {installed}" if not dry_run else f"(dry-run) would install {installed}")
+
+
+def _cmd_scheduling_stop(name: str, *, dry_run: bool) -> None:
+    """Disarm an installed workflow without uninstalling it."""
+    try:
+        _scheduling_installer().stop(name, dry_run=dry_run)
+    except ValueError as exc:
+        print(str(exc))
+        raise SystemExit(1) from None
+    print(f"Stopped {name}" if not dry_run else f"(dry-run) would stop {name}")
+
+
+def _cmd_scheduling_start(name: str, *, dry_run: bool) -> None:
+    """Arm an installed workflow that was stopped."""
+    try:
+        _scheduling_installer().start(name, dry_run=dry_run)
+    except ValueError as exc:
+        print(str(exc))
+        raise SystemExit(1) from None
+    print(f"Started {name}" if not dry_run else f"(dry-run) would start {name}")
 
 
 def _cmd_scheduling_uninstall(name: str, *, dry_run: bool) -> None:
@@ -614,6 +638,15 @@ def main(argv: list[str] | None = None) -> None:
         "--dry-run", action="store_true", help="Print units/actions without touching the OS"
     )
     scheduling_install.add_argument(
+        "--no-start",
+        action="store_true",
+        help=(
+            "Install without arming it. The unit is still enabled, so it starts on the next "
+            "boot and at its next scheduled time -- installing and arming are separate "
+            "decisions, and a workflow may want reviewing before its first run."
+        ),
+    )
+    scheduling_install.add_argument(
         "--confined",
         action="store_true",
         help=(
@@ -637,6 +670,20 @@ def main(argv: list[str] | None = None) -> None:
             "The grant lives in the unit, never in the workflow file — a workflow that "
             "could declare its own access would not be confined by it."
         ),
+    )
+
+    scheduling_stop = scheduling_sub.add_parser(
+        "stop", help="Disarm an installed workflow, and end a run in progress"
+    )
+    scheduling_stop.add_argument("name", help="Installed workflow name")
+    scheduling_stop.add_argument(
+        "--dry-run", action="store_true", help="Print actions without touching the OS"
+    )
+
+    scheduling_start = scheduling_sub.add_parser("start", help="Arm a stopped workflow again")
+    scheduling_start.add_argument("name", help="Installed workflow name")
+    scheduling_start.add_argument(
+        "--dry-run", action="store_true", help="Print actions without touching the OS"
     )
 
     scheduling_uninstall = scheduling_sub.add_parser("uninstall", help="Uninstall a scheduled workflow")
@@ -690,10 +737,15 @@ def main(argv: list[str] | None = None) -> None:
                 dry_run=args.dry_run,
                 python=args.python,
                 no_venv=args.no_venv,
+                no_start=args.no_start,
                 confined=args.confined,
                 workspace=args.workspace,
                 allow_paths=args.allow_path,
             )
+        elif args.scheduling_command == "stop":
+            _cmd_scheduling_stop(args.name, dry_run=args.dry_run)
+        elif args.scheduling_command == "start":
+            _cmd_scheduling_start(args.name, dry_run=args.dry_run)
         elif args.scheduling_command == "uninstall":
             _cmd_scheduling_uninstall(args.name, dry_run=args.dry_run)
         elif args.scheduling_command == "list":

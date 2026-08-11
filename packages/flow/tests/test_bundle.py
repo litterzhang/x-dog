@@ -317,3 +317,82 @@ def test_the_skill_is_discoverable_from_a_checkout() -> None:
     assert "flow-workflows" in packaged_skills()
     skill = load_packaged_skill("flow-workflows")
     assert skill is not None and skill.content.strip()
+
+
+def test_every_third_party_import_of_the_vendored_packages_is_declared() -> None:
+    """The dependency list is written by hand, so it drifts silently.
+
+    It drifted: `pyyaml` was missing because nothing in a bundle imported the
+    skills package until agent nodes could name skills. The bundle built
+    cleanly, installed cleanly, and died at run time inside a systemd unit with
+    `ModuleNotFoundError: No module named 'yaml'` — a dependency that exists in
+    development and not in the artifact, which is the one environment nobody
+    exercises before shipping.
+    """
+    import ast
+    import sys
+
+    from xdog.flow.bundle import _THIRD_PARTY
+
+    # Distribution name -> import name, where they differ. Derived from
+    # _THIRD_PARTY rather than listed alongside it: hardcoding the import names
+    # here would make this pass whatever _THIRD_PARTY said, which is exactly the
+    # failure it exists to catch. Dropping an entry from _THIRD_PARTY must turn
+    # this red.
+    _IMPORT_NAME = {"pyyaml": "yaml", "jsonpath-ng": "jsonpath_ng"}
+    declared = {
+        _IMPORT_NAME.get(name.lower(), name.replace("-", "_").lower()) for name in _THIRD_PARTY
+    }
+    root = Path(__file__).resolve().parents[3]
+    missing: dict[str, str] = {}
+
+    def _guarded(tree: ast.AST) -> set[int]:
+        """Line numbers of imports wrapped in `try: ... except ImportError`.
+
+        A guarded import is optional by construction — the code that needs it
+        raises a helpful error when it is absent, which is a supported state.
+        Only an unguarded import is a dependency the bundle must install.
+        """
+        lines: set[int] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            catches = any(
+                (h.type is None)
+                or (isinstance(h.type, ast.Name) and h.type.id in {"ImportError", "Exception"})
+                or (
+                    isinstance(h.type, ast.Tuple)
+                    and any(isinstance(e, ast.Name) and e.id in {"ImportError", "Exception"}
+                            for e in h.type.elts)
+                )
+                for h in node.handlers
+            )
+            if catches:
+                for child in ast.walk(node):
+                    if isinstance(child, (ast.Import, ast.ImportFrom)):
+                        lines.add(child.lineno)
+        return lines
+
+    for package in ("ai", "agent"):
+        for path in (root / "packages" / package / "src").rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+            optional = _guarded(tree)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and node.lineno in optional:
+                    continue
+                if isinstance(node, ast.Import):
+                    names = [a.name.split(".")[0] for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    names = [node.module.split(".")[0]]
+                else:
+                    continue
+                for name in names:
+                    if name in sys.stdlib_module_names or name.startswith("xdog") or name == "_":
+                        continue
+                    if name.lower() not in declared:
+                        missing.setdefault(name, str(path.relative_to(root)))
+
+    assert not missing, (
+        "vendored packages import third-party modules the bundle does not install: "
+        + ", ".join(f"{k} ({v})" for k, v in sorted(missing.items()))
+    )

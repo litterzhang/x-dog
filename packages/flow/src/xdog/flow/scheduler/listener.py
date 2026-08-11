@@ -90,6 +90,12 @@ class Router:
         for name, e in reg.items():
             if e.get("mode") != "hook" or "bundle" not in e:
                 continue
+            if e.get("enabled") is False:
+                # `scheduling stop` on a hook workflow. It has no unit of its
+                # own, so the registry is the only place it can be disarmed —
+                # and if the listener ignored that, stopping one would be
+                # cosmetic while events kept firing it.
+                continue
             listen = e.get("listen")
             confine = e.get("confine")
             routes.append(

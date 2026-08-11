@@ -85,6 +85,7 @@ class Installer:
         base_dir: Path | None = None,
         venv: bool = True,
         confine: ConfineGrant | None = None,
+        start: bool = True,
     ) -> str:
         """Build the bundle + install the scheduler for *wf*; return its name.
 
@@ -128,7 +129,10 @@ class Installer:
                 print(f"  would run: uv sync --project {bundle_dir}")
 
         if wf.schedule.mode == "timer":
-            self._install_timer(name, bundle_dir, wf.schedule, dry_run=dry_run, python=python, confine=confine)
+            self._install_timer(
+                name, bundle_dir, wf.schedule, dry_run=dry_run, python=python,
+                confine=confine, start=start,
+            )
         else:
             self._install_hook(name, bundle_dir, wf.schedule, dry_run=dry_run, confine=confine)
         return name
@@ -196,13 +200,21 @@ class Installer:
         dry_run: bool,
         python: str | None = None,
         confine: ConfineGrant | None = None,
+        start: bool = True,
     ) -> None:
         units = render_timer_units(name, bundle_dir, schedule, python=python or self.python, confine=confine)
         for fname, text in units.files.items():
             self._write_unit(fname, text, dry_run=dry_run)
         self._run("daemon-reload", dry_run=dry_run)
         for unit in units.enable:
-            self._run("enable", "--now", unit, dry_run=dry_run)
+            # `enable` always, so it survives a reboot; `--now` only when asked.
+            # Installing and arming are different decisions: a workflow may be
+            # installed to be reviewed, or to run at its next scheduled time
+            # rather than immediately.
+            if start:
+                self._run("enable", "--now", unit, dry_run=dry_run)
+            else:
+                self._run("enable", unit, dry_run=dry_run)
         self._register(name, {"mode": "timer", "bundle": str(bundle_dir), "units": list(units.files)}, dry_run=dry_run)
 
     def _install_hook(
@@ -264,17 +276,69 @@ class Installer:
         return [{"name": n, **e} for n, e in sorted(reg.items())]
 
     # -- delete ------------------------------------------------------------
-    def delete(self, name: str, *, dry_run: bool = False) -> None:
-        """Uninstall *name*: disable/remove its units, bundle, and registry entry."""
+    # -- start / stop ------------------------------------------------------
+    def stop(self, name: str, *, dry_run: bool = False) -> None:
+        """Stop *name*: disarm its timer and end a run already in progress.
+
+        Both halves matter. Stopping only the timer leaves a build that is
+        already running to finish — which is why uninstall used to delete a
+        bundle directory out from under the interpreter executing it.
+
+        A hook workflow has no unit of its own; it is disabled in the registry
+        and the shared listener is reloaded, so events stop being routed to it.
+        """
+        entry = self._entry(name)
+        if entry.get("mode") == "hook":
+            entry["enabled"] = False
+            self._register(name, entry, dry_run=dry_run)
+            self._run("reload-or-restart", f"{LISTENER_SERVICE}.service", dry_run=dry_run)
+            return
+        for unit in self._units(entry):
+            if unit.endswith(".timer"):
+                self._run("stop", unit, dry_run=dry_run)
+        # The service last, and after the timer, so nothing re-triggers it
+        # between the two. `systemctl stop` returns once the unit is down, so a
+        # caller may delete the bundle immediately afterwards.
+        self._run("stop", f"{name}.service", dry_run=dry_run)
+
+    def start(self, name: str, *, dry_run: bool = False) -> None:
+        """Arm *name* again after :meth:`stop`."""
+        entry = self._entry(name)
+        if entry.get("mode") == "hook":
+            entry["enabled"] = True
+            self._register(name, entry, dry_run=dry_run)
+            self._run("reload-or-restart", f"{LISTENER_SERVICE}.service", dry_run=dry_run)
+            return
+        for unit in self._units(entry):
+            if unit.endswith(".timer"):
+                self._run("start", unit, dry_run=dry_run)
+
+    def _entry(self, name: str) -> dict[str, object]:
         reg = self._load_registry()
         if name not in reg:
             raise ValueError(f"no installed workflow named {name!r}")
+        return reg[name]
+
+    @staticmethod
+    def _units(entry: dict[str, object]) -> list[str]:
+        units = entry.get("units")
+        return [u for u in units if isinstance(u, str)] if isinstance(units, list) else []
+
+    def delete(self, name: str, *, dry_run: bool = False) -> None:
+        """Uninstall *name*: stop it, remove its units, bundle, and registry entry."""
+        reg = self._load_registry()
+        if name not in reg:
+            raise ValueError(f"no installed workflow named {name!r}")
+        # Stop before removing anything. Deleting the bundle while a run is in
+        # progress leaves the interpreter reading files that no longer exist,
+        # and the failure surfaces as an unrelated traceback in the journal.
+        self.stop(name, dry_run=dry_run)
         entry = reg[name]
         units = entry.get("units")
         if isinstance(units, list):
             for unit in units:
                 if isinstance(unit, str) and unit.endswith((".timer", ".service")):
-                    self._run("disable", "--now", unit, dry_run=dry_run)
+                    self._run("disable", unit, dry_run=dry_run)
             for unit in units:
                 if isinstance(unit, str) and not dry_run:
                     (self.unit_dir / unit).unlink(missing_ok=True)

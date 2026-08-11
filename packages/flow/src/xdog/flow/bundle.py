@@ -35,9 +35,10 @@ from xdog.flow.models import WorkflowDef
 _VENDORED_PACKAGES = ("xdog.ai", "xdog.agent")
 
 # Third-party runtime dependencies of the vendored packages (ai needs httpx +
-# pydantic; agent needs fastjsonschema for submit_result schema validation; the
+# pydantic; agent needs fastjsonschema for submit_result schema validation and
+# pyyaml for skill frontmatter; the
 # generated module imports jsonpath-ng for interpolation/conditions).
-_THIRD_PARTY = ("httpx", "pydantic", "fastjsonschema", "jsonpath-ng")
+_THIRD_PARTY = ("httpx", "pydantic", "fastjsonschema", "jsonpath-ng", "pyyaml")
 
 # Directory names to skip when copying a package's source tree.
 _SKIP_DIRS = {"__pycache__", "tests", ".mypy_cache", ".ruff_cache"}

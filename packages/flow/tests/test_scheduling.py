@@ -191,6 +191,7 @@ def test_scheduling_cli_subcommands(monkeypatch: pytest.MonkeyPatch, capsys: pyt
             base_dir: Path | None = None,
             venv: bool = True,
             confine: object = None,
+            start: bool = True,
         ) -> str:
             # base_dir carries the workflow's sibling modules into the bundle.
             calls.append(("install", (wf, name, dry_run, base_dir is not None)))
@@ -559,3 +560,86 @@ def test_install_falls_back_to_a_named_interpreter(tmp_path: Path, monkeypatch: 
     wf = parse_workflow(_wf({"mode": "timer", "cron": "0 */4 * * *"}))
     inst.install(wf, name="demo", venv=False)
     assert "/opt/env/bin/python" in (tmp_path / "units" / "demo.service").read_text(encoding="utf-8")
+
+
+def _installed(tmp_path: Path, mode: str = "timer") -> tuple[Any, list[list[str]]]:
+    """An Installer against a temp dir with a recording systemctl."""
+    from xdog.flow.scheduler.install import Installer
+
+    calls: list[list[str]] = []
+
+    class _Recording(Installer):
+        def _run(self, *args: str, dry_run: bool = False) -> None:  # type: ignore[override]
+            calls.append(list(args))
+
+    inst = _Recording(unit_dir=tmp_path / "units", data_dir=tmp_path / "data")
+    entry: dict[str, object] = {"mode": mode, "bundle": str(tmp_path / "b")}
+    if mode == "timer":
+        entry["units"] = ["wf.timer", "wf.service"]
+    else:
+        entry["units"] = []
+        entry["listen"] = {"type": "http", "path": "/h"}
+    inst._register("wf", entry)
+    return inst, calls
+
+
+def test_stop_disarms_the_timer_and_ends_a_run_in_progress(tmp_path: Path) -> None:
+    """Stopping only the timer leaves a build already running to finish — which
+    is how uninstall used to delete a bundle out from under the interpreter
+    executing it."""
+    inst, calls = _installed(tmp_path)
+
+    inst.stop("wf")
+
+    assert ["stop", "wf.timer"] in calls
+    assert ["stop", "wf.service"] in calls
+    assert calls.index(["stop", "wf.timer"]) < calls.index(["stop", "wf.service"]), (
+        "the timer first, or it could re-trigger the service between the two"
+    )
+
+
+def test_uninstall_stops_before_it_deletes(tmp_path: Path) -> None:
+    bundle = tmp_path / "b"
+    bundle.mkdir(parents=True)
+    inst, calls = _installed(tmp_path)
+
+    inst.delete("wf")
+
+    assert ["stop", "wf.service"] in calls
+    stopped = calls.index(["stop", "wf.service"])
+    assert all(c[0] != "disable" or calls.index(c) > stopped for c in calls if c[0] == "disable")
+    assert not bundle.exists()
+
+
+def test_install_can_hold_off_arming(tmp_path: Path) -> None:
+    """Installing and arming are separate decisions. `enable` still happens, so
+    it survives a reboot and runs at its next scheduled time."""
+    from xdog.flow.models import ScheduleDef
+
+    inst, calls = _installed(tmp_path)
+    sched = ScheduleDef(mode="timer", every="1h")
+
+    inst._install_timer("wf", tmp_path / "b", sched, dry_run=False, start=False)
+    assert ["enable", "wf.timer"] in calls
+    assert ["enable", "--now", "wf.timer"] not in calls
+
+    calls.clear()
+    inst._install_timer("wf", tmp_path / "b", sched, dry_run=False, start=True)
+    assert ["enable", "--now", "wf.timer"] in calls
+
+
+def test_stopping_a_hook_workflow_actually_stops_it(tmp_path: Path) -> None:
+    """A hook workflow has no unit of its own, so the registry is the only place
+    it can be disarmed — and the listener has to honour that, or stopping one is
+    cosmetic while events keep firing it."""
+    from xdog.flow.scheduler.listener import Router
+
+    inst, calls = _installed(tmp_path, mode="hook")
+
+    inst.stop("wf")
+
+    assert Router.from_registry(inst.registry_path).routes == []
+    assert any(c[0] == "reload-or-restart" for c in calls), "the listener must be told"
+
+    inst.start("wf")
+    assert [r.name for r in Router.from_registry(inst.registry_path).routes] == ["wf"]
