@@ -98,6 +98,10 @@ class AgentSession:
                 options=runtime.agent_config.options,
             ),
             tools=list(runtime.tools),
+            # The index goes in the system prompt and a loaded body goes after
+            # it; the Agent decides both, so the group's prompt builder no
+            # longer carries a skills summary of its own.
+            skills=getattr(runtime, "skill_manager", None),
             tool_ctx={
                 "group_id": self._group_id,
                 "workspace_dir": str(runtime.workspace_dir) if runtime.workspace_dir else "",

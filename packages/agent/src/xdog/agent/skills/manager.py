@@ -205,11 +205,12 @@ class SkillManager:
         group_dir: Path | None = None,
         packaged: Mapping[str, Path] | None = None,
     ) -> None:
+        # Directories are created when a skill is saved, not when one is read.
+        # Constructing a manager to *look at* skills used to create the
+        # directory it looked in — which meant running a flow workflow left an
+        # empty `skills/` beside it, and reading was not read-only.
         self._shared_dir = shared_dir
-        self._shared_dir.mkdir(parents=True, exist_ok=True)
         self._group_dir = group_dir
-        if self._group_dir:
-            self._group_dir.mkdir(parents=True, exist_ok=True)
         # None means "discover what is installed"; pass {} to opt out, which is
         # what tests want so an installed package cannot change their fixtures.
         self._packaged = dict(packaged_skills() if packaged is None else packaged)

@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from xdog.agent.skills.manager import SkillManager
     from xdog.agent.skills.types import Skill
 from dataclasses import replace
 from typing import Any, Callable
@@ -85,6 +86,61 @@ EventListener = Callable[[AgentEvent], None]
 # Agent
 # ---------------------------------------------------------------------------
 
+def _place_skills(
+    manager: "SkillManager | None", active: "Sequence[str]"
+) -> "tuple[str, str, list[Skill]]":
+    """Decide where each part of the skill story goes. The one place that does.
+
+    Returns ``(index, fixed_bodies, transient)``:
+
+    * **index** — one line per skill on disk. Small, and the same for every
+      request, so it belongs at the very front of the system prompt where the
+      prompt cache keeps it. It is also what makes the rest discoverable: an
+      agent cannot ask for a skill it was never told exists.
+    * **fixed bodies** — the active session-scoped skills. Also stable for the
+      session, so also in the prefix, behind the index.
+    * **transient** — active ``scope: turn`` skills, handed back for the caller
+      to place as messages. They are going to be removed again, and adding then
+      removing them from the prefix costs a full uncached re-send twice.
+
+    Everything about *which* skills exist stays with the SkillManager the caller
+    built, because only the caller knows where to look — flow beside its
+    workflow, coding and claw in their group and shared directories.
+    """
+    if manager is None:
+        return "", "", []
+    index = ""
+    try:
+        summary = manager.skills_summary()
+        index = summary + "\n\n" if summary else ""
+    except Exception:
+        logger.debug("could not build the skill index", exc_info=True)
+    resolved: list[Skill] = []
+    for slug in active:
+        try:
+            skill = manager.load_skill(slug)
+        except Exception:
+            logger.debug("could not load skill %r", slug, exc_info=True)
+            continue
+        if skill is not None:
+            resolved.append(skill)
+    fixed = _skill_preamble([sk for sk in resolved if not sk.expires_after_turn])
+    return index, fixed, [sk for sk in resolved if sk.expires_after_turn]
+
+
+def _skill_preamble(skills: "Sequence[Skill]") -> str:
+    """Rendered bodies for skills that are fixed for the session.
+
+    They do not change between requests, so they belong at the front of the
+    system prompt where the prompt cache can keep them.
+    """
+    if not skills:
+        return ""
+    from xdog.agent.skills.render import render_skill_body
+
+    return "\n\n".join(render_skill_body(sk) for sk in skills) + "\n\n"
+
+
 def _transient_messages(skills: "Sequence[Skill]") -> "tuple[UserMessage, ...]":
     """Turn-scoped skills, as messages rather than as system-prompt text.
 
@@ -145,7 +201,8 @@ class Agent:
         config: AgentConfig | None = None,
         tools: tuple[AgentTool, ...] | list[AgentTool] | None = None,
         tool_ctx: dict[str, Any] | None = None,
-        skills: "Sequence[Skill]" = (),
+        skills: "SkillManager | None" = None,
+        active_skills: "Sequence[str]" = (),
         embed_fn: EmbedFn | None = None,
         web_search_fn: WebSearchFn | None = None,
         convert_to_llm: ConvertToLlmFn | None = None,
@@ -172,15 +229,11 @@ class Agent:
         # Resolution stays with the caller, which is the real seam: flow looks
         # beside its workflow and in installed packages, coding looks in its
         # group and shared directories. Placement is the same everywhere.
-        _fixed = [sk for sk in skills if not sk.expires_after_turn]
-        _transient = [sk for sk in skills if sk.expires_after_turn]
-        if _fixed:
-            from xdog.agent.skills.render import render_skill_body
-
-            _preamble = "\n\n".join(render_skill_body(sk) for sk in _fixed)
-            _existing = cfg.system_prompt
-            if isinstance(_existing, str) or _existing is None:
-                cfg = replace(cfg, system_prompt=_preamble + "\n\n" + (_existing or ""))
+        _base_prompt = cfg.system_prompt
+        _index, _fixed_preamble, _transient = _place_skills(skills, active_skills)
+        _front = _index + _fixed_preamble
+        if _front and (isinstance(_base_prompt, str) or _base_prompt is None):
+            cfg = replace(cfg, system_prompt=_front + (_base_prompt or ""))
 
 
         # Build tools list — start with user-provided tools
@@ -195,6 +248,15 @@ class Agent:
             from xdog.agent.tools import create_embed_tool_from_fn
             tools_list.append(create_embed_tool_from_fn(embed_fn))
 
+        # The caller's prompt and the skill preamble are kept apart so either can
+        # be replaced without the other being lost. coding rewrites its whole
+        # system prompt before every turn; without this its skills would vanish
+        # on the first rebuild, or it would have to re-render them itself, which
+        # is the duplication this exists to remove.
+        self._base_system_prompt = _base_prompt
+        self._skills = skills
+        self._index = _index
+        self._fixed_preamble = _fixed_preamble
         self._state = AgentState(
             system_prompt=cfg.system_prompt,
             model=cfg.model,
@@ -276,8 +338,28 @@ class Agent:
     # -- Public state mutators -----------------------------------------------
 
     def set_system_prompt(self, prompt: str | tuple[SystemPromptBlock, ...] | None) -> None:
-        """Update the system prompt. Accepts string or SystemPromptBlock tuple."""
-        self._update_state(system_prompt=prompt)
+        """Update the system prompt, keeping any skill preamble in front of it."""
+        self._base_system_prompt = prompt
+        self._recompose_system_prompt()
+
+    def set_active_skills(self, slugs: "Sequence[str]") -> None:
+        """Replace the skills whose instructions are in effect.
+
+        One implementation of "where does a skill go", for every product. A
+        caller that lets a user activate and drop skills — coding's `/slug` and
+        `/unload` — calls this instead of rendering them into its own prompt, so
+        removal keeps working and the placement decision stays in one place.
+        """
+        self._index, self._fixed_preamble, _ = _place_skills(self._skills, slugs)
+        self._recompose_system_prompt()
+
+    def _recompose_system_prompt(self) -> None:
+        base = self._base_system_prompt
+        front = self._index + self._fixed_preamble
+        if front and (isinstance(base, str) or base is None):
+            self._update_state(system_prompt=front + (base or ""))
+        else:
+            self._update_state(system_prompt=base)
 
     def set_model(self, model: str) -> None:
         """Update the model name."""

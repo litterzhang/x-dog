@@ -7,6 +7,11 @@ and session management.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xdog.agent.skills import SkillManager
+
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,6 +167,9 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
             ),
         ),
         tools=agent_tools,
+        # The Agent owns where the index and the bodies go; this only says which
+        # manager to read them from.
+        skills=_coding_skill_manager(),
     )
 
     # Restore messages if resuming
@@ -183,3 +191,20 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
         session=session,
         model_fallback_message=model_fallback_message,
     )
+
+
+def _coding_skill_manager() -> "SkillManager | None":
+    """coding's SkillManager, or None if it cannot be built.
+
+    Skills are a convenience; failing to read them must not stop a session from
+    starting, which is why this swallows rather than raises.
+    """
+    try:
+        from xdog.coding.core.slash_commands import skill_manager
+
+        return skill_manager()
+    except Exception:  # pragma: no cover - defensive
+        import logging
+
+        logging.getLogger(__name__).debug("no skill manager available", exc_info=True)
+        return None

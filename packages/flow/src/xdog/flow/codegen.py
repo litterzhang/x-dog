@@ -53,7 +53,6 @@ _SDK_IMPORTS = (
     "from xdog.agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
     "from xdog.agent.tools import create_submit_result_tool\n"
     "from xdog.agent.workspace import workspace_briefing\n"
-    "from xdog.agent.skills import resolve_skills\n"
     "from xdog.ai.types import AssistantMessage, TextContent\n"
 )
 
@@ -194,7 +193,8 @@ _SDK_RUN_AGENT = '''async def _run_agent(
         config=AgentConfig(model=model, system_prompt=_sys),
         tools=tools,
         tool_ctx=_tool_ctx,
-        skills=resolve_skills(skills, _skill_dirs()),
+        skills=_skill_manager(),
+        active_skills=skills,
         web_search_fn=_web_search_fn,
     )
     # `inherit`: adopt an earlier node's session, then let this node's own

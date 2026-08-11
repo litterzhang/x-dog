@@ -153,16 +153,19 @@ def test_a_workspace_alone_does_not_confine(tmp_path: Path) -> None:
 # -- skill placement belongs to the Agent, not to each caller ----------------
 
 
-def _skill(tmp_path: Path, name: str, body: str, *, expires: bool = False) -> object:
-    from xdog.agent.skills import resolve_skills
+def _manager(tmp_path: Path, *skills: tuple[str, str, bool]) -> object:
+    """A SkillManager over a temp directory — the same loader every product uses."""
+    from xdog.agent.skills import SkillManager
 
-    d = tmp_path / "skills" / name
-    d.mkdir(parents=True, exist_ok=True)
-    meta = "\nscope: turn" if expires else ""
-    (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: d{meta}\n---\n\n{body}\n", encoding="utf-8"
-    )
-    return resolve_skills([name], [tmp_path / "skills"])[0]
+    for name, body, expires in skills:
+        d = tmp_path / "skills" / name
+        d.mkdir(parents=True, exist_ok=True)
+        meta = "\nscope: turn" if expires else ""
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: desc-{name}{meta}\n---\n\n{body}\n",
+            encoding="utf-8",
+        )
+    return SkillManager(shared_dir=tmp_path / "skills", packaged={})
 
 
 def _agent(**kw: object) -> object:
@@ -179,7 +182,8 @@ def _agent(**kw: object) -> object:
 def test_a_fixed_skill_goes_in_the_cacheable_prefix(tmp_path: Path) -> None:
     """It is the same for every request of the session, so it belongs where the
     prompt cache can keep it: the front of the system prompt."""
-    agent = _agent(skills=[_skill(tmp_path, "house", "USE TABS")])
+    agent = _agent(skills=_manager(tmp_path, ("house", "USE TABS", False)),
+                   active_skills=["house"])
 
     assert "USE TABS" in agent.state.system_prompt  # type: ignore[attr-defined]
     assert agent.state.system_prompt.strip().endswith("THE TASK")  # type: ignore[attr-defined]
@@ -190,17 +194,18 @@ def test_a_turn_scoped_skill_goes_after_the_prefix(tmp_path: Path) -> None:
     """It is going to be removed again. Putting it in the system prompt costs a
     full uncached re-send when it arrives and another when it leaves, because
     caching keys on the prefix and the system prompt is the front of it."""
-    agent = _agent(skills=[_skill(tmp_path, "temp", "JUST THIS TURN", expires=True)])
+    agent = _agent(skills=_manager(tmp_path, ("temp", "JUST THIS TURN", True)),
+                   active_skills=["temp"])
 
     assert "JUST THIS TURN" not in (agent.state.system_prompt or "")  # type: ignore[attr-defined]
     assert any("JUST THIS TURN" in str(m.content) for m in agent.state.messages)  # type: ignore[attr-defined]
 
 
 def test_both_kinds_can_be_given_at_once(tmp_path: Path) -> None:
-    agent = _agent(skills=[
-        _skill(tmp_path, "fixed", "ALWAYS"),
-        _skill(tmp_path, "temp", "FOR NOW", expires=True),
-    ])
+    agent = _agent(
+        skills=_manager(tmp_path, ("fixed", "ALWAYS", False), ("temp", "FOR NOW", True)),
+        active_skills=["fixed", "temp"],
+    )
 
     assert "ALWAYS" in agent.state.system_prompt  # type: ignore[attr-defined]
     assert "FOR NOW" not in agent.state.system_prompt  # type: ignore[attr-defined]
@@ -209,5 +214,34 @@ def test_both_kinds_can_be_given_at_once(tmp_path: Path) -> None:
 
 def test_no_skills_changes_nothing(tmp_path: Path) -> None:
     """Every existing caller passes none, and must be unaffected."""
-    assert _agent().state.system_prompt == "THE TASK"  # type: ignore[attr-defined]
+    assert _agent().state.system_prompt == "THE TASK"  # type: ignore[attr-defined]  # noqa: E501
     assert _agent().state.messages == ()  # type: ignore[attr-defined]
+
+
+def test_the_caller_prompt_and_the_skill_preamble_are_independent(tmp_path: Path) -> None:
+    """coding rewrites its whole system prompt before every turn.
+
+    If the Agent stored one merged string, that rewrite would drop the skills —
+    or coding would have to re-render them itself, which is exactly the
+    duplication that had three packages answering the same question three ways.
+    """
+    agent = _agent(skills=_manager(tmp_path, ("house", "USE TABS", False)),
+                   active_skills=["house"])
+
+    agent.set_system_prompt("A DIFFERENT TASK")  # type: ignore[attr-defined]
+
+    assert "USE TABS" in agent.state.system_prompt  # type: ignore[attr-defined]
+    assert agent.state.system_prompt.strip().endswith("A DIFFERENT TASK")  # type: ignore[attr-defined]
+
+
+def test_dropping_a_skill_leaves_no_trace(tmp_path: Path) -> None:
+    """`/unload` is why the body is in the prompt rather than in a message. If
+    removal left residue it would be theatre, and a constraint the user was told
+    they had lifted would still be in force."""
+    agent = _agent(skills=_manager(tmp_path, ("house", "USE TABS", False)),
+                   active_skills=["house"])
+
+    agent.set_active_skills([])  # type: ignore[attr-defined]
+
+    assert "USE TABS" not in agent.state.system_prompt  # type: ignore[attr-defined]
+    assert agent.state.system_prompt.strip().endswith("THE TASK")  # type: ignore[attr-defined]

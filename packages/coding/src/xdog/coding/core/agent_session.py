@@ -94,10 +94,14 @@ class AgentSession:
         what the format's reference clients do, and it is a one-way door: a
         message cannot be taken back out of a conversation, so the body keeps
         occupying the window for the rest of the session whether or not it is
-        still relevant. The system prompt is rebuilt before every turn, so
-        putting it there makes deactivation possible at all.
+        still relevant. Keeping it in the system prompt is what makes
+        deactivation possible at all.
+
+        `Agent.set_skills` does the placing, so that reasoning now lives in one
+        place instead of being re-derived by every product that has skills.
         """
         self._active_skills = self._active_skills | {slug}
+        self._push_skills()
         self._rebuild_system_prompt()
 
     def deactivate_skill(self, slug: str) -> bool:
@@ -105,6 +109,7 @@ class AgentSession:
         if slug not in self._active_skills:
             return False
         self._active_skills = self._active_skills - {slug}
+        self._push_skills()
         self._rebuild_system_prompt()
         return True
 
@@ -159,6 +164,7 @@ class AgentSession:
 
         if expired:
             self._active_skills = self._active_skills - expired
+            self._push_skills()
             self._rebuild_system_prompt()
             logger.debug("expired turn-scoped skills: %s", sorted(expired))
 
@@ -287,6 +293,17 @@ class AgentSession:
 
     # -- Internal --
 
+    def _push_skills(self) -> None:
+        """Tell the Agent which skills are active; it decides where they go.
+
+        The index and the bodies are both its business now — this only says
+        *which*, which is the part a product legitimately differs on.
+        """
+        try:
+            self.agent.set_active_skills(sorted(self._active_skills))
+        except Exception:
+            logger.debug("could not push active skills to the agent", exc_info=True)
+
     def _rebuild_system_prompt(self) -> None:
         """Rebuild and set the system prompt from config and tools."""
         from xdog.coding.config import PlatformInfo, RuntimeConfig
@@ -356,16 +373,14 @@ def _skills_context(active: frozenset[str] = frozenset()) -> str:
     read is not a reason to start without a system prompt.
     """
     try:
-        from xdog.agent.skills import render_skill_body
         from xdog.coding.core.slash_commands import skill_manager
 
         manager = skill_manager()
         summary = manager.skills_summary()
-        bodies = []
-        for slug in sorted(active):
-            skill = manager.load_skill(slug)
-            if skill is not None:
-                bodies.append(f"## Active skill: {skill.name}\n\n{render_skill_body(skill)}")
+        # Bodies are the Agent's to place (`set_skills`); this section carries
+        # only the standing note about them. Rendering them here as well was how
+        # three packages ended up with three answers to the same question.
+        bodies = ["(active: " + ", ".join(sorted(active)) + ")"] if active else []
     except Exception:
         logger.debug("could not build the skills section of the system prompt", exc_info=True)
         return ""

@@ -225,7 +225,6 @@ class GroupRuntime:
             model=self.model,
             goals_summary=goals_summary,
             bootstrap_content=bootstrap_content,
-            skills_summary=self.skill_manager.skills_summary(),
             memory_content=self.get_memory_snapshot(),
         )
 

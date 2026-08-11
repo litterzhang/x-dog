@@ -32,6 +32,7 @@ from xdog.flow.models import NodeDef, agent_is_structured, agent_output_schema
 
 if TYPE_CHECKING:
     from xdog.agent.core import StreamFn, WebSearchFn
+    from xdog.agent.skills import SkillManager
     from xdog.flow.tools import ToolRegistry
 
 
@@ -166,6 +167,22 @@ class StubRunner:
         return value, tokens
 
 
+def _skill_manager(skill_dirs: "Sequence[Path]") -> "SkillManager":
+    """A SkillManager over the workflow's own `skills/` plus installed packages.
+
+    The same loader every product uses, rather than a flow-specific resolver:
+    what differs between products is *where to look*, and that is exactly what a
+    manager is parameterised by.
+    """
+    from xdog.agent.skills import SkillManager, packaged_skills
+
+    local = list(skill_dirs)
+    return SkillManager(
+        shared_dir=local[0] if local else Path("/nonexistent"),
+        packaged=packaged_skills(),
+    )
+
+
 class SdkRunner:
     """The default backend: the in-process ``agent`` + ``ai`` SDK.
 
@@ -221,7 +238,6 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
-        from xdog.agent.skills import resolve_skills
         from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
         from xdog.agent.workspace import workspace_briefing
         from xdog.ai.types import AssistantMessage, TextContent
@@ -272,7 +288,8 @@ class SdkRunner:
             config=AgentConfig(model=model, system_prompt=final_sys_prompt),
             tools=resolved_tools,
             tool_ctx=tool_ctx,
-            skills=resolve_skills(node.skills, self._skill_dirs),
+            skills=_skill_manager(self._skill_dirs),
+            active_skills=node.skills,
             web_search_fn=web_search_fn,
         )
 

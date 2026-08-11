@@ -837,11 +837,11 @@ def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tm
     scheduling workflow was written with an invented node type by an agent with
     no access to the skill describing the format, and every downstream check
     passed."""
-    from xdog.agent.skills import resolve_skills
+    from xdog.agent.skills import packaged_skills
     from xdog.flow.codegen import generate
     from xdog.flow.loader import parse_workflow
 
-    assert resolve_skills(["flow-workflows"]), "the skill must resolve from the package"
+    assert "flow-workflows" in packaged_skills(), "the skill must resolve from the package"
 
     wf = parse_workflow({
         "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
@@ -852,11 +852,10 @@ def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tm
     assert wf.nodes[0].skills == ("flow-workflows",)
 
     source = generate(wf)
-    assert "skills=resolve_skills(skills, _skill_dirs())" in source, (
-        "the compiled engine hands skills to the Agent rather than placing them itself"
+    assert "skills=_skill_manager()" in source and "active_skills=skills" in source, (
+        "the compiled engine hands a manager and slugs to the Agent, and places nothing"
     )
     assert "skills=('flow-workflows',)" in source, "with this node's skills"
-    assert "from xdog.agent.skills import resolve_skills" in source
 
 
 def test_a_generated_module_does_not_import_flow_for_skills() -> None:

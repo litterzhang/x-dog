@@ -46,7 +46,6 @@ def build_system_prompt(
     model: str = "",
     goals_summary: str = "",
     bootstrap_content: str | None = None,
-    skills_summary: str = "",
     memory_content: str = "",
 ) -> tuple[SystemPromptBlock, ...]:
     """Assemble the complete system prompt as cacheable blocks.
@@ -99,8 +98,6 @@ def build_system_prompt(
         if memory:
             dynamic_parts.append(memory)
 
-    if skills_summary:
-        dynamic_parts.append(skills_summary)
 
     if goals_summary:
         dynamic_parts.append(f"{GOALS_HEADER}\n\n{goals_summary}")

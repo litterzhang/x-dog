@@ -243,7 +243,15 @@ def test_parse_slash_command_splits_name_from_arguments() -> None:
 def test_the_system_prompt_gains_and_loses_the_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deactivation has to leave no trace, or `/unload` is theatre."""
+    """Deactivation has to leave no trace, or `/unload` is theatre.
+
+    Asserted against the Agent's system prompt rather than against the section
+    coding builds: the body is placed by `Agent.set_skills` now, so the section
+    is no longer where it lands. Checking what the model actually receives is
+    the better test anyway — it survives the placement moving again.
+    """
+    from xdog.agent.agent import Agent
+    from xdog.agent.core import AgentConfig
     from xdog.coding.core.agent_session import _skills_context
 
     shared = tmp_path / "skills"
@@ -256,11 +264,21 @@ def test_the_system_prompt_gains_and_loses_the_body(
     assert "write a workflow" in idle, "the one-line description is always advertised"
     assert "STEP ONE" not in idle, "the body must wait to be asked for"
 
-    active = _skills_context(frozenset({"flow"}))
-    assert "STEP ONE: validate the graph." in active
+    agent = Agent(
+        lambda *a, **k: None,
+        config=AgentConfig(model="m", system_prompt="BASE"),
+        skills=manager,
+    )
+    idle_prompt = agent.state.system_prompt
+    assert "write a workflow" in idle_prompt, "the index is always there"
+    assert "STEP ONE" not in idle_prompt, "the body waits to be asked for"
 
-    # ...and back again, byte for byte.
-    assert _skills_context(frozenset()) == idle
+    agent.set_active_skills(["flow"])
+    assert "STEP ONE: validate the graph." in agent.state.system_prompt
+    assert agent.state.system_prompt.strip().endswith("BASE"), "the caller's prompt survives"
+
+    agent.set_active_skills([])
+    assert agent.state.system_prompt == idle_prompt, "byte for byte, or /unload is theatre"
 
 
 def test_the_skills_section_is_empty_when_nothing_is_installed(
@@ -295,9 +313,14 @@ class FakeExpiringSession:
     def __init__(self, active: set[str]) -> None:
         self._active_skills = frozenset(active)
         self.rebuilds = 0
+        self.pushed: list[list[str]] = []
 
     def _rebuild_system_prompt(self) -> None:
         self.rebuilds += 1
+
+    def _push_skills(self) -> None:
+        """Expiry must tell the Agent too, or the body outlives the scope."""
+        self.pushed.append(sorted(self._active_skills))
 
 
 def _expire(session: Any) -> None:

@@ -421,6 +421,18 @@ _FLOW_CHECKPOINT_DIR: str | None = None
 _CHECKPOINT_LOADED = False
 
 
+def _skill_manager() -> "Any":
+    """The same manager the interpreter builds: this module's own `skills/`
+    directory (copied from beside the workflow) plus installed packages."""
+    from xdog.agent.skills import SkillManager, packaged_skills
+
+    dirs = _skill_dirs()
+    return SkillManager(
+        shared_dir=dirs[0] if dirs else Path("/nonexistent"),
+        packaged=packaged_skills(),
+    )
+
+
 def _skill_dirs() -> "list[Path]":
     """`skills/` beside this module — the bundle's copy of what sat beside the
     workflow file.
