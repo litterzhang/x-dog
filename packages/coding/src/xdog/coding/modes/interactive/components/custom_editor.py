@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from xdog.coding.core.slash_commands import BUILTIN_COMMANDS
+from xdog.coding.core.slash_commands import list_commands
 from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.keys import KeyEvent
 from xdog.tui.tui import Component
@@ -88,9 +88,14 @@ class CustomEditorComponent(Component):
         """Update the select list based on current input."""
         if self._value.startswith("/"):
             prefix = self._value[1:]
+            # `list_commands()`, not BUILTIN_COMMANDS: a skill is a command too,
+            # and the dispatcher has always run one. Completing only the built-ins
+            # meant an installed skill worked but could not be found -- you had to
+            # know its name already, which is the state its own docstring says to
+            # avoid.
             matching = [
                 (f"/{name}", desc)
-                for name, desc in BUILTIN_COMMANDS.items()
+                for name, desc in sorted(list_commands().items())
                 if name.startswith(prefix) and f"/{name}" != self._value
             ]
             if matching:

@@ -321,10 +321,25 @@ async def execute(
     # granted trees are the whole allowance. Without it the workspace is a
     # convention, which is the historical behaviour every existing caller relies
     # on.
-    _workspace = workspace if workspace is not None else (base_dir or Path.cwd()) / "runtime"
+    # `<workflow dir>/runtime` when we know where the workflow is, and nothing
+    # otherwise. Falling back to `Path.cwd()/runtime` invented a location out of
+    # the process's ambient state and created it — so a library call with no
+    # base_dir left a `runtime/` directory in whatever directory the caller
+    # happened to be in. That is the same mistake as a tool defaulting its cwd
+    # to wherever the program was launched.
+    _workspace = workspace if workspace is not None else (
+        base_dir / "runtime" if base_dir is not None else None
+    )
     _confinement_roots: list[Path] | None = None
     if confined:
-        _confinement_roots = [_workspace, *(allow_paths or ())]
+        # With no workspace the bound is the granted paths alone -- possibly
+        # empty, which denies everything. That is the right way round: a run
+        # asked to be confined with nowhere to work should refuse writes, not
+        # silently fall back to some directory nobody named.
+        _confinement_roots = [
+            *([_workspace] if _workspace is not None else []),
+            *(allow_paths or ()),
+        ]
 
     seed: dict[str, object] = dict(wf.initial_state)
     if inputs:

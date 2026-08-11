@@ -467,3 +467,41 @@ def test_an_unresolvable_model_still_gets_its_tools_described(
 
     assert model_supports_tool_calls("no-such-provider/no-such-model") is None
     assert AgentSession._native_tool_calls(_Unresolvable()) is False
+
+
+def test_completion_offers_skills_not_only_builtins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A skill has always been runnable — the dispatcher falls through to
+    `_load_skill`. It just could not be *found*: completion read
+    BUILTIN_COMMANDS, so you had to already know the name. `list_commands()`
+    exists for exactly this and says so in its docstring.
+    """
+    from xdog.coding.core import slash_commands
+    from xdog.coding.core.slash_commands import list_commands
+
+    shared = tmp_path / "skills"
+    shared.mkdir(parents=True)
+    _write(shared, "flow", "body", description="write a workflow")
+    manager = SkillManager(shared_dir=shared, packaged={})
+    monkeypatch.setattr(slash_commands, "skill_manager", lambda: manager)
+
+    commands = list_commands()
+
+    assert "flow" in commands, "a skill is a command"
+    assert commands["flow"] == "write a workflow"
+    assert "quit" in commands, "and the built-ins are still there"
+
+
+def test_a_builtin_wins_a_name_clash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise a skill named `quit` could take over leaving the session."""
+    from xdog.coding.core import slash_commands
+    from xdog.coding.core.slash_commands import BUILTIN_COMMANDS, list_commands
+
+    shared = tmp_path / "skills"
+    shared.mkdir(parents=True)
+    _write(shared, "quit", "body", description="a skill pretending to be quit")
+    manager = SkillManager(shared_dir=shared, packaged={})
+    monkeypatch.setattr(slash_commands, "skill_manager", lambda: manager)
+
+    assert list_commands()["quit"] == BUILTIN_COMMANDS["quit"]

@@ -447,7 +447,7 @@ def _skill_dirs() -> "list[Path]":
     return [Path(here).resolve().parent / "skills"] if here else []
 
 
-def _workspace_dir() -> Path:
+def _workspace_dir() -> "Path | None":
     """This run's workspace — where a relative path resolves.
 
     Every run has one, exactly as in the interpreter. It defaults to `runtime/`
@@ -461,8 +461,12 @@ def _workspace_dir() -> Path:
     # `globals()` rather than `__file__` directly: the parity tests exec this
     # source with no file behind it, and a module that only works when it has a
     # path on disk would pass its own tests and fail nowhere useful.
+    #
+    # No file means no workspace — not `Path.cwd()/runtime`. Inventing one from
+    # the process's ambient state and then creating it is how a test run left a
+    # `runtime/` directory in the repository root.
     here = globals().get("__file__")
-    return (Path(here).resolve().parent if here else Path.cwd()) / "runtime"
+    return Path(here).resolve().parent / "runtime" if here else None
 
 
 def _granted_paths() -> tuple[Path, ...]:
@@ -486,7 +490,9 @@ def _confinement_roots() -> list[str] | None:
     """
     if os.environ.get("FLOW_CONFINED", "") not in ("1", "true", "yes"):
         return None
-    return [str(_workspace_dir().resolve()), *(str(p) for p in _granted_paths())]
+    ws = _workspace_dir()
+    roots = [str(ws.resolve())] if ws is not None else []
+    return roots + [str(p) for p in _granted_paths()]
 
 
 def _checkpoint_path() -> Path | None:

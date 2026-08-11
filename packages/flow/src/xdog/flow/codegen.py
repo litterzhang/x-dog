@@ -163,7 +163,8 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # be told by its own source which directories it may touch would not be
     # confined by it. Kept identical to the interpreter.
     _roots = _confinement_roots()
-    _tool_ctx: dict[str, object] | None = {"fs_workspace": str(_workspace_dir())}
+    _ws = _workspace_dir()
+    _tool_ctx: dict[str, object] | None = {"fs_workspace": str(_ws)} if _ws is not None else {}
     if _roots is not None:
         _tool_ctx["fs_confine_to"] = _roots
     # Every agent node is briefed, whatever tools it declares -- keying this off
@@ -171,7 +172,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # touch the filesystem too. We tell it where its files go; we cannot audit
     # that it obeys, which is the honest difference from a script node.
     _sys = system_prompt + workspace_briefing(
-        _workspace_dir(), _granted_paths(), confined=_roots is not None
+        _ws, _granted_paths(), confined=_roots is not None
     )
     if output_schema is not None:
         tools = tools + (create_submit_result_tool(),)

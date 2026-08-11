@@ -108,6 +108,10 @@ class AgentSession:
             tool_ctx={
                 "group_id": self._group_id,
                 "workspace_dir": str(runtime.workspace_dir) if runtime.workspace_dir else "",
+                # The key the filesystem tool actually reads. claw was setting
+                # `workspace_dir`, which only its own memory tool consults, so a
+                # relative path from the agent resolved against the process cwd.
+                "fs_workspace": str(runtime.workspace_dir) if runtime.workspace_dir else "",
                 "data_dir": str(runtime.data_dir),
                 "_send_fn": runtime._send_fn,
                 "_memory_search": runtime.memory.search if runtime.memory else None,

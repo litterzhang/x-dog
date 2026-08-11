@@ -195,7 +195,9 @@ class GroupRuntime:
     @property
     def tools(self) -> list[AgentTool]:
         if self._tools is None:
-            self._tools = create_tools(enabled=self._enabled_tools)
+            self._tools = create_tools(
+                enabled=self._enabled_tools, workspace_dir=self.workspace_dir
+            )
         return self._tools
 
     @property

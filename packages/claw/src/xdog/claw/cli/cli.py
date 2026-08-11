@@ -310,11 +310,63 @@ def status(config_path: str | None) -> None:
         click.echo(f"Gateway running (PID: {pid})")
         click.echo(f"  Socket: {Path(config.socket_path)}")
         click.echo(f"  PID file: {pid_path}")
+        for line in _channel_lines(config):
+            click.echo(line)
+        stale = _config_newer_than_process(config_path, pid_path)
+        if stale:
+            click.echo(f"  ! {stale}")
     else:
         click.echo("Gateway not running")
         if pid_path.exists():
             click.echo("  (stale PID file detected — cleaning up)")
             pid_path.unlink()
+
+
+def _channel_lines(config: ClawConfig) -> list[str]:
+    """What is actually carrying messages, not just that a process exists.
+
+    A channel enabled in the file and absent from the process looks identical
+    from outside: the gateway says "running", the user sends a message, and
+    nothing happens. Naming the channels is the difference between that and a
+    diagnosis.
+    """
+    lines = ["  Channels:"]
+    if config.weixin_enabled:
+        account = config.weixin_account_id or "(no account)"
+        lines.append(f"    weixin: enabled (account={account})")
+    if len(lines) == 1:
+        lines.append("    (none enabled)")
+    return lines
+
+
+def _config_newer_than_process(config_path: str | None, pid_path: Path) -> str:
+    """A warning when the config changed after the gateway read it.
+
+    The gateway loads its config once, at startup. Editing the file afterwards —
+    enabling a channel, say — changes nothing until a restart, and nothing in
+    the system says so: the edit succeeds, the status stays "running", and the
+    only symptom is a message that never gets answered.
+
+    Compared by mtime rather than by content because the question is not "is the
+    config different" but "did this process read this version".
+    """
+    from xdog.claw.config import get_config_path
+
+    try:
+        cfg = Path(config_path).expanduser() if config_path else get_config_path()
+        if not cfg.exists() or not pid_path.exists():
+            return ""
+        drift = cfg.stat().st_mtime - pid_path.stat().st_mtime
+        if drift <= 1:
+            return ""
+    except OSError:
+        return ""
+    mins = int(drift // 60)
+    when = f"{mins}m" if mins else f"{int(drift)}s"
+    return (
+        f"config.yaml was modified {when} after the gateway started; "
+        f"restart to apply it"
+    )
 
 
 def _daemonize(config: ClawConfig) -> None:

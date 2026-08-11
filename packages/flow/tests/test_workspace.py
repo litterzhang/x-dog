@@ -298,8 +298,11 @@ def test_the_generated_module_confines_the_same_way(tmp_path: Path) -> None:
     old_ws = os.environ.pop("FLOW_WORKSPACE", None)
     old_conf = os.environ.pop("FLOW_CONFINED", None)
     try:
-        # A workspace always exists — that is the half that is not opt-in.
-        assert workspace_dir().name == "runtime"
+        # No file behind this module means no workspace. It used to fall back to
+        # `Path.cwd()/runtime` and create it, which left a directory in whatever
+        # directory the caller was standing in — the same mistake as a tool
+        # defaulting its cwd to the launch directory.
+        assert workspace_dir() is None
         assert roots() is None, "but nothing is enforced until asked, as in the interpreter"
 
         os.environ["FLOW_WORKSPACE"] = str(workspace)
@@ -507,14 +510,14 @@ def test_the_two_engines_default_their_workspace_to_different_places(tmp_path: P
                    "outputs": ["out"]}],
         "edges": [{"from": "a", "to": "$output", "map": {"out": "r"}}],
     })
-    namespace: dict[str, Any] = {}
+    namespace: dict[str, Any] = {"__file__": str(tmp_path / "gen.py")}
     old = os.environ.pop("FLOW_WORKSPACE", None)
     try:
         exec(compile(generate(wf), "<gen>", "exec"), namespace)  # noqa: S102 - our own output
 
-        # Same rule, different anchor.
-        assert namespace["_workspace_dir"]().name == "runtime"
-        assert namespace["_workspace_dir"]() != tmp_path / "runtime"
+        # Same rule, different anchor: `runtime/` beside the module, not beside
+        # the workflow file.
+        assert namespace["_workspace_dir"]() == tmp_path / "runtime"
 
         # And naming it explicitly makes them agree, which is the escape hatch.
         os.environ["FLOW_WORKSPACE"] = str(tmp_path / "runtime")
