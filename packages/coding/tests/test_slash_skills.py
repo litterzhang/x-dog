@@ -410,3 +410,59 @@ def test_the_model_is_told_it_may_suggest_but_not_unload(
     assert "cannot deactivate" in prompt
     assert "/unload" in prompt
     assert "the user decides" in prompt.lower()
+
+
+# -- tool definitions were being sent twice ---------------------------------
+
+
+def _cfg(model: str = "copilot/x"):
+    from xdog.coding.config import PlatformInfo, RuntimeConfig
+
+    return RuntimeConfig(
+        model=model, thinking_level="normal", allowed_tools=("read",),
+        custom_instructions="", extensions=(), working_dir="/tmp",
+        platform_info=PlatformInfo.detect(),
+    )
+
+
+_TOOLS = [{"name": "read", "description": "Read a file", "parameters": {"path": "string"}}]
+
+
+def test_a_native_tool_calling_model_is_not_told_its_tools_twice() -> None:
+    """They already arrive as structured tool definitions through the API.
+    Describing them again sends every name, description and parameter schema a
+    second time, in the cached prefix, for a model that did not need it."""
+    from xdog.coding.core.system_prompt import build_system_prompt
+
+    described = build_system_prompt(_cfg(), _TOOLS, native_tool_calls=False)
+    native = build_system_prompt(_cfg(), _TOOLS, native_tool_calls=True)
+
+    assert "Read a file" in described
+    assert "Read a file" not in native
+    assert len(native) < len(described)
+
+
+def test_the_default_keeps_tools_visible() -> None:
+    """The two mistakes are not symmetric. A duplicate costs tokens; a model
+    that cannot see its tools cannot act, and that reads as the model being
+    useless rather than as a missing prompt section — so unknown means describe.
+    """
+    from xdog.coding.core.system_prompt import build_system_prompt
+
+    assert "Read a file" in build_system_prompt(_cfg(), _TOOLS)
+
+
+def test_an_unresolvable_model_still_gets_its_tools_described(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lookup fails on an unknown provider, a network problem, or an offline
+    box. Every one of those must land on 'describe them'."""
+    from xdog.coding.core.agent_session import AgentSession
+
+    class _Unresolvable:
+        _native_tools_cache = None
+
+        class state:  # noqa: N801
+            model = "no-such-provider/no-such-model"
+
+    assert AgentSession._native_tool_calls(_Unresolvable()) is False

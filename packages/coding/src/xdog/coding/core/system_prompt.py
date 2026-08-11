@@ -81,6 +81,7 @@ def build_system_prompt(
     *,
     file_entries: list[dict[str, Any]] | None = None,
     extra_context: str = "",
+    native_tool_calls: bool = False,
 ) -> str:
     """Assemble the complete system prompt.
 
@@ -94,12 +95,23 @@ def build_system_prompt(
         Optional processed file context entries.
     extra_context:
         Optional extra text appended at the end.
+    native_tool_calls:
+        True when the model receives tool definitions through the API, in which
+        case describing them again in the prompt sends every name, description
+        and parameter schema twice.
+
+        Defaults to False — *describe them* — because the two mistakes are not
+        symmetric. Describing tools to a model that already has them wastes
+        tokens in a cached prefix; omitting them for a model that has no other
+        way to see them leaves it unable to act, and that failure looks like the
+        model being useless rather than like a missing section.
     """
     sections: list[str] = [
         SYSTEM_PROMPT_HEADER,
         build_environment_section(config),
-        build_tool_section(tools),
     ]
+    if not native_tool_calls:
+        sections.append(build_tool_section(tools))
 
     if config.custom_instructions:
         sections.append(

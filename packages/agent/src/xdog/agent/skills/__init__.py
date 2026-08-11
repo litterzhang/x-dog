@@ -12,11 +12,14 @@ look: flow beside its workflow file, coding and claw in their group and shared
 directories, all of them plus whatever packages ship. The `Agent` answers *where
 each part goes in the request*, once, for everybody:
 
-| | goes | why |
-|---|---|---|
-| the index (one line per skill) | front of the system prompt | small, never changes, and nothing can ask for a skill it was not told exists |
-| an active session-scoped body | after the index, still in the prefix | fixed for the session, so the prompt cache keeps it |
-| an active `scope: turn` body | a message, after the prefix | it will be removed again, and adding then removing it from the prefix costs a full uncached re-send twice |
+- **the index** (one line per skill) goes at the front of the system prompt: it
+  is small, never changes, and nothing can ask for a skill it was not told
+  exists.
+- **an active session-scoped body** goes after the index, still in the prefix,
+  because it is fixed for the session and the prompt cache keeps it.
+- **an active `scope: turn` body** goes in as a message, after the prefix. It
+  will be removed again, and adding then removing it from the prefix costs a
+  full uncached re-send twice.
 
 That split is the whole point. It used to be neither: three products each
 resolved skills their own way *and* decided placement their own way, so the same

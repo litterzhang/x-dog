@@ -304,6 +304,31 @@ class AgentSession:
         except Exception:
             logger.debug("could not push active skills to the agent", exc_info=True)
 
+    def _native_tool_calls(self) -> bool:
+        """Whether this model gets tool definitions through the API.
+
+        Looked up once and remembered: this is called before every turn, and a
+        provider query per turn would be a far worse trade than the tokens it
+        saves. An unknown model answers False, so its tools stay described —
+        being unable to act is a worse failure than paying for a duplicate.
+        """
+        cached = getattr(self, "_native_tools_cache", None)
+        if cached is not None:
+            return bool(cached)
+        native = False
+        try:
+            import xdog.ai as ai
+
+            model_id = self.agent.state.model or ""
+            for model in ai.provider(model_id.split("/", 1)[0]).models():
+                if model.id == model_id:
+                    native = bool(model.supports_tool_calls)
+                    break
+        except Exception:
+            logger.debug("could not resolve tool-call support for the model", exc_info=True)
+        self._native_tools_cache = native
+        return native
+
     def _rebuild_system_prompt(self) -> None:
         """Rebuild and set the system prompt from config and tools."""
         from xdog.coding.config import PlatformInfo, RuntimeConfig
@@ -327,6 +352,7 @@ class AgentSession:
             ),
             tool_defs,
             extra_context=_skills_context(self._active_skills),
+            native_tool_calls=self._native_tool_calls(),
         )
         self.agent.set_system_prompt(prompt)
 
