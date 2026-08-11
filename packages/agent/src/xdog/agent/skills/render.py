@@ -18,6 +18,8 @@ standard actually recommends — resolve too, with no change to the skill.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from xdog.agent.skills.types import Skill
 
 #: Substituted with the skill's directory. ``CLAUDE_SKILL_DIR`` is the spelling
@@ -42,3 +44,29 @@ def render_skill_body(skill: Skill) -> str:
         "`scripts/y.sh` — resolve there, not against the working directory.\n\n"
         f"{body}"
     )
+
+
+def skills_preamble(slugs: "Sequence[str]") -> str:
+    """The rendered instructions for *slugs*, ready to sit ahead of a prompt.
+
+    Ahead rather than after: a skill teaches a format or a procedure, and the
+    caller's prompt is the task expressed in it. Appending it instead reads as an
+    afterthought attached to instructions the model has already committed to.
+
+    An unresolvable slug is skipped. Callers that care -- flow validates its
+    workflows at load -- should refuse before reaching here, because an agent
+    told to produce a format it was never shown does not fail, it produces
+    something plausible and wrong.
+
+    Lives in the agent package rather than in flow because a generated flow
+    module must not import flow, and both engines have to render this the same
+    way or the same workflow gets two different system prompts.
+    """
+    from xdog.agent.skills.discovery import load_packaged_skill
+
+    bodies = [
+        render_skill_body(skill)
+        for skill in (load_packaged_skill(slug) for slug in slugs)
+        if skill is not None
+    ]
+    return "\n\n".join(bodies) + "\n\n" if bodies else ""

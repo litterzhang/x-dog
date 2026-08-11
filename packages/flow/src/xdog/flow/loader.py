@@ -124,6 +124,8 @@ def _parse_node(
 ) -> NodeDef:
     raw_tools = data.get("tools", [])
     tools: tuple[str, ...] = tuple(str(t) for t in raw_tools) if raw_tools else ()
+    raw_skills = data.get("skills", [])
+    skills: tuple[str, ...] = tuple(str(s) for s in raw_skills) if raw_skills else ()
     node_id = str(data["id"])
     retry: RetryPolicy | None = None
     raw_retry = data.get("retry")
@@ -264,6 +266,7 @@ def _parse_node(
         system_prompt=data.get("system_prompt", ""),
         prompt=data.get("prompt", ""),
         tools=tools,
+        skills=skills,
         run=data.get("run"),
         input_ports=sub_input_ports,
         output_ports=sub_output_ports,
@@ -1195,6 +1198,26 @@ class _ErrorCollector:
             self.errors.append(exc)
 
 
+def _validate_skills(node: NodeDef) -> None:
+    """Every named skill must resolve from an installed package.
+
+    Failing at load rather than at run is the whole point: an agent told to
+    produce a format it was never shown does not fail, it produces something
+    plausible and wrong. That is not hypothetical -- a scheduling workflow was
+    written with an invented node type by an agent that had no access to the
+    skill describing the format, and every check downstream passed.
+    """
+    from xdog.agent.skills import load_packaged_skill
+
+    for slug in node.skills:
+        if load_packaged_skill(slug) is None:
+            raise WorkflowValidationError(
+                f"Node {node.id!r} references unknown skill {slug!r}. "
+                f"Skills come from installed packages; install the one that ships it.",
+                code=codes.UNKNOWN_REFERENCE,
+            )
+
+
 def unconfinable_reasons(wf: WorkflowDef) -> list[str]:
     """Why this workflow cannot be confined to a workspace, if it cannot.
 
@@ -1346,6 +1369,7 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                         f"expected one of {', '.join(VALID_TYPES)}",
                         code=codes.INVALID_SCHEMA,
                     )
+            _validate_skills(node)
             for tool in node.tools:
                 if not tool:
                     raise WorkflowValidationError(

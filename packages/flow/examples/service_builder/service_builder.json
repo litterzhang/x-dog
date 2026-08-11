@@ -84,7 +84,7 @@
         }
       ],
       "system_prompt": "You turn a product idea into acceptance criteria a machine can check, for a project nobody will supervise.\n\nA criterion is good when a failing test could be written for it before any code exists, and when meeting it does not require meeting a later one first. A criterion like 'the API is well designed' is unusable here: nothing can decide it, so it will be skipped forever or claimed falsely.",
-      "prompt": "The service you are chartering lives in {{source_dir}}. Put every source file, test and config for the service **there**, not in your workspace -- your workspace is for this build process's own records.\n\nSet up the project for this idea:\n\n{{idea}}\n\nWrite ACCEPTANCE.md **in your workspace** as a checklist, one criterion per line, exactly in this form:\n\n- [ ] health-endpoint: GET /health returns 200\n- [ ] create-note: POST /notes stores a note and returns its id\n\nThe slug before the colon is an identifier: lowercase, hyphenated, stable. Later runs refer to criteria by slug, so renaming one loses its history.\n\nWrite verify.txt **in your workspace**, containing the single shell command that checks the project. It runs from {{source_dir}} on a machine where the project's dependencies are NOT installed and nobody will install them, so the command must provision its own \u2014 for example `uv run --with-requirements requirements.txt pytest -q`. A command that assumes a prepared environment fails identically forever, and the run that discovers this is indistinguishable from a run that wrote bad code. In {{source_dir}}, create whatever skeleton that command needs to run at all: an empty test suite is fine, a command that cannot start is not.\n\nTwelve criteria at most. Reply with a one-line summary.",
+      "prompt": "The service you are chartering lives in {{source_dir}}. Put every source file, test and config for the service **there**, not in your workspace -- your workspace is for this build process's own records.\n\nSet up the project for this idea:\n\n{{idea}}\n\nWrite ACCEPTANCE.md **in your workspace** as a checklist, one criterion per line, exactly in this form:\n\n- [ ] health-endpoint: GET /health returns 200\n- [ ] create-note: POST /notes stores a note and returns its id\n\nThe slug before the colon is an identifier: lowercase, hyphenated, stable. Later runs refer to criteria by slug, so renaming one loses its history.\n\nWrite verify.txt **in your workspace**, containing the single shell command that checks the project. If the project produces artifacts that a tool can check -- a flow workflow.json, a schema, a config -- the command must run that checker too, not merely parse the file. A criterion that says 'parses' is met by a file that can never execute, and nothing downstream will notice.\n\nIt runs from {{source_dir}} on a machine where the project's dependencies are NOT installed and nobody will install them, so the command must provision its own \u2014 for example `uv run --with-requirements requirements.txt pytest -q`. A command that assumes a prepared environment fails identically forever, and the run that discovers this is indistinguishable from a run that wrote bad code. In {{source_dir}}, create whatever skeleton that command needs to run at all: an empty test suite is fine, a command that cannot start is not.\n\nTwelve criteria at most. Reply with a one-line summary.",
       "outputs": [
         {
           "name": "charter_summary",
@@ -92,6 +92,9 @@
             "type": "string"
           }
         }
+      ],
+      "skills": [
+        "flow-workflows"
       ]
     },
     {
@@ -141,6 +144,9 @@
             "type": "string"
           }
         }
+      ],
+      "skills": [
+        "flow-workflows"
       ]
     },
     {
@@ -182,6 +188,9 @@
             "type": "string"
           }
         }
+      ],
+      "skills": [
+        "flow-workflows"
       ]
     },
     {

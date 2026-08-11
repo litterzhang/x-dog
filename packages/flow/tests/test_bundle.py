@@ -291,8 +291,29 @@ def test_wheel_declares_examples_and_skill_as_package_data() -> None:
     cfg = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     forced = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
     assert forced.get("examples") == "xdog/flow/examples"
-    assert forced.get("skills") == "xdog/flow/skills"
+    assert "skills" not in forced, (
+        "the skill lives in the package source, not force-included -- see "
+        "test_the_skill_is_discoverable_from_a_checkout for why"
+    )
     # the sdist must NOT remap them: the wheel is built from the sdist, and
     # moving the sources would leave the wheel build with nothing to include
     sdist = cfg["tool"]["hatch"]["build"]["targets"].get("sdist", {})
     assert "force-include" not in sdist, "remapping in the sdist breaks the wheel build"
+
+
+def test_the_skill_is_discoverable_from_a_checkout() -> None:
+    """The property that matters, which the packaging line did not give.
+
+    The skill used to be force-included into the wheel from outside the package,
+    so `packaged_skills()` found it in production and found nothing in a
+    checkout. Development is where a workflow's `skills:` reference gets written
+    and tested, and it was the one environment where the skill did not exist --
+    so an agent asked to write a flow workflow was silently never shown the
+    format, and produced a plausible file with an invented node type that every
+    downstream check accepted.
+    """
+    from xdog.agent.skills import load_packaged_skill, packaged_skills
+
+    assert "flow-workflows" in packaged_skills()
+    skill = load_packaged_skill("flow-workflows")
+    assert skill is not None and skill.content.strip()

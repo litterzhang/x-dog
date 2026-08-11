@@ -89,6 +89,19 @@ block seeds the output ports of a reserved source node `$in`.
 }
 ```
 
+**Skills.** An agent node may name skills that ship inside installed packages:
+
+```jsonc
+{"id": "author", "type": "agent", "skills": ["flow-workflows"], "prompt": "..."}
+```
+
+Their instructions are prepended to the node's system prompt. Only *packaged*
+skills resolve — never the machine's own skill directories — because a workflow
+is a shareable artifact, and one that picked up whatever happened to be on disk
+would behave differently for two people with no way to tell from the file. An
+unresolvable name fails `validate`, since an agent asked to produce a format it
+was never shown does not fail: it produces something plausible and wrong.
+
 **Ports.** A required string port may use the bare shorthand (`"topic"`). Typed,
 structured, or non-required ports use the canonical object form
 `{"name": "sum", "schema": {"type": "integer"}, "required": true}`. Values are

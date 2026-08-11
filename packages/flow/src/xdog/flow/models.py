@@ -92,6 +92,13 @@ class NodeDef:
     system_prompt: str = ""
     prompt: str = ""
     tools: tuple[str, ...] = ()
+
+    # Skills whose instructions are prepended to this node's system prompt.
+    # Resolved from *installed packages only*, never from the machine's own
+    # skill directories: a workflow is a shareable artifact, and one that picked
+    # up whatever happened to be on disk would behave differently for two people
+    # with no way to tell from the file.
+    skills: tuple[str, ...] = ()
     run: str | None = None
     # Data ports: each node reads its input ports and writes its output ports.
     input_ports: tuple[Port, ...] = ()

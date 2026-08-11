@@ -53,6 +53,7 @@ _SDK_IMPORTS = (
     "from xdog.agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
     "from xdog.agent.tools import create_submit_result_tool\n"
     "from xdog.agent.workspace import workspace_briefing\n"
+    "from xdog.agent.skills import skills_preamble\n"
     "from xdog.ai.types import AssistantMessage, TextContent\n"
 )
 
@@ -149,6 +150,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     output_schema: dict[str, object] | None = None,
     web_search_model: str | None = None,
     inherit_from: str | None = None,
+    skills: tuple[str, ...] = (),
     node_id: str = "",
 ) -> tuple[object, int]:
     stream_fn: StreamFn = stream_fn_from_provider(provider)  # type: ignore[arg-type]
@@ -167,7 +169,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # the tool list would be a guess, since a custom tool or an MCP server can
     # touch the filesystem too. We tell it where its files go; we cannot audit
     # that it obeys, which is the honest difference from a script node.
-    _sys = system_prompt + workspace_briefing(
+    _sys = skills_preamble(skills) + system_prompt + workspace_briefing(
         _workspace_dir(), _granted_paths(), confined=_roots is not None
     )
     if output_schema is not None:
@@ -706,6 +708,8 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
         _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
     if node.inherit is not None:
         _call_args.append(f'inherit_from="{_ESC(node.inherit.from_node)}"')
+    if node.skills:
+        _call_args.append(f"skills={tuple(node.skills)!r}")
     _call_args.append(f'node_id="{_ESC(node.id)}"')
     _core = f"    result, _node_tokens = await _run_agent({', '.join(_call_args)})"
     lines.append(_core if len(_core) <= 120 else _core + "  # noqa: E501")

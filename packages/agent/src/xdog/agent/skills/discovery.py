@@ -18,6 +18,10 @@ import logging
 import pkgutil
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xdog.agent.skills.types import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -59,3 +63,26 @@ def packaged_skills() -> dict[str, Path]:
             logger.debug("skipping %s while looking for skills: %s", module.name, exc)
 
     return found
+
+
+def load_packaged_skill(slug: str) -> "Skill | None":
+    """Load one skill by slug, from installed packages only.
+
+    Deliberately narrower than :meth:`SkillManager.load_skill`, which also reads
+    user and group directories. A flow workflow is a shareable artifact: if its
+    agent nodes picked up whatever skills happened to be on the machine, the same
+    workflow would behave differently for two people and neither could tell from
+    the file. Packaged skills are versioned with the code that installs them, so
+    naming one in a workflow names a specific thing.
+
+    Returns None when nothing is installed under that slug, which the caller
+    should treat as an authoring error rather than a missing nicety -- an agent
+    told to write a format it was never shown will write something plausible and
+    wrong.
+    """
+    from xdog.agent.skills.manager import _load_skill_from_dir
+
+    directory = packaged_skills().get(slug)
+    if directory is None:
+        return None
+    return _load_skill_from_dir(directory, slug=slug, packaged=True)

@@ -826,3 +826,84 @@ def test_an_optional_loop_carried_port_does_not_break_the_compiled_engine() -> N
     asyncio.run(namespace["main"]())
 
     assert namespace["_OUTPUT"]["r"] == interpreted
+
+
+# -- skills on agent nodes ---------------------------------------------------
+
+
+def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tmp_path: Path) -> None:
+    """An agent asked to produce a format it was never shown does not fail — it
+    produces something plausible and wrong. That is not hypothetical: a
+    scheduling workflow was written with an invented node type by an agent with
+    no access to the skill describing the format, and every downstream check
+    passed."""
+    from xdog.agent.skills import skills_preamble
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    preamble = skills_preamble(["flow-workflows"])
+    assert preamble.strip(), "the skill must resolve from the installed package"
+
+    wf = parse_workflow({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go",
+                   "skills": ["flow-workflows"], "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    })
+    assert wf.nodes[0].skills == ("flow-workflows",)
+
+    source = generate(wf)
+    assert "skills_preamble(skills)" in source, "the compiled engine renders it too"
+    assert "skills=('flow-workflows',)" in source, "with this node's skills"
+    assert "from xdog.agent.skills import skills_preamble" in source
+
+
+def test_a_generated_module_does_not_import_flow_for_skills() -> None:
+    """`skills_preamble` lives in xdog-agent for this reason: a bundle depends on
+    the agent package when it has SDK nodes, and never on flow."""
+    from xdog.flow.codegen import generate
+    from xdog.flow.loader import parse_workflow
+
+    wf = parse_workflow({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go",
+                   "skills": ["flow-workflows"], "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    })
+    imports = [ln for ln in generate(wf).splitlines() if ln.startswith(("import ", "from "))]
+
+    assert not any("xdog.flow" in ln for ln in imports), imports
+
+
+def test_an_unknown_skill_is_refused_at_load() -> None:
+    """Failing at load, not at run: the run would succeed and be wrong."""
+    from xdog.flow.loader import parse_workflow, validation_errors
+
+    wf = parse_workflow({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go",
+                   "skills": ["no-such-skill"], "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    })
+    errors = validation_errors(wf)
+
+    assert [e.code for e in errors] == ["unknown-reference"]
+    assert "no-such-skill" in errors[0].args[0]
+
+
+def test_skills_survive_a_round_trip() -> None:
+    """`inherit` was dropped by the serializer once and only the example corpus
+    caught it; a field that does not round-trip is a field that vanishes when a
+    workflow is edited by the builder."""
+    from xdog.flow.builder.serialize import workflow_to_dict
+    from xdog.flow.loader import parse_workflow
+
+    raw = {
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go",
+                   "skills": ["flow-workflows"], "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    }
+    again = parse_workflow(workflow_to_dict(parse_workflow(raw)))
+
+    assert again.nodes[0].skills == ("flow-workflows",)

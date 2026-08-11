@@ -58,6 +58,8 @@ def _node_to_dict(node: NodeDef) -> dict[str, Any]:
         data["prompt"] = node.prompt
     if node.tools:
         data["tools"] = list(node.tools)
+    if node.skills:
+        data["skills"] = list(node.skills)
     if node.run is not None:
         data["run"] = node.run
     if node.code is not None:

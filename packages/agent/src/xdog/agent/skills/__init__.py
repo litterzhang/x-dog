@@ -13,9 +13,16 @@ own — ``xdog.flow`` carries one at ``xdog/flow/skills/`` teaching an agent to
 write flow workflows.
 """
 
-from xdog.agent.skills.discovery import packaged_skills
+from xdog.agent.skills.discovery import load_packaged_skill, packaged_skills
 from xdog.agent.skills.manager import SkillManager
-from xdog.agent.skills.render import render_skill_body
+from xdog.agent.skills.render import render_skill_body, skills_preamble
 from xdog.agent.skills.types import Skill
 
-__all__ = ["Skill", "SkillManager", "packaged_skills", "render_skill_body"]
+__all__ = [
+    "Skill",
+    "SkillManager",
+    "load_packaged_skill",
+    "packaged_skills",
+    "render_skill_body",
+    "skills_preamble",
+]
