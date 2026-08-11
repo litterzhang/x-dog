@@ -182,6 +182,7 @@ class SdkRunner:
         web_search_fn_factory: Callable[[str], WebSearchFn] | None,
         workspace: Path | None = None,
         allow_paths: Sequence[Path] = (),
+        skill_dirs: Sequence[Path] = (),
         confine_to: Sequence[Path] | None = None,
     ) -> None:
         self._stream_fn_factory = stream_fn_factory
@@ -194,6 +195,10 @@ class SdkRunner:
         # confined: a grant it is not told about is a grant it cannot use, and
         # the compiled engine has always passed them unconditionally.
         self._allow_paths = allow_paths
+        # Where a workflow's own skills live: `skills/` beside the workflow file.
+        # It travels with the artifact, so unlike a machine's skill directory it
+        # cannot make the same workflow behave differently for two people.
+        self._skill_dirs = skill_dirs
         # None means unconfined, which is what every caller got before this
         # existed. A list — even an empty one — is a bound.
         self._confine_to = confine_to
@@ -236,7 +241,7 @@ class SdkRunner:
         # filesystem, so can an MCP server, and a model can name a path for a
         # downstream node to use. We tell it where its files go; we cannot audit
         # that it obeys.
-        final_sys_prompt = skills_preamble(node.skills) + system_prompt + workspace_briefing(
+        final_sys_prompt = skills_preamble(node.skills, self._skill_dirs) + system_prompt + workspace_briefing(
             self._workspace, self._allow_paths, confined=self._confine_to is not None
         )
         structured = agent_is_structured(node)

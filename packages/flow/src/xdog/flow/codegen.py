@@ -169,7 +169,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     # the tool list would be a guess, since a custom tool or an MCP server can
     # touch the filesystem too. We tell it where its files go; we cannot audit
     # that it obeys, which is the honest difference from a script node.
-    _sys = skills_preamble(skills) + system_prompt + workspace_briefing(
+    _sys = skills_preamble(skills, _skill_dirs()) + system_prompt + workspace_briefing(
         _workspace_dir(), _granted_paths(), confined=_roots is not None
     )
     if output_schema is not None:

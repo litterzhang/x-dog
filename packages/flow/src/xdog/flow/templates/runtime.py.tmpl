@@ -421,6 +421,20 @@ _FLOW_CHECKPOINT_DIR: str | None = None
 _CHECKPOINT_LOADED = False
 
 
+def _skill_dirs() -> "list[Path]":
+    """`skills/` beside this module — the bundle's copy of what sat beside the
+    workflow file.
+
+    The same lookup the interpreter does, so a workflow carrying its own skill
+    renders the same system prompt through either engine. Left out, an installed
+    bundle would quietly send a shorter prompt than the same workflow run from
+    its directory, and the difference would show up as worse output rather than
+    as an error.
+    """
+    here = globals().get("__file__")
+    return [Path(here).resolve().parent / "skills"] if here else []
+
+
 def _workspace_dir() -> Path:
     """This run's workspace — where a relative path resolves.
 

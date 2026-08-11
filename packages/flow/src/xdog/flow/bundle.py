@@ -312,6 +312,12 @@ def build_bundle(
     # 1b) The workflow's own sibling modules, for `run:` script references.
     if base_dir is not None:
         _copy_workflow_modules(wf, base_dir.resolve(), out_dir)
+        # A workflow's own skills travel with it, like its sibling modules. Left
+        # behind, an installed bundle would silently render a shorter system
+        # prompt than the same workflow run from its directory.
+        _skills = base_dir.resolve() / "skills"
+        if _skills.is_dir():
+            shutil.copytree(_skills, out_dir / "skills", dirs_exist_ok=True)
 
     # 2) Vendored package sources.  ai/agent are vendored ONLY when the generated
     # module imports them — i.e. the workflow has an SDK agent node (or a tool

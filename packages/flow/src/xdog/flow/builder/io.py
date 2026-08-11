@@ -30,7 +30,7 @@ def load_any(path: str | Path) -> WorkflowDef:
     """
     if _is_svg(path):
         wf = parse_workflow(read_workflow_from_svg(Path(path)))
-        validate_workflow(wf)
+        validate_workflow(wf, base_dir=Path(path).parent)
         return wf
     return load_workflow(path)
 

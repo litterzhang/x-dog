@@ -19,6 +19,7 @@ standard actually recommends — resolve too, with no change to the skill.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 from xdog.agent.skills.types import Skill
 
@@ -46,7 +47,7 @@ def render_skill_body(skill: Skill) -> str:
     )
 
 
-def skills_preamble(slugs: "Sequence[str]") -> str:
+def skills_preamble(slugs: "Sequence[str]", search_dirs: "Sequence[Path]" = ()) -> str:
     """The rendered instructions for *slugs*, ready to sit ahead of a prompt.
 
     Ahead rather than after: a skill teaches a format or a procedure, and the
@@ -58,15 +59,40 @@ def skills_preamble(slugs: "Sequence[str]") -> str:
     told to produce a format it was never shown does not fail, it produces
     something plausible and wrong.
 
+    *search_dirs* are directories holding ``<slug>/SKILL.md``, searched before
+    installed packages so a caller can carry its own. flow passes the ``skills/``
+    directory beside the workflow file: that travels *with* the artifact, exactly
+    like the sibling modules a ``run:`` node imports, so it does not reintroduce
+    the ambient-machine-state problem that reading a user's own skill directory
+    would.
+
     Lives in the agent package rather than in flow because a generated flow
     module must not import flow, and both engines have to render this the same
     way or the same workflow gets two different system prompts.
     """
     from xdog.agent.skills.discovery import load_packaged_skill
+    from xdog.agent.skills.manager import _load_skill_from_dir
 
-    bodies = [
-        render_skill_body(skill)
-        for skill in (load_packaged_skill(slug) for slug in slugs)
-        if skill is not None
-    ]
+    bodies = []
+    for slug in slugs:
+        skill = None
+        for directory in search_dirs:
+            skill = _load_skill_from_dir(Path(directory) / slug, slug=slug)
+            if skill is not None:
+                break
+        if skill is None:
+            skill = load_packaged_skill(slug)
+        if skill is not None:
+            bodies.append(render_skill_body(skill))
     return "\n\n".join(bodies) + "\n\n" if bodies else ""
+
+
+def resolvable_skill(slug: str, search_dirs: "Sequence[Path]" = ()) -> bool:
+    """Whether *slug* resolves at all — for validating before anything runs."""
+    from xdog.agent.skills.discovery import load_packaged_skill
+    from xdog.agent.skills.manager import _load_skill_from_dir
+
+    for directory in search_dirs:
+        if _load_skill_from_dir(Path(directory) / slug, slug=slug) is not None:
+            return True
+    return load_packaged_skill(slug) is not None

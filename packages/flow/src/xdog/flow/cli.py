@@ -170,7 +170,7 @@ def _cmd_validate_json(config_path: str) -> None:
         print(json.dumps(envelope, indent=2, ensure_ascii=False))
         raise SystemExit(1) from None
 
-    errors = validation_errors(wf)
+    errors = validation_errors(wf, base_dir=Path(config_path).resolve().parent)
     envelope["workflow"] = wf.name
     envelope["ok"] = not errors
     envelope["errors"] = [exc.as_dict() for exc in errors]

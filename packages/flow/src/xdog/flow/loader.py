@@ -1198,7 +1198,7 @@ class _ErrorCollector:
             self.errors.append(exc)
 
 
-def _validate_skills(node: NodeDef) -> None:
+def _validate_skills(node: NodeDef, base_dir: Path | None) -> None:
     """Every named skill must resolve from an installed package.
 
     Failing at load rather than at run is the whole point: an agent told to
@@ -1207,13 +1207,15 @@ def _validate_skills(node: NodeDef) -> None:
     written with an invented node type by an agent that had no access to the
     skill describing the format, and every check downstream passed.
     """
-    from xdog.agent.skills import load_packaged_skill
+    from xdog.agent.skills import resolvable_skill
 
+    search = [base_dir / "skills"] if base_dir is not None else []
     for slug in node.skills:
-        if load_packaged_skill(slug) is None:
+        if not resolvable_skill(slug, search):
             raise WorkflowValidationError(
                 f"Node {node.id!r} references unknown skill {slug!r}. "
-                f"Skills come from installed packages; install the one that ships it.",
+                f"A skill comes from an installed package or from a skills/ directory "
+                f"beside this workflow file.",
                 code=codes.UNKNOWN_REFERENCE,
             )
 
@@ -1254,7 +1256,9 @@ def unconfinable_reasons(wf: WorkflowDef) -> list[str]:
     return reasons
 
 
-def validation_errors(wf: WorkflowDef) -> list[WorkflowValidationError]:
+def validation_errors(
+    wf: WorkflowDef, *, base_dir: Path | None = None
+) -> list[WorkflowValidationError]:
     """Every validation problem found, in declaration order; empty when valid.
 
     A fatal structural failure (a duplicate node id, an unbounded cycle) stops
@@ -1263,20 +1267,27 @@ def validation_errors(wf: WorkflowDef) -> list[WorkflowValidationError]:
     """
     collector = _ErrorCollector()
     try:
-        _validate_workflow_into(wf, collector)
+        _validate_workflow_into(wf, collector, base_dir=base_dir)
     except WorkflowValidationError as exc:
         collector.errors.append(exc)
     return collector.errors
 
 
-def validate_workflow(wf: WorkflowDef) -> None:
-    """Validate a WorkflowDef. Raises WorkflowValidationError on any problem."""
-    errors = validation_errors(wf)
+def validate_workflow(wf: WorkflowDef, *, base_dir: Path | None = None) -> None:
+    """Validate a WorkflowDef. Raises WorkflowValidationError on any problem.
+
+    *base_dir* is where the workflow was loaded from, when it came from a file:
+    a run-time fact, so it is passed rather than carried on the definition. It
+    lets a `skills/` directory beside the workflow resolve.
+    """
+    errors = validation_errors(wf, base_dir=base_dir)
     if errors:
         raise errors[0]
 
 
-def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> None:
+def _validate_workflow_into(
+    wf: WorkflowDef, collector: "_ErrorCollector", *, base_dir: Path | None = None
+) -> None:
     """Run every check, routing per-item failures into *collector*."""
     node_ids = [n.id for n in wf.nodes]
 
@@ -1369,7 +1380,7 @@ def _validate_workflow_into(wf: WorkflowDef, collector: "_ErrorCollector") -> No
                         f"expected one of {', '.join(VALID_TYPES)}",
                         code=codes.INVALID_SCHEMA,
                     )
-            _validate_skills(node)
+            _validate_skills(node, base_dir)
             for tool in node.tools:
                 if not tool:
                     raise WorkflowValidationError(
@@ -1688,5 +1699,5 @@ def load_workflow(path: str | Path) -> WorkflowDef:
     with p.open() as fh:
         data: dict[str, Any] = json.load(fh)
     wf = parse_workflow(data, base_dir=p.parent, _seen=frozenset({p}))
-    validate_workflow(wf)
+    validate_workflow(wf, base_dir=p.parent)
     return wf

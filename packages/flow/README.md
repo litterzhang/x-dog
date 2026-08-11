@@ -95,12 +95,18 @@ block seeds the output ports of a reserved source node `$in`.
 {"id": "author", "type": "agent", "skills": ["flow-workflows"], "prompt": "..."}
 ```
 
-Their instructions are prepended to the node's system prompt. Only *packaged*
-skills resolve — never the machine's own skill directories — because a workflow
-is a shareable artifact, and one that picked up whatever happened to be on disk
-would behave differently for two people with no way to tell from the file. An
-unresolvable name fails `validate`, since an agent asked to produce a format it
-was never shown does not fail: it produces something plausible and wrong.
+Their instructions are prepended to the node's system prompt. A skill resolves
+from two places, in this order:
+
+1. `skills/<name>/SKILL.md` **beside the workflow file** — part of the artifact,
+   like the sibling modules a `run:` node imports. It travels into a bundle.
+2. any installed package that ships one — versioned with the code that installs it.
+
+Never the machine's own skill directories. A workflow is a shareable artifact,
+and one that picked up whatever happened to be on disk would behave differently
+for two people with no way to tell from the file. An unresolvable name fails
+`validate`, because an agent asked to produce a format it was never shown does
+not fail — it produces something plausible and wrong.
 
 **Ports.** A required string port may use the bare shorthand (`"topic"`). Typed,
 structured, or non-required ports use the canonical object form

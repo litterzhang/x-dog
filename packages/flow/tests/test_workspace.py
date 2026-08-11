@@ -853,7 +853,7 @@ def test_a_node_can_name_a_skill_and_both_engines_render_it(monkeypatch: Any, tm
     assert wf.nodes[0].skills == ("flow-workflows",)
 
     source = generate(wf)
-    assert "skills_preamble(skills)" in source, "the compiled engine renders it too"
+    assert "skills_preamble(skills, _skill_dirs())" in source, "compiled engine renders it too"
     assert "skills=('flow-workflows',)" in source, "with this node's skills"
     assert "from xdog.agent.skills import skills_preamble" in source
 
@@ -907,3 +907,53 @@ def test_skills_survive_a_round_trip() -> None:
     again = parse_workflow(workflow_to_dict(parse_workflow(raw)))
 
     assert again.nodes[0].skills == ("flow-workflows",)
+
+
+def test_a_skill_beside_the_workflow_resolves_and_travels(tmp_path: Path) -> None:
+    """A `skills/` directory next to the workflow file is part of the artifact,
+    like the sibling modules a `run:` node imports — so it does not reintroduce
+    the problem that reading a machine's own skill directory would, where the
+    same workflow behaves differently for two people and neither can tell from
+    the file."""
+    import json
+
+    from xdog.agent.skills import skills_preamble
+    from xdog.flow.builder.io import load_any
+    from xdog.flow.bundle import build_bundle
+
+    (tmp_path / "skills" / "house-style").mkdir(parents=True)
+    (tmp_path / "skills" / "house-style" / "SKILL.md").write_text(
+        "---\nname: house-style\ndescription: local\n---\n\nNEVER use tabs.\n", encoding="utf-8"
+    )
+    (tmp_path / "wf.json").write_text(json.dumps({
+        "name": "s", "provider": "p", "defaults": {"model": "m"}, "entry": "a",
+        "nodes": [{"id": "a", "type": "agent", "prompt": "go",
+                   "skills": ["house-style"], "outputs": ["o"]}],
+        "edges": [{"from": "a", "to": "$output", "map": {"o": "r"}}],
+    }), encoding="utf-8")
+
+    wf = load_any(str(tmp_path / "wf.json"))          # validates, so it resolved
+    assert "NEVER use tabs" in skills_preamble(["house-style"], [tmp_path / "skills"])
+
+    build_bundle(wf, tmp_path / "bundle", base_dir=tmp_path)
+    assert (tmp_path / "bundle" / "skills" / "house-style" / "SKILL.md").exists(), (
+        "left behind, an installed bundle sends a shorter prompt than the same "
+        "workflow run from its directory, and that shows up as worse output "
+        "rather than as an error"
+    )
+
+
+def test_the_definition_does_not_carry_where_it_was_loaded_from() -> None:
+    """`base_dir` is a fact about a run, not about the workflow.
+
+    On the definition it would serialize a machine path into a shareable
+    artifact and make two identical workflows unequal because of their
+    directory — the same category error as a workflow declaring its own
+    filesystem access.
+    """
+    import dataclasses
+
+    from xdog.flow.models import WorkflowDef
+
+    fields = {f.name for f in dataclasses.fields(WorkflowDef)}
+    assert "base_dir" not in fields, sorted(fields)

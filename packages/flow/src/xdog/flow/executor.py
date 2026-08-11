@@ -974,6 +974,7 @@ async def execute(
                     web_search_fn_factory=web_search_fn_factory,
                     workspace=_workspace,
                     allow_paths=tuple(allow_paths or ()),
+                    skill_dirs=([base_dir / "skills"] if base_dir is not None else []),
                     confine_to=_confinement_roots,
                 )
             )
