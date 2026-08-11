@@ -457,12 +457,13 @@ def test_an_unresolvable_model_still_gets_its_tools_described(
 ) -> None:
     """The lookup fails on an unknown provider, a network problem, or an offline
     box. Every one of those must land on 'describe them'."""
+    from xdog.agent.helpers import model_supports_tool_calls
     from xdog.coding.core.agent_session import AgentSession
 
     class _Unresolvable:
-        _native_tools_cache = None
+        class agent:  # noqa: N801
+            class state:  # noqa: N801
+                model = "no-such-provider/no-such-model"
 
-        class state:  # noqa: N801
-            model = "no-such-provider/no-such-model"
-
+    assert model_supports_tool_calls("no-such-provider/no-such-model") is None
     assert AgentSession._native_tool_calls(_Unresolvable()) is False

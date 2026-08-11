@@ -245,3 +245,66 @@ def test_dropping_a_skill_leaves_no_trace(tmp_path: Path) -> None:
 
     assert "USE TABS" not in agent.state.system_prompt  # type: ignore[attr-defined]
     assert agent.state.system_prompt.strip().endswith("THE TASK")  # type: ignore[attr-defined]
+
+
+# -- a model that cannot take tools through the API must not be sent any -----
+
+
+def _captured_context(**cfg_kw: object) -> object:
+    """Run one turn against a stub stream and return the context it received."""
+    import asyncio
+
+    from xdog.agent.agent import Agent
+    from xdog.agent.core import AgentConfig, AgentTool
+    from xdog.ai.types import AssistantMessage, DoneEvent, TextContent
+    from xdog.ai.utils.event_stream import EventStream
+
+    seen: list[object] = []
+
+    def stream_fn(model: object, context: object, options: object = None) -> object:
+        seen.append(context)
+        stream: EventStream = EventStream()
+        msg = AssistantMessage(
+            content=(TextContent(text="ok"),), api="openai-completions",
+            provider="p", model="m", stop_reason="stop", timestamp=0,
+        )
+
+        async def push() -> None:
+            await asyncio.sleep(0)
+            await stream.send(DoneEvent(stop_reason="stop", message=msg))
+            stream.set_result(msg)
+            await stream.close()
+
+        asyncio.ensure_future(push())
+        return stream
+
+    async def _drain() -> None:
+        agent = Agent(
+            stream_fn,  # type: ignore[arg-type]
+            config=AgentConfig(model="m", system_prompt="x", **cfg_kw),  # type: ignore[arg-type]
+            tools=(AgentTool(name="read", description="d", parameters={}, execute=None),),  # type: ignore[arg-type]
+        )
+        async for _ in await agent.prompt("go"):
+            pass
+
+    asyncio.run(_drain())
+    return seen[0]
+
+
+def test_tools_are_withheld_from_a_model_that_cannot_take_them() -> None:
+    """`body["tools"]` is written whenever the context carries tools, with no
+    check of its own — so the request would carry definitions the model cannot
+    use and may reject. Its tools reach it as prompt text instead."""
+    assert _captured_context(supports_tool_calls=False).tools is None  # type: ignore[attr-defined]
+
+
+def test_tools_are_sent_when_the_model_takes_them() -> None:
+    ctx = _captured_context(supports_tool_calls=True)
+    assert ctx.tools and ctx.tools[0].name == "read"  # type: ignore[attr-defined]
+
+
+def test_not_determined_behaves_like_supported() -> None:
+    """None is "nobody looked", and must not silently remove every tool. It is
+    also the default, so a caller that says nothing gets what it always got."""
+    ctx = _captured_context()
+    assert ctx.tools and ctx.tools[0].name == "read"  # type: ignore[attr-defined]

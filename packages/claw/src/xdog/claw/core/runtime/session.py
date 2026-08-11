@@ -89,10 +89,13 @@ class AgentSession:
             from xdog.agent.helpers import stream_fn_from_provider
             effective_stream_fn = stream_fn_from_provider(ai.load())
 
+        from xdog.agent.helpers import model_supports_tool_calls
+
         self._agent = Agent(
             effective_stream_fn,
             config=AgentConfig(
                 model=runtime.model or "test/dummy",
+                supports_tool_calls=model_supports_tool_calls(runtime.model or ""),
                 system_prompt="",  # rebuilt each turn
                 context_window=runtime.context_window,
                 options=runtime.agent_config.options,

@@ -253,6 +253,9 @@ class Agent:
         # system prompt before every turn; without this its skills would vanish
         # on the first rebuild, or it would have to re-render them itself, which
         # is the duplication this exists to remove.
+        # None means "not determined" and behaves like True, which is what
+        # every caller got before this existed.
+        self._supports_tool_calls = cfg.supports_tool_calls
         self._base_system_prompt = _base_prompt
         self._skills = skills
         self._index = _index
@@ -689,10 +692,17 @@ class Agent:
             error=None,
         )
 
+        # A model that cannot take tools through the API must not be sent any:
+        # `body["tools"]` is written whenever the context carries them, with no
+        # check of its own, so the request would carry definitions the model
+        # cannot use and may reject. Its tools reach it as prompt text instead —
+        # which is why `supports_tool_calls=False` removes them from here and
+        # not from the description.
+        _send_tools = self._state.tools and self._supports_tool_calls is not False
         context = AgentContext(
             system_prompt=self._state.system_prompt,
             messages=list(self._state.messages),
-            tools=list(self._state.tools) if self._state.tools else None,
+            tools=list(self._state.tools) if _send_tools else None,
         )
 
         # Inject cancel event into StreamOptions for this run

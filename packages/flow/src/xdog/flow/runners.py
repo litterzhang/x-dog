@@ -238,6 +238,7 @@ class SdkRunner:
         from xdog.agent.agent import Agent
         from xdog.agent.core import AgentConfig, AgentTool
         from xdog.agent.events import TurnEndEvent
+        from xdog.agent.helpers import model_supports_tool_calls
         from xdog.agent.tools.tool_filesystem import CONFINE_CTX_KEY, WORKSPACE_CTX_KEY
         from xdog.agent.workspace import workspace_briefing
         from xdog.ai.types import AssistantMessage, TextContent
@@ -285,7 +286,11 @@ class SdkRunner:
 
         agent = Agent(
             stream_fn,
-            config=AgentConfig(model=model, system_prompt=final_sys_prompt),
+            config=AgentConfig(
+                model=model,
+                system_prompt=final_sys_prompt,
+                supports_tool_calls=model_supports_tool_calls(model),
+            ),
             tools=resolved_tools,
             tool_ctx=tool_ctx,
             skills=_skill_manager(self._skill_dirs),

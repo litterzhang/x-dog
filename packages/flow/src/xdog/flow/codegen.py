@@ -50,7 +50,9 @@ _SDK_IMPORTS = (
     "from xdog.agent import Agent\n"
     "from xdog.agent.core import AgentConfig, AgentTool, AgentToolResult, StreamFn\n"
     "from xdog.agent.events import TurnEndEvent\n"
-    "from xdog.agent.helpers import stream_fn_from_provider, web_search_fn_from_provider\n"
+    # One line: the generated import block is assembled line by line, so a
+    # parenthesised import would be split into fragments and re-ordered.
+    "from xdog.agent.helpers import model_supports_tool_calls, stream_fn_from_provider, web_search_fn_from_provider\n"  # noqa: E501
     "from xdog.agent.tools import create_submit_result_tool\n"
     "from xdog.agent.workspace import workspace_briefing\n"
     "from xdog.ai.types import AssistantMessage, TextContent\n"
@@ -190,7 +192,11 @@ _SDK_RUN_AGENT = '''async def _run_agent(
         _web_search_fn = web_search_fn_from_provider(provider, web_search_model)  # type: ignore[arg-type]
     agent = Agent(
         stream_fn,
-        config=AgentConfig(model=model, system_prompt=_sys),
+        config=AgentConfig(
+            model=model,
+            system_prompt=_sys,
+            supports_tool_calls=model_supports_tool_calls(model),
+        ),
         tools=tools,
         tool_ctx=_tool_ctx,
         skills=_skill_manager(),

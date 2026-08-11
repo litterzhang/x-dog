@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from xdog.agent.core import EmbedFn
@@ -71,3 +72,40 @@ def embed_fn_from_provider(provider: BaseProvider, model: str) -> EmbedFn:
         return []
 
     return _embed
+
+
+_TOOL_CALL_SUPPORT: dict[str, bool] = {}
+
+
+def model_supports_tool_calls(model_id: str) -> bool | None:
+    """Whether *model_id* accepts tool definitions through the API.
+
+    ``None`` when it cannot be determined — an unknown provider, no network, an
+    offline machine. Callers should treat that as "do both": send the API tools
+    *and* describe them in the prompt. Doing both wastes a few hundred tokens;
+    doing neither leaves the model unable to act, and picking the wrong one of
+    the two is silent.
+
+    Cached per process. Callers ask before every turn, and a provider round trip
+    per turn would cost far more than the duplication it avoids.
+    """
+    # Not `if not model_id`: callers pass whatever their config holds, and a
+    # non-string reaches the cache lookup as an unhashable key. Anything that is
+    # not a model id is simply unknown.
+    if not isinstance(model_id, str) or not model_id:
+        return None
+    if model_id in _TOOL_CALL_SUPPORT:
+        return _TOOL_CALL_SUPPORT[model_id]
+    try:
+        import xdog.ai as ai
+
+        for model in ai.provider(model_id.split("/", 1)[0]).models():
+            if model.id == model_id:
+                _TOOL_CALL_SUPPORT[model_id] = bool(model.supports_tool_calls)
+                return _TOOL_CALL_SUPPORT[model_id]
+    except Exception:
+        logger.debug("could not resolve tool-call support for %r", model_id, exc_info=True)
+    return None
+
+
+logger = logging.getLogger(__name__)

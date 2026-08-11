@@ -307,27 +307,18 @@ class AgentSession:
     def _native_tool_calls(self) -> bool:
         """Whether this model gets tool definitions through the API.
 
-        Looked up once and remembered: this is called before every turn, and a
-        provider query per turn would be a far worse trade than the tokens it
-        saves. An unknown model answers False, so its tools stay described —
-        being unable to act is a worse failure than paying for a duplicate.
-        """
-        cached = getattr(self, "_native_tools_cache", None)
-        if cached is not None:
-            return bool(cached)
-        native = False
-        try:
-            import xdog.ai as ai
+        Reads the same answer the Agent uses to decide whether to send them, so
+        the two cannot disagree — a model whose tools are withheld from the API
+        while the prompt stays silent about them has no tools at all, and
+        nothing would report that.
 
-            model_id = self.agent.state.model or ""
-            for model in ai.provider(model_id.split("/", 1)[0]).models():
-                if model.id == model_id:
-                    native = bool(model.supports_tool_calls)
-                    break
-        except Exception:
-            logger.debug("could not resolve tool-call support for the model", exc_info=True)
-        self._native_tools_cache = native
-        return native
+        Unknown answers False, so the tools stay described. Both halves then
+        fire, which wastes a few hundred tokens and cannot leave the model
+        unable to act.
+        """
+        from xdog.agent.helpers import model_supports_tool_calls
+
+        return model_supports_tool_calls(self.agent.state.model or "") is True
 
     def _rebuild_system_prompt(self) -> None:
         """Rebuild and set the system prompt from config and tools."""

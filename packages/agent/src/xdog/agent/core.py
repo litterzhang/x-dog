@@ -204,7 +204,12 @@ class AgentConfig:
 
     # Model capabilities
     supports_vision: bool = False
-    supports_tool_calls: bool = True
+    # Tri-state on purpose. True and False are claims about the model; None is
+    # "nobody looked", which must not be confused with either — assuming True
+    # sends definitions a model may reject, and assuming False silently removes
+    # every tool. None behaves like True and is the default, so a caller that
+    # says nothing gets exactly what it got before.
+    supports_tool_calls: bool | None = None
     supports_streaming: bool = True
 
     # Streaming options (temperature, thinking, max_tokens, etc.)

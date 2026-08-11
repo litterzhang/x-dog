@@ -154,13 +154,14 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
 
     # Create Agent with explicit stream_fn from provider
     from xdog.agent import AgentConfig
-    from xdog.agent.helpers import stream_fn_from_provider
+    from xdog.agent.helpers import model_supports_tool_calls, stream_fn_from_provider
     from xdog.ai.types import StreamOptions
 
     agent = Agent(
         stream_fn_from_provider(provider),
         config=AgentConfig(
             model=model_id,
+            supports_tool_calls=model_supports_tool_calls(model_id),
             system_prompt="",  # will be rebuilt on first prompt
             options=StreamOptions(
                 thinking=_as_thinking_level(thinking_level),
