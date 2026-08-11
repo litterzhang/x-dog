@@ -12,6 +12,70 @@ Nothing yet.
 
 ---
 
+## [2.1.0] — 2026-08-11
+
+### Added
+
+- **`skills` on agent nodes** (`xdog-flow`). A node names skills and their
+  instructions reach the model:
+
+  ```jsonc
+  {"id": "author", "type": "agent", "skills": ["flow-workflows"]}
+  ```
+
+  They resolve from a `skills/<name>/SKILL.md` directory **beside the workflow
+  file** — part of the artifact, like the sibling modules a `run:` node imports,
+  and copied into a bundle — or from any installed package. Never from the
+  machine's own skill directories: a workflow that picked up whatever happened
+  to be on disk would behave differently for two people with no way to tell from
+  the file. An unresolvable name fails `validate`, because an agent asked to
+  produce a format it was never shown does not fail — it produces something
+  plausible and wrong.
+- **`xdog-flow scheduling stop` / `start`**, and `install --no-start`.
+  Installing and arming are separate decisions.
+
+### Changed
+
+- **The Agent decides where a skill's text goes**, for every product. The index
+  (one line per skill) goes at the front of the system prompt; an active
+  session-scoped body goes behind it, still in the cacheable prefix; a
+  `scope: turn` body goes in as a message, because it will be removed again and
+  moving it in and out of the prefix costs a full uncached re-send twice.
+  Resolution stays with the caller — only it knows where to look.
+- Reading skills no longer creates directories. Constructing a `SkillManager` to
+  *look at* skills used to `mkdir` the directory it looked in.
+- **Inter-package dependencies are pinned** (`xdog-agent>=2.1.0`). All seven
+  packages share a version and are released together, but nothing enforced that
+  at install time, so a resolver could pair this release with an older sibling
+  and fail at run time with an ImportError.
+
+### Fixed
+
+- **`coding` sent every tool definition twice** — once as API tool definitions,
+  once rendered into the system prompt. About 616 tokens on the four builtins,
+  on every request. It was not a fallback for models without native tool
+  calling: the section was emitted unconditionally, and nothing read
+  `supports_tool_calls`, a field that had existed on `AgentConfig` and the `ai`
+  `Model` type all along with no reader.
+- **`supports_tool_calls` is now filled and honoured.** flow, coding and claw
+  resolve it from the provider; the Agent leaves tools out of the request when
+  it is False, since the protocols write `body["tools"]` with no check of their
+  own. The field is tri-state: `None` means "nobody looked" and behaves like
+  True, so a caller that says nothing is unaffected.
+- **The `flow-workflows` skill was invisible in a checkout.** It was
+  force-included into the wheel from outside the package, so discovery found it
+  in production and nothing in development — the one environment where a
+  `skills:` reference gets written and tested.
+- **A bundle was missing `pyyaml`.** The vendored dependency list is written by
+  hand and drifted the moment a bundle first imported the skills package; the
+  unit died with `ModuleNotFoundError: No module named 'yaml'`. A test now scans
+  the vendored sources for unguarded third-party imports.
+- **`scheduling uninstall` deleted a bundle out from under a run.**
+  `disable --now` disarms a timer but does not end a run in progress. Uninstall
+  now stops first.
+
+---
+
 ## [2.0.1] — 2026-08-10
 
 ### Fixed
