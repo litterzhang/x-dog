@@ -12,6 +12,49 @@ Nothing yet.
 
 ---
 
+## [2.1.1] — 2026-08-12
+
+### Fixed
+
+- **A WeChat channel is one conversation, not one per sender** (`xdog-claw`).
+  The group id was derived from who was speaking, so every peer got a private
+  session, workspace, `MEMORY.md` and `IDENTITY.md`. Asking the agent its name
+  returned its routing key, because in a group nobody had ever configured, the
+  routing key *was* the identity.
+
+  The conversation is now a property of the channel, chosen once at login:
+
+  ```console
+  $ xdog-claw channel login --weixin --group main
+  ```
+
+  Everything keyed by group follows it — session, memory, persona, goals,
+  scheduled tasks. Reply addressing stays separate, in the channel's own peer
+  map, and now tracks whoever spoke most recently rather than only the first
+  sender. A change of peer is logged: on a personal bot it means someone else
+  reached it, which belongs in the journal rather than being inferred from a
+  stray answer.
+
+  Existing `weixin:<peer>` groups are left on disk; there is no history
+  migration. Note that **no peer admission check ships with this** — every
+  sender on a channel reaches the bound group. See
+  `docs/one-agent-many-channels.md`.
+- **Expired Copilot credentials say so** (`xdog-ai`). The proxy failing after a
+  few days was never a refresh bug: the Copilot JWT refreshes correctly. What
+  expires underneath is the stored GitHub OAuth token, and GitHub's 401 escaped
+  as a bare `HTTPStatusError` that the proxy rendered as a **500 `api_error`** —
+  so the client reported an internal error for something that is neither
+  internal nor a bug, and nothing said that one login would fix it.
+
+  A 401/403 from the token exchange now raises `AuthExpiredError` naming the
+  command, and the proxy returns a 401 `authentication_error`. A 500 from GitHub
+  is deliberately left generic: telling someone to sign in when signing in
+  cannot help is worse than a plain error. Each exchange logs its expiry — never
+  the token — because a silent refresh and no refresh at all look identical from
+  the outside, which is what made this take days to pin down.
+
+---
+
 ## [2.1.0] — 2026-08-11
 
 ### Added
