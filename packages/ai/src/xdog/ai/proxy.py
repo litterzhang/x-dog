@@ -34,6 +34,7 @@ from typing import Any
 
 from xdog.ai.types import (
     AssistantMessage,
+    AuthExpiredError,
     Context,
     DoneEvent,
     ErrorEvent,
@@ -710,6 +711,24 @@ async def _handle_connection(
             writer.close()
         except Exception:
             pass
+
+    except AuthExpiredError as exc:
+        # Not an internal error, and not the proxy's to fix: report it as the
+        # 401 it is, with the command that resolves it. Rendered as a 500 the
+        # client shows "API error" and the user has no way to know that one
+        # login would fix it.
+        logger.error("%s", exc)
+        try:
+            resp = json.dumps({
+                "type": "error",
+                "error": {"type": "authentication_error", "message": str(exc)},
+            }).encode()
+            writer.write(_http_response(401, "Unauthorized", resp))
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
 
     except Exception as exc:
         logger.exception("Proxy request failed")

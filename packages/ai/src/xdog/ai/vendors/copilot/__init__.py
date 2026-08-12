@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from xdog.ai.core import AuthResult, BaseVendor
+from xdog.ai.types import AuthExpiredError
 
 if TYPE_CHECKING:
     from xdog.ai.types import Context, Model
@@ -165,10 +166,26 @@ async def _exchange_copilot_token(github_token: str) -> dict[str, Any]:
                 **COPILOT_HEADERS,
             },
         )
+        if resp.status_code in (401, 403):
+            # The stored GitHub OAuth token was rejected. It is long-lived but
+            # not permanent -- revoked, or the Copilot entitlement lapsed --
+            # and until now this surfaced as a bare HTTPStatusError rendered
+            # as a 500, which reads as "the proxy broke" rather than "sign in".
+            raise AuthExpiredError(
+                "GitHub Copilot", "xdog-ai login",
+                f"token exchange returned {resp.status_code}",
+            )
         resp.raise_for_status()
         data = resp.json()
 
     expires_at = data.get("expires_at", 0)
+    # Logged because a silent refresh is indistinguishable from no refresh at
+    # all when someone is trying to work out why auth died overnight. The
+    # expiry, never the token.
+    logger.info(
+        "Copilot token exchanged, expires_at=%s",
+        expires_at if isinstance(expires_at, (int, float)) else "unknown",
+    )
     endpoints = data.get("endpoints", {})
     return {
         "token": data.get("token", ""),

@@ -511,6 +511,25 @@ class StatusEvent:
     detail: str = ""
 
 
+class AuthExpiredError(RuntimeError):
+    """Stored credentials were rejected; a human has to log in again.
+
+    Distinct from a transport failure or an upstream outage, because the
+    remedy is different and only the user can apply it. Vendors raise this
+    instead of letting the underlying 401 escape, so callers can say what to
+    do rather than reporting an internal error for something that is neither
+    internal nor a bug.
+    """
+
+    def __init__(self, vendor: str, command: str, detail: str = "") -> None:
+        self.vendor = vendor
+        self.command = command
+        msg = f"{vendor} credentials are no longer valid. Run `{command}` to sign in again."
+        if detail:
+            msg = f"{msg} ({detail})"
+        super().__init__(msg)
+
+
 @dataclass(frozen=True)
 class ErrorEvent:
     """Emitted when an error occurs during streaming.
