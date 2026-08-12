@@ -69,6 +69,19 @@ Unbound peers should get **their own group, or nothing** — never the owner's.
 The failure to avoid is silent: a stranger's message answered from your memory,
 with no signal that it happened.
 
+### Status: shipped without an answer, deliberately
+
+The channel→group binding landed (`channel login --group`, default `main`) and
+**no admission check came with it**. Every sender on a channel reaches the bound
+group. This was an explicit decision, not an oversight: the bot id is private
+and unshared, so the exposure is theoretical today.
+
+It stops being theoretical the moment that id is given to anyone, or the bot is
+listed anywhere. The mitigation is already half-built — the peer-change log line
+in `_on_inbound` fires whenever a different sender appears, so the arrival of a
+stranger is visible in the journal even though it is not refused. If this is
+picked up later, "allowlist in config" above is the row to implement.
+
 ## What else moves with the group
 
 Merging channels into one group merges everything keyed by it, which is the
