@@ -29,6 +29,7 @@ from xdog.flow.models import (
     agent_is_structured,
     agent_output_schema,
     edge_identities,
+    submit_instruction,
 )
 from xdog.flow.preview import render_preview_runtime
 from xdog.flow.result import render_run_result
@@ -149,6 +150,7 @@ _SDK_RUN_AGENT = '''async def _run_agent(
     prompt: str,
     tools: tuple[AgentTool, ...] = (),
     output_schema: dict[str, object] | None = None,
+    submit_hint: str = "",
     web_search_model: str | None = None,
     inherit_from: str | None = None,
     skills: tuple[str, ...] = (),
@@ -181,12 +183,11 @@ _SDK_RUN_AGENT = '''async def _run_agent(
             "flow_output_schema": output_schema,
             "flow_result_sink": _sink,
         }
-        _props = output_schema.get("properties")
-        _fields = ", ".join(_props) if isinstance(_props, dict) else "the required fields"
-        _sys = _sys + (
-            "\\nWhen finished, you MUST call the submit_result tool"
-            f" with an object containing these fields: {_fields}."
-        )
+        # Computed by the generator via models.submit_instruction, the same
+        # function the interpreter calls -- deriving it here from
+        # output_schema alone cannot work, because a single structured port's
+        # schema is the port's own and carries no field name.
+        _sys = _sys + submit_hint
     # Built-in web_search tool (search model may differ from the node model).
     _web_search_fn: Callable[[str], Awaitable[str]] | None = None
     if web_search_model is not None:
@@ -712,6 +713,7 @@ def _render_agent_node(node: NodeDef, fn_name: str, wf: WorkflowDef) -> str:
     _structured = agent_is_structured(node)
     if _structured:
         _call_args.append(f"output_schema={agent_output_schema(node)!r}")
+        _call_args.append(f"submit_hint={submit_instruction(node)!r}")
     if node.web_search:
         _call_args.append(f'web_search_model="{_ESC(node.web_search_model or model)}"')
     if node.inherit is not None:

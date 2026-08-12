@@ -343,6 +343,37 @@ def agent_submits_object(node: NodeDef) -> bool:
     return agent_is_structured(node) and len(node.output_ports) > 1
 
 
+def submit_instruction(node: NodeDef) -> str:
+    """The system-prompt line telling a structured agent what to submit.
+
+    It lives next to :func:`agent_output_schema` because the two must agree,
+    and for a long time they did not. The instruction said "an object
+    containing these fields: X" for *every* structured node, while the schema
+    for a **single** structured port is that port's own schema -- so a node
+    with one ``array`` port told the model to send ``{"x": [...]}`` and then
+    validated it against ``{"type": "array"}``.
+
+    The branch is :func:`agent_submits_object`, which is the single definition
+    of "returns a port-keyed object rather than one value" -- re-deriving it
+    here as ``len(ports) == 1`` is exactly the drift that docstring warns
+    about, and is how these two ended up disagreeing in the first place.
+    """
+    ports = node.output_ports
+    if not agent_submits_object(node):
+        port = ports[0]
+        kind = str(port.schema.get("type") or "value")
+        return (
+            f"\nWhen finished, you MUST call the submit_result tool."
+            f" Pass the {port.name} value ITSELF as `result` -- a JSON {kind}."
+            f" Do not wrap it in an object."
+        )
+    field_names = ", ".join(p.name for p in ports)
+    return (
+        f"\nWhen finished, you MUST call the submit_result tool"
+        f" with an object containing these fields: {field_names}."
+    )
+
+
 def agent_output_schema(node: NodeDef) -> dict[str, object]:
     """The JSON Schema an agent's ``submit_result`` object is validated against.
 

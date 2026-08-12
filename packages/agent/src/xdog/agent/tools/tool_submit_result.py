@@ -92,15 +92,31 @@ class SubmitResultTool(ToolDef):
 
     name = "submit_result"
     description = (
-        "Submit your final structured result as an object. It is validated "
-        "against the required schema; if validation fails you receive an error "
-        "and must fix the object and call submit_result again."
+        "Submit your final structured result. It is validated against the "
+        "required schema; if validation fails you receive an error and must "
+        "fix the value and call submit_result again."
     )
     params = {
         "result": Param(
-            "object",
+            # Deliberately untyped: the real schema arrives at call time via
+            # ``flow_output_schema``, and it is not always an object. flow gives
+            # a node with a single structured output port that port's OWN
+            # schema, so an agent whose one output is an array must submit an
+            # array.
+            #
+            # Declaring "object" here made that impossible. The argument check
+            # runs first and rejected the array with "expected object, got
+            # list" before the real schema was ever consulted, so the tool
+            # errored, the sink stayed empty, and the run failed with "agent did
+            # not submit a result" -- while the model had done exactly what it
+            # was told. It even said so in its reply: "the submission tool
+            # rejected the array (it requires an object)".
+            "",
             required=True,
-            description="The structured result object to submit.",
+            description=(
+                "The result to submit: an object when several fields were "
+                "asked for, otherwise the value itself (array, string, number)."
+            ),
         ),
     }
 

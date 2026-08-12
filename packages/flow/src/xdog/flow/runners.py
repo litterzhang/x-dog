@@ -28,7 +28,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from xdog.flow.errors import WorkflowExecutionError
-from xdog.flow.models import NodeDef, agent_is_structured, agent_output_schema
+from xdog.flow.models import (
+    NodeDef,
+    agent_is_structured,
+    agent_output_schema,
+    submit_instruction,
+)
 
 if TYPE_CHECKING:
     from xdog.agent.core import StreamFn, WebSearchFn
@@ -271,14 +276,10 @@ class SdkRunner:
                 "flow_output_schema": agent_output_schema(node),
                 "flow_result_sink": sink,
             }
-            field_names = ", ".join(p.name for p in node.output_ports)
             # `final_sys_prompt`, not `system_prompt`: restarting from the raw
             # prompt here dropped the workspace briefing for exactly the nodes
             # doing the most work, and only in this engine -- codegen appends.
-            final_sys_prompt = final_sys_prompt + (
-                f"\nWhen finished, you MUST call the submit_result tool"
-                f" with an object containing these fields: {field_names}."
-            )
+            final_sys_prompt = final_sys_prompt + submit_instruction(node)
 
         web_search_fn = None
         if node.web_search and self._web_search_fn_factory is not None:

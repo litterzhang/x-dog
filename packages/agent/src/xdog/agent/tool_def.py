@@ -359,7 +359,12 @@ class ToolDef:
 
                 # First definition wins for the schema type
                 if param_name not in param_defs:
-                    prop: dict[str, Any] = {"type": param.type}
+                    # An empty ``type`` means "any JSON value": the property is
+                    # emitted without a type, which is how JSON Schema says
+                    # "unconstrained". Needed by tools whose real schema is
+                    # supplied at call time -- declaring a concrete type there
+                    # rejects valid values before that schema is ever consulted.
+                    prop: dict[str, Any] = {"type": param.type} if param.type else {}
                     if param.description:
                         prop["description"] = param.description
                     if param.enum is not None:
@@ -402,7 +407,8 @@ class ToolDef:
         properties: dict[str, Any] = {}
         required: list[str] = []
         for param_name, param in declared.items():
-            prop: dict[str, Any] = {"type": param.type}
+            # Empty type == any JSON value; see the note in the other builder.
+            prop: dict[str, Any] = {"type": param.type} if param.type else {}
             if param.description:
                 prop["description"] = param.description
             if param.enum is not None:

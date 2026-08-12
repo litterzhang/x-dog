@@ -90,9 +90,52 @@ def test_submit_result_is_registered():
     assert "submit_result" in registered_tool_names()
 
 
-def test_tool_schema_exposes_result_param():
+def test_tool_schema_leaves_result_untyped():
+    """`result` must accept any JSON value, not just an object.
+
+    It used to declare ``"type": "object"``. The argument check runs before the
+    real schema (``flow_output_schema``) is consulted, so an agent whose single
+    output port is an array -- which flow validates against that port's OWN
+    schema -- had its correct array rejected with "expected object, got list".
+    The tool errored, the sink stayed empty, and the run reported "agent did
+    not submit a result" while the model had done exactly what it was asked.
+
+    An untyped property is JSON Schema for "unconstrained", which leaves the
+    per-call schema as the only validator -- which is where the contract
+    actually lives.
+    """
     tool = create_submit_result_tool()
     assert tool.name == "submit_result"
     props = tool.parameters["properties"]
-    assert props["result"]["type"] == "object"
+    assert "type" not in props["result"], (
+        "a concrete type here rejects valid values before the real schema is "
+        "ever applied"
+    )
     assert "result" in tool.parameters["required"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema,value",
+    [
+        ({"type": "array", "items": {"type": "string"}}, ["a", "b"]),
+        ({"type": "string"}, "just text"),
+        ({"type": "number"}, 3.5),
+        ({"type": "object"}, {"x": 1}),
+    ],
+    ids=["array", "string", "number", "object"],
+)
+async def test_a_non_object_result_is_accepted_when_the_schema_allows_it(
+    schema, value
+):
+    """Every one of these except the last was impossible before."""
+    sink: dict[str, object] = {}
+    tool = create_submit_result_tool()
+    out = await tool.execute(
+        "c1",
+        {"result": value},
+        ctx={"flow_output_schema": schema, "flow_result_sink": sink},
+    )
+
+    assert "accepted" in _text(out).lower(), _text(out)
+    assert sink["result"] == value
