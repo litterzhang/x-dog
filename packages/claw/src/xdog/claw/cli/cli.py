@@ -451,10 +451,16 @@ def channel() -> None:
 @channel.command()
 @click.option("--config", "config_path", type=click.Path(), default=None,
               help=f"Path to config.yaml (default: {get_config_path()})")
+@click.option("--group", "group_id", default="main", show_default=True,
+              help=(
+                  "The conversation this channel delivers into. A channel is a way to "
+                  "reach an agent, not an agent of its own: messages arriving here join "
+                  "that group's session, memory and persona instead of starting a new one."
+              ))
 @click.option("--weixin", "use_weixin", is_flag=True, default=False,
               help="Log in to WeChat channel")
 @click.option("--base-url", default="", help="API base URL (WeChat only)")
-def login(config_path: str | None, use_weixin: bool, base_url: str) -> None:
+def login(config_path: str | None, group_id: str, use_weixin: bool, base_url: str) -> None:
     """Log in to a channel."""
     if not use_weixin:
         click.echo("Error: specify a channel, e.g. --weixin", err=True)
@@ -509,11 +515,13 @@ def login(config_path: str | None, use_weixin: bool, base_url: str) -> None:
                 base_url=wait_result.base_url or api_base,
                 user_id=wait_result.user_id,
                 saved_at=datetime.now(timezone.utc).isoformat(),
+                group_id=group_id or "main",
             )
             save_account(state_dir, normalized_id, account_data)
             register_account_id(state_dir, normalized_id)
             _update_config_weixin(config_file, normalized_id)
-            click.echo(f"\nWeChat connected: {normalized_id}")
+            click.echo(f"\nWeChat connected: {normalized_id} → group {group_id or 'main'}")
+            click.echo("Restart the gateway to apply: xdog-claw gateway stop && ... start")
         else:
             click.echo(f"\n{wait_result.message}", err=True)
             sys.exit(1)

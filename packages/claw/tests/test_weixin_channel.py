@@ -96,7 +96,11 @@ async def test_inbound_message_conversion(tmp_path):
 
     assert len(received) == 1
     inbound = received[0]
-    assert inbound.group_id == "weixin:user1-im-wechat"
+    # The bound conversation, not one derived from the sender. Deriving it gave
+    # every peer its own session, memory and persona — the agent introduced
+    # itself by its routing key because that key was its IDENTITY.md.
+    assert inbound.group_id == "main"
+    # The sender is still carried, because a reply has to find its way back.
     assert inbound.sender == "user1@im.wechat"
     assert inbound.content == "Hi there!"
     assert inbound.channel == "weixin"
@@ -187,7 +191,7 @@ async def test_user_id_map_persistence(tmp_path):
     # Verify persisted
     from xdog.claw.channels.weixin.channel import _load_user_id_map
     loaded = _load_user_id_map(tmp_path, "test-acct")
-    assert loaded["weixin:user1-im-wechat"] == "user1@im.wechat"
+    assert loaded["main"] == "user1@im.wechat"
 
     # New channel instance should load the map
     ch2 = WeixinChannel(
@@ -199,5 +203,60 @@ async def test_user_id_map_persistence(tmp_path):
     with patch("xdog.claw.channels.weixin.channel.run_monitor", new_callable=AsyncMock):
         await ch2.connect()
 
-    assert ch2._user_id_map["weixin:user1-im-wechat"] == "user1@im.wechat"
+    assert ch2._user_id_map["main"] == "user1@im.wechat"
     await ch2.disconnect()
+
+
+def _text_msg(from_user_id: str, text: str) -> WeixinMessage:
+    return WeixinMessage(
+        from_user_id=from_user_id,
+        message_type=MessageType.USER,
+        item_list=(
+            MessageItem(type=MessageItemType.TEXT, text_item=TextItem(text=text)),
+        ),
+        create_time_ms=1700000000000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_all_peers_on_a_channel_share_one_conversation(tmp_path):
+    """Two people messaging the same channel land in the same group.
+
+    This is the whole point of the redesign. A channel is a way to REACH an
+    agent, not an agent of its own — so who spoke must not decide which
+    session, memory and persona they reach.
+    """
+    ch = WeixinChannel(
+        state_dir=tmp_path,
+        account_id="test-acct",
+        base_url="https://test.example.com",
+        token="test-token",
+        group_id="work",
+    )
+    received: list[UserInput] = []
+
+    async def on_msg(msg: UserInput) -> None:
+        received.append(msg)
+
+    ch.set_on_message(on_msg)
+
+    await ch._on_inbound(_text_msg("alice@im.wechat", "from alice"))
+    await ch._on_inbound(_text_msg("bob@im.wechat", "from bob"))
+
+    assert [m.group_id for m in received] == ["work", "work"]
+    # ...and the sender is still distinguishable, so a reply can be addressed.
+    assert [m.sender for m in received] == ["alice@im.wechat", "bob@im.wechat"]
+    # The reply address follows the most recent speaker rather than accumulating
+    # one entry per peer; a stale address would send bob's answer to alice.
+    assert ch._user_id_map["work"] == "bob@im.wechat"
+
+
+@pytest.mark.asyncio
+async def test_channel_defaults_to_main_group(tmp_path):
+    ch = WeixinChannel(
+        state_dir=tmp_path,
+        account_id="test-acct",
+        base_url="https://test.example.com",
+        token="test-token",
+    )
+    assert ch._group_id == "main"

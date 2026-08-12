@@ -34,6 +34,10 @@ class WeixinAccountData:
     base_url: str = ""
     user_id: str = ""
     saved_at: str = ""
+    #: The conversation this channel delivers into. A channel is a way to reach
+    #: an agent, not an agent of its own -- messages from here join the named
+    #: group's session, memory and persona instead of starting a new one.
+    group_id: str = "main"
 
 
 def _accounts_dir(state_dir: Path) -> Path:
@@ -58,6 +62,7 @@ def load_account(state_dir: Path, account_id: str) -> WeixinAccountData | None:
         return WeixinAccountData(
             token=raw.get("token", ""),
             base_url=raw.get("base_url", raw.get("baseUrl", "")),
+            group_id=raw.get("group_id") or "main",
             user_id=raw.get("user_id", raw.get("userId", "")),
             saved_at=raw.get("saved_at", raw.get("savedAt", "")),
         )

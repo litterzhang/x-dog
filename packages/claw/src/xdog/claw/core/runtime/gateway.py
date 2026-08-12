@@ -416,6 +416,7 @@ class GatewayServer:
         account_id = config.weixin_account_id
         token = config.weixin_token
         base_url = config.weixin_base_url
+        group_id = "main"
 
         # Try loading token from account file if not in config
         if account_id and not token:
@@ -423,6 +424,7 @@ class GatewayServer:
             if account_data:
                 token = account_data.token
                 base_url = base_url or account_data.base_url
+                group_id = account_data.group_id or "main"
 
         if not token:
             logger.warning(
@@ -438,6 +440,7 @@ class GatewayServer:
             account_id=account_id,
             base_url=base_url,
             token=token,
+            group_id=group_id,
         )
         if self._orchestrator is None:
             # Every other use in this file guards; this one did not, so adding
@@ -450,8 +453,9 @@ class GatewayServer:
         # Channel was added after orchestrator.start(), so connect manually
         asyncio.get_event_loop().create_task(weixin.connect())
         logger.info(
-            "WeChat channel added: account=%s base_url=%s",
+            "WeChat channel added: account=%s group=%s base_url=%s",
             account_id,
+            group_id,
             base_url,
         )
 

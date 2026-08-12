@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 from pathlib import Path
@@ -74,15 +73,6 @@ def _body_from_item_list(items: tuple[MessageItem, ...]) -> str:
         if item.type == MessageItemType.VOICE and item.voice_item and item.voice_item.text:
             return item.voice_item.text
     return ""
-
-
-def _weixin_user_id_to_group_id(user_id: str) -> str:
-    """Map a WeChat user ID to a claw group ID.
-
-    ``"abc123@im.wechat"`` → ``"weixin:abc123-im-wechat"``
-    """
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", user_id)
-    return f"weixin:{safe}"
 
 
 def _generate_client_id() -> str:
@@ -221,9 +211,15 @@ class WeixinChannel(Channel):
         account_id: str,
         base_url: str,
         token: str,
+        group_id: str = "main",
     ) -> None:
         self._state_dir = state_dir
         self._account_id = account_id
+        # The conversation this channel delivers into. A channel is a way to
+        # reach an agent, not an agent of its own: deriving the group from the
+        # sender gave every peer its own session, memory and persona, which is
+        # why the agent introduced itself by its routing key.
+        self._group_id = group_id or "main"
         self._base_url = base_url
         self._token = token
         self._cancel_event = asyncio.Event()
@@ -374,10 +370,20 @@ class WeixinChannel(Channel):
             )
             return
 
-        # Map to claw group_id
-        group_id = _weixin_user_id_to_group_id(from_user_id)
-        # Store reverse mapping for outbound (and persist)
-        if group_id not in self._user_id_map:
+        # The bound conversation, not one derived from who is speaking.
+        group_id = self._group_id
+        # Remember where a reply goes. Updated on every message, not only the
+        # first: with one group serving a channel, the reply belongs to whoever
+        # just spoke. A change of peer is logged rather than silent — on a
+        # personal bot it means someone else reached it, and that is worth
+        # seeing in the journal instead of inferring from a stray answer.
+        previous = self._user_id_map.get(group_id)
+        if previous != from_user_id:
+            if previous is not None:
+                logger.info(
+                    "group %s: replies now go to %s (was %s)",
+                    group_id, from_user_id, previous,
+                )
             self._user_id_map[group_id] = from_user_id
             _save_user_id_map(self._state_dir, self._account_id, self._user_id_map)
 
