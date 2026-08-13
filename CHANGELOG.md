@@ -12,6 +12,55 @@ Nothing yet.
 
 ---
 
+## [2.1.2] — 2026-08-13
+
+### Fixed
+
+- **`submit_result` rejected every non-object result** (`xdog-flow`,
+  `xdog-agent`). An agent node whose single output port is an array could never
+  succeed. The tool declared `result` as an object, and argument validation
+  runs *before* the per-call schema, so the array the node's own schema
+  demanded came back as "expected object, got list" — the tool errored, the
+  sink stayed empty, and the run failed with "agent did not submit a result via
+  submit_result".
+
+  That message blames the model, and the model was innocent; watching the event
+  stream it said so itself: *"the submission tool rejected the array (it
+  requires an object)"*. `result` is now untyped — JSON Schema for "any value" —
+  leaving `flow_output_schema` as the only validator, which is where the
+  contract actually lives. The system prompt agreed with the old, wrong rule
+  and now branches on `agent_submits_object`, in both engines.
+
+  No stub suite could catch this: a stub *is* the submitted result, so it
+  supplies the very value the tool exists to elicit. It appears only against a
+  real model, and only for a node whose one output port is not a plain string.
+
+### Changed
+
+- **Renamed `x-dog` to `xdog`.** The import namespace and every published
+  package were already `xdog`/`xdog-*`; only the repository and the
+  human-facing string were hyphenated.
+
+  **This moves your state.** Config is now `~/.config/xdog` and data
+  `~/.local/xdog`; the scheduler's bundles and registry move from
+  `~/.local/share/xdog-flow` to `~/.local/share/xdog/flow`. Nothing migrates
+  automatically and there is no compatibility fallback, so **after upgrading
+  you will appear logged out** — with no error, because nothing looks in the
+  old place. Move them yourself:
+
+  ```console
+  $ mv ~/.config/x-dog ~/.config/xdog
+  $ mv ~/.local/x-dog ~/.local/xdog
+  $ mv ~/.local/share/x-dog ~/.local/share/xdog        # claw, coding state
+  $ mv ~/.local/share/xdog-flow ~/.local/share/xdog/flow
+  ```
+
+  `xdog-flow` remains the command name and the systemd unit name; only the
+  directory moved. GitHub redirects the old repository URL, so existing
+  remotes and the links in 2.1.1's metadata keep working.
+
+---
+
 ## [2.1.1] — 2026-08-12
 
 ### Fixed
