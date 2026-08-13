@@ -27,9 +27,9 @@ class ChatLog(Container):
         """Add a user message."""
         self._append(UserMessageComponent(text, self._theme))
 
-    def add_assistant(self, text: str) -> None:
-        """Add a completed assistant message."""
-        self._append(AssistantMessageComponent(text, self._theme))
+    def add_assistant(self, text: str, *, thinking: str = "") -> None:
+        """Add a completed assistant message, including visible reasoning."""
+        self._append(AssistantMessageComponent(text, self._theme, thinking=thinking))
 
     def add_system(self, text: str) -> None:
         """Add a system/info message."""
@@ -46,33 +46,51 @@ class ChatLog(Container):
         """Return the most recently added tool execution component."""
         return self._last_tool
 
-    def start_assistant(self, text: str, stream_id: str = "default") -> AssistantMessageComponent:
+    def start_assistant(
+        self,
+        text: str,
+        stream_id: str = "default",
+        *,
+        thinking: str = "",
+    ) -> AssistantMessageComponent:
         """Start a new streaming assistant message."""
         existing = self._streaming.get(stream_id)
         if existing is not None:
-            existing.set_text(text)
+            existing.set_content(text, thinking=thinking)
             return existing
-        comp = AssistantMessageComponent(text, self._theme)
+        comp = AssistantMessageComponent(text, self._theme, thinking=thinking)
         self._streaming[stream_id] = comp
         self._append(comp)
         return comp
 
-    def update_assistant(self, text: str, stream_id: str = "default") -> None:
+    def update_assistant(
+        self,
+        text: str,
+        stream_id: str = "default",
+        *,
+        thinking: str = "",
+    ) -> None:
         """Update an existing streaming assistant message."""
         existing = self._streaming.get(stream_id)
         if existing is None:
-            self.start_assistant(text, stream_id)
+            self.start_assistant(text, stream_id, thinking=thinking)
             return
-        existing.set_text(text)
+        existing.set_content(text, thinking=thinking)
 
-    def finalize_assistant(self, text: str, stream_id: str = "default") -> None:
+    def finalize_assistant(
+        self,
+        text: str,
+        stream_id: str = "default",
+        *,
+        thinking: str = "",
+    ) -> None:
         """Finalize a streaming assistant message."""
         existing = self._streaming.get(stream_id)
         if existing is not None:
-            existing.set_text(text)
+            existing.set_content(text, thinking=thinking)
             del self._streaming[stream_id]
             return
-        self._append(AssistantMessageComponent(text, self._theme))
+        self._append(AssistantMessageComponent(text, self._theme, thinking=thinking))
 
     def drop_assistant(self, stream_id: str = "default") -> None:
         """Remove a streaming assistant component (e.g. on abort)."""

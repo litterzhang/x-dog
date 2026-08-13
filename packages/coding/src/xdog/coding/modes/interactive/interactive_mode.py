@@ -27,22 +27,29 @@ from typing import Any
 
 from xdog.agent import (
     AgentEvent,
+    MessageEndEvent,
+    MessageStartEvent,
     MessageUpdateEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+    TurnEndEvent,
 )
 from xdog.ai.types import (
     AssistantMessage,
     TextContent,
+    ThinkingContent,
+    ToolCall,
+    ToolResultMessage,
     UserMessage,
 )
 from xdog.coding.core.agent_session import AgentSession
-from xdog.coding.core.defaults import MAX_CONTEXT_TOKENS
+from xdog.coding.core.permissions import PermissionDecision, PermissionRequest
 from xdog.coding.core.slash_commands import execute_command, parse_slash_command
 from xdog.coding.modes.interactive.components.chat_log import ChatLog
 from xdog.coding.modes.interactive.components.custom_editor import CustomEditorComponent
 from xdog.coding.modes.interactive.components.footer import FooterComponent
+from xdog.coding.modes.interactive.components.permission_prompt import PermissionPromptComponent
 from xdog.coding.modes.interactive.theme import create_default_theme
 from xdog.tui.components.loader import Loader
 from xdog.tui.components.text import Text
@@ -102,9 +109,14 @@ class InteractiveMode:
         self._last_ctrl_c_at = 0.0
         self._is_busy = False
         self._busy_started: float | None = None
+        self._last_busy_label = ""
         self._streaming_text = ""
-        self._stream_id = "default"
+        self._streaming_thinking = ""
+        self._stream_sequence = 0
+        self._stream_id = "assistant-0"
         self._last_tool_component: Any = None
+        self._permission_prompt: PermissionPromptComponent | None = None
+        self._awaiting_permission = False
 
         # Event queue for thread-safe UI updates from agent events
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -117,6 +129,7 @@ class InteractiveMode:
         self._status_container = Container()
         self._footer = FooterComponent(self._theme)
         self._editor = CustomEditorComponent(self._theme)
+        self._permission_container = Container()
 
         # Status components
         self._status_text: Text | None = Text(self._theme.dim("ready"), 1, 0)
@@ -129,6 +142,9 @@ class InteractiveMode:
         root.add_child(self._status_container)
         root.add_child(self._footer)
         root.add_child(self._editor)
+        # Approval belongs directly after the input, not over conversation
+        # history. The container is empty except while a call is pending.
+        root.add_child(self._permission_container)
 
         self._tui.add_child(root)
         self._tui.set_focus(self._editor)
@@ -139,8 +155,10 @@ class InteractiveMode:
         self._editor.on_ctrl_d = self._request_exit
         self._editor.on_escape = self._handle_escape
 
-        # Subscribe to agent events
+        # Subscribe to agent events and permission requests. The latter callback
+        # runs in the background agent thread and only enqueues TUI work.
         self._unsubscribe = self._session.agent.subscribe(self._on_agent_event)
+        self._session.permissions.set_request_handler(self._on_permission_request)
 
     def run(self) -> None:
         """Start the interactive TUI (blocking)."""
@@ -162,11 +180,14 @@ class InteractiveMode:
         try:
             self._tui.start()
         finally:
+            self._session.permissions.set_request_handler(None)
+            self._session.permissions.deny_all()
             if self._unsubscribe is not None:
                 self._unsubscribe()
 
     def _replay_history(self) -> None:
-        """Replay existing messages from the session."""
+        """Replay messages, including persisted tool calls and their results."""
+        tool_components: dict[str, Any] = {}
         for msg in self._session.messages:
             if isinstance(msg, UserMessage):
                 text = msg.content if isinstance(msg.content, str) else ""
@@ -174,12 +195,23 @@ class InteractiveMode:
                     self._chat_log.add_user(text)
                     self._editor.add_to_history(text)
             elif isinstance(msg, AssistantMessage):
-                parts: list[str] = []
+                text, thinking = _assistant_content(msg)
+                if text or thinking:
+                    self._chat_log.add_assistant(text, thinking=thinking)
                 for part in msg.content:
-                    if isinstance(part, TextContent):
-                        parts.append(part.text)
-                if parts:
-                    self._chat_log.add_assistant("".join(parts))
+                    if isinstance(part, ToolCall):
+                        tool_components[part.id] = self._chat_log.add_tool(
+                            part.name,
+                            part.arguments,
+                        )
+            elif isinstance(msg, ToolResultMessage):
+                component = tool_components.pop(msg.tool_call_id, None)
+                if component is None:
+                    component = self._chat_log.add_tool(msg.tool_name, None)
+                result_text = "\n".join(
+                    part.text for part in msg.content if isinstance(part, TextContent)
+                )
+                component.set_result(result_text, is_error=msg.is_error)
 
     # -- Header / Footer --
 
@@ -197,12 +229,10 @@ class InteractiveMode:
             session_id=self._session.session_id,
             message_count=len(self._session.messages),
             thinking=str(thinking),
+            permission_mode=self._session.permissions.mode,
             working_dir=str(self._session.working_dir),
             context_tokens=_context_tokens_from_messages(self._session.messages),
-            # `self._session.model` is a model id, not an object: the previous
-            # `getattr(model, "context_window", 0)` could only ever return 0,
-            # so this footer has always shown the fallback. Name the fallback.
-            max_context=MAX_CONTEXT_TOKENS,
+            max_context=self._session.context_limit,
         )
 
     # -- Status management --
@@ -218,6 +248,7 @@ class InteractiveMode:
 
     def _set_status_busy(self, message: str = "thinking...") -> None:
         """Show an animated loader status."""
+        self._last_busy_label = message
         if self._status_loader is not None:
             self._status_loader.set_message(message)
             return
@@ -239,6 +270,7 @@ class InteractiveMode:
             self._set_status_busy(f"{phrase}...")
         else:
             self._busy_started = None
+            self._last_busy_label = ""
             self._set_status_text("ready")
 
     def _format_elapsed(self) -> str:
@@ -281,6 +313,7 @@ class InteractiveMode:
             self._chat_log.add_user(message)
         self._set_busy(True)
         self._streaming_text = ""
+        self._streaming_thinking = ""
 
         thread = threading.Thread(
             target=self._run_agent_turn,
@@ -379,18 +412,32 @@ class InteractiveMode:
 
     def _dispatch_agent_event(self, event: AgentEvent) -> None:
         """Convert agent events to UI update events (thread-safe)."""
-        if isinstance(event, MessageUpdateEvent):
+        if isinstance(event, MessageStartEvent):
+            if isinstance(event.message, AssistantMessage):
+                self._event_queue.put({"type": "assistant_start"})
+
+        elif isinstance(event, (MessageUpdateEvent, MessageEndEvent)):
+            # Some providers emit no incremental text event and deliver the
+            # complete response only in MessageEndEvent. Handling both keeps
+            # ordinary assistant text visible for streaming and non-streaming
+            # response paths.
             msg = event.message
             if isinstance(msg, AssistantMessage):
-                text_parts: list[str] = []
-                for part in msg.content:
-                    if isinstance(part, TextContent):
-                        text_parts.append(part.text)
-                if text_parts:
+                text, thinking = _assistant_content(msg)
+                if text or thinking:
                     self._event_queue.put({
                         "type": "text_update",
-                        "text": "".join(text_parts),
+                        "text": text,
+                        "thinking": thinking,
                     })
+                if isinstance(event, MessageEndEvent):
+                    self._event_queue.put({"type": "assistant_end"})
+
+        elif isinstance(event, TurnEndEvent):
+            # One user prompt can contain several model/tool turns. Refresh the
+            # footer after each one so message count and context usage do not
+            # remain stale until the entire agent loop finishes.
+            self._event_queue.put({"type": "turn_footer_update"})
 
         elif isinstance(event, ToolExecutionStartEvent):
             self._event_queue.put({
@@ -435,6 +482,9 @@ class InteractiveMode:
 
     # -- Agent event subscription (runs in agent thread) --
 
+    def _on_permission_request(self, request: PermissionRequest) -> None:
+        self._event_queue.put({"type": "permission_request", "request": request})
+
     def _on_agent_event(self, event: AgentEvent) -> None:
         """Handle agent lifecycle events (called from agent thread)."""
         # This is the subscription handler — we don't need to duplicate
@@ -456,29 +506,86 @@ class InteractiveMode:
             except queue.Empty:
                 break
 
-        if self._is_busy:
+        if self._is_busy and not self._awaiting_permission:
             elapsed = self._format_elapsed()
-            if self._status_loader:
-                self._status_loader.set_message(f"thinking... • {elapsed}")
-            changed = True
+            label = f"thinking... • {elapsed}"
+            # The spinner has its own 80 ms render timer. Only change its text
+            # when the elapsed label changes instead of invalidating the whole
+            # TUI on every 30 FPS poll.
+            if self._status_loader and label != self._last_busy_label:
+                self._status_loader.set_message(label)
+                self._last_busy_label = label
+                changed = True
 
         if changed:
             self._tui.request_render()
+
+    def _show_permission_request(self, request: PermissionRequest) -> None:
+        """Display a focused approval panel immediately after the input."""
+        self._permission_container.clear()
+
+        def _decide(decision: PermissionDecision) -> None:
+            self._session.permissions.resolve(request.id, decision)
+            self._permission_container.clear()
+            self._permission_prompt = None
+            self._awaiting_permission = False
+            self._tui.set_focus(self._editor)
+            if self._is_busy:
+                self._set_status_busy("resuming...")
+            self._tui.request_render()
+
+        prompt = PermissionPromptComponent(request, self._theme, _decide)
+        self._permission_prompt = prompt
+        self._permission_container.add_child(prompt)
+        self._tui.set_focus(prompt)
+        self._awaiting_permission = True
+        self._set_status_text("awaiting tool permission")
+
+    def _finalize_streaming_assistant(self) -> None:
+        """Finish the current model message without crossing tool boundaries."""
+        if self._streaming_text or self._streaming_thinking:
+            self._chat_log.finalize_assistant(
+                self._streaming_text,
+                self._stream_id,
+                thinking=self._streaming_thinking,
+            )
+        self._streaming_text = ""
+        self._streaming_thinking = ""
 
     def _handle_ui_event(self, event: dict[str, Any]) -> None:
         """Handle a UI event from the event queue."""
         event_type = event.get("type")
 
-        if event_type == "text_update":
+        if event_type == "assistant_start":
+            # Every model response gets its own chat component. Reusing one
+            # component for the whole agent loop caused a post-tool answer to
+            # replace the pre-tool reasoning in place, making the latest text
+            # appear before the tool result.
+            self._finalize_streaming_assistant()
+            self._stream_sequence += 1
+            self._stream_id = f"assistant-{self._stream_sequence}"
+
+        elif event_type == "text_update":
             text = event.get("text", "")
+            thinking = event.get("thinking", "")
             self._streaming_text = text
-            self._chat_log.update_assistant(text, self._stream_id)
+            self._streaming_thinking = thinking
+            self._chat_log.update_assistant(
+                text,
+                self._stream_id,
+                thinking=thinking,
+            )
 
         elif event_type == "tool_call":
             name = event.get("name", "")
             arguments = event.get("arguments", {})
             self._chat_log.add_tool(name, arguments)
             self._last_tool_component = self._chat_log.get_last_tool()
+
+        elif event_type == "permission_request":
+            request = event.get("request")
+            if isinstance(request, PermissionRequest):
+                self._show_permission_request(request)
 
         elif event_type == "tool_update":
             # Live streaming output from bash
@@ -493,11 +600,16 @@ class InteractiveMode:
                 self._last_tool_component.set_result(result, is_error=is_error)
                 self._last_tool_component = None
 
+        elif event_type == "assistant_end":
+            self._finalize_streaming_assistant()
+
+        elif event_type == "turn_footer_update":
+            self._update_footer()
+            self._update_header()
+
         elif event_type == "turn_end":
             self._set_busy(False)
-            if self._streaming_text:
-                self._chat_log.finalize_assistant(self._streaming_text, self._stream_id)
-                self._streaming_text = ""
+            self._finalize_streaming_assistant()
             self._update_footer()
             self._update_header()
 
@@ -519,7 +631,20 @@ class InteractiveMode:
             self._chat_log.drop_assistant(self._stream_id)
             self._chat_log.add_system(self._theme.error(f"Error: {message}"))
             self._streaming_text = ""
+            self._streaming_thinking = ""
             self._update_footer()
+
+
+def _assistant_content(message: AssistantMessage) -> tuple[str, str]:
+    """Extract visible response and reasoning text from an assistant message."""
+    text: list[str] = []
+    thinking: list[str] = []
+    for part in message.content:
+        if isinstance(part, TextContent):
+            text.append(part.text)
+        elif isinstance(part, ThinkingContent) and not part.redacted:
+            thinking.append(part.thinking)
+    return "".join(text), "".join(thinking)
 
 
 def run_interactive_mode(

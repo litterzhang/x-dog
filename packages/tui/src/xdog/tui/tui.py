@@ -458,9 +458,14 @@ class TUI(Container):
         if not self._overlay_stack:
             return base_lines
 
-        # Start with a copy of base lines, padded to full height
+        # Overlay coordinates are viewport-relative, while base_lines contains
+        # the entire main-buffer history. Positioning at row 0 of base_lines
+        # puts a dialog near the beginning of a long conversation, outside the
+        # currently visible terminal viewport. Translate screen rows to the
+        # tail viewport before compositing.
         result = list(base_lines)
-        while len(result) < height:
+        viewport_top = max(0, len(result) - height)
+        while len(result) < viewport_top + height:
             result.append("")
 
         for entry in self._overlay_stack:
@@ -499,7 +504,7 @@ class TUI(Container):
 
             # Composite overlay onto result
             for i, ov_line in enumerate(ov_lines):
-                target_row = row + i
+                target_row = viewport_top + row + i
                 if 0 <= target_row < len(result):
                     base = result[target_row]
                     # Pad base line to width if needed
@@ -510,7 +515,7 @@ class TUI(Container):
                     suffix = base_padded[suffix_start:] if suffix_start < len(base_padded) else ""
                     result[target_row] = prefix + ov_line + suffix
 
-        return result[:max(len(base_lines), height)]
+        return result[:max(len(base_lines), viewport_top + height)]
 
     def _calculate_overlay_position(
         self,
@@ -592,8 +597,18 @@ class TUI(Container):
             nonlocal hardware_cursor_row, viewport_top
             buf = "\x1b[?2026h"  # Begin synchronized output
             if clear:
-                buf += "\x1b[3J\x1b[2J\x1b[H"  # Clear scrollback, screen, home
-            for i, line in enumerate(new_lines):
+                # Clear only the visible screen. CSI 3 J also erases terminal
+                # scrollback and can snap the user's viewport to the top during
+                # routine full redraws (resize, shrinking input, or pruning).
+                buf += "\x1b[2J\x1b[H"  # Clear screen and home; preserve scrollback
+            # A clear redraw starts from the visible screen, not from the
+            # beginning of the logical conversation. Reprinting every logical
+            # line would push the whole chat into terminal scrollback again and
+            # look like history was being replayed. The initial render still
+            # writes all lines once so genuine terminal scrollback is created.
+            first_line = max(0, len(new_lines) - height) if clear else 0
+            visible_lines = new_lines[first_line:]
+            for i, line in enumerate(visible_lines):
                 if i > 0:
                     buf += "\r\n"
                 buf += line

@@ -138,8 +138,11 @@ def _run_interactive(session: Any, verbose: bool) -> None:
 
 def _run_simple_repl(session: Any, verbose: bool) -> None:
     """Simple REPL fallback when the TUI is not available."""
-    model_name = session.model.id if session.model else "unknown"
-    thinking = session.agent.state.thinking_level or "off"
+    from xdog.coding.modes.print_mode import _terminal_permission_handler
+
+    session.permissions.set_request_handler(_terminal_permission_handler(session))
+    model_name = session.model or "unknown"
+    thinking = session.agent.options.thinking or "off"
 
     print("Pi Coding Agent (interactive mode)")
     print(f"Model: {model_name} | Thinking: {thinking}")
@@ -197,3 +200,6 @@ def _run_simple_repl(session: Any, verbose: bool) -> None:
             session.abort()
         except Exception as exc:
             print(f"\nError: {exc}\n", file=sys.stderr)
+
+    session.permissions.set_request_handler(None)
+    session.permissions.deny_all()

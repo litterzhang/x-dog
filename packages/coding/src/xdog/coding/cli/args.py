@@ -60,9 +60,15 @@ from xdog.coding.cli.session_picker import pick_session_command
 )
 @click.option(
     "--thinking-level",
-    type=click.Choice(["none", "normal", "deep", "ultrathink"]),
+    type=click.Choice(["off", "minimal", "low", "medium", "high", "xhigh"]),
     default=None,
     help="Thinking / reasoning level.",
+)
+@click.option(
+    "--permission-mode",
+    type=click.Choice(["ask", "ask-all", "allow-all", "deny"]),
+    default=None,
+    help="Tool permission policy.",
 )
 @click.option(
     "--list-models",
@@ -99,6 +105,7 @@ def cli(
     working_dir: Path | None,
     config_path: Path | None,
     thinking_level: str | None,
+    permission_mode: str | None,
     list_models: bool,
     pick_session: bool,
     rpc: bool,
@@ -124,6 +131,8 @@ def cli(
         overrides["model"] = model
     if thinking_level is not None:
         overrides["thinking_level"] = thinking_level
+    if permission_mode is not None:
+        overrides["permission_mode"] = permission_mode
 
     # Defer to the main entry-point for actual execution
     from xdog.coding.main import run_agent

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import Any
 
 from xdog.ai.types import (
@@ -12,6 +13,11 @@ from xdog.ai.types import (
     ToolCall,
 )
 from xdog.coding.core.agent_session import AgentSession
+from xdog.coding.core.permissions import (
+    PermissionDecision,
+    PermissionRequest,
+    PermissionRequestHandler,
+)
 
 
 class PrintModeRenderer:
@@ -92,6 +98,10 @@ async def run_print_mode(
     Returns 0 on success, 1 on error.
     """
     renderer = PrintModeRenderer(output_format=output_format, verbose=verbose)
+    if sys.stdin.isatty() and sys.stderr.isatty():
+        session.permissions.set_request_handler(
+            _terminal_permission_handler(session),
+        )
 
     try:
         response = await session.send_message(prompt)
@@ -104,3 +114,42 @@ async def run_print_mode(
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        session.permissions.set_request_handler(None)
+        session.permissions.deny_all()
+
+
+def _terminal_permission_handler(session: AgentSession) -> PermissionRequestHandler:
+    """Build a non-blocking handler that prompts on the controlling terminal."""
+    prompt_lock = threading.Lock()
+
+    def _handler(request: PermissionRequest) -> None:
+        def _ask() -> None:
+            with prompt_lock:
+                print("\nTool permission required", file=sys.stderr)
+                print(request.summary, file=sys.stderr)
+                print(
+                    "[y] allow once  [a] allow exact call for session  [n] deny",
+                    file=sys.stderr,
+                )
+                decision: PermissionDecision = "deny"
+                while True:
+                    sys.stderr.write("permission> ")
+                    sys.stderr.flush()
+                    answer = sys.stdin.readline()
+                    if not answer:
+                        break
+                    answer = answer.strip().lower()
+                    if answer in ("y", "yes"):
+                        decision = "allow_once"
+                        break
+                    if answer in ("a", "always", "session"):
+                        decision = "allow_session"
+                        break
+                    if answer in ("n", "no", "deny", ""):
+                        break
+                session.permissions.resolve(request.id, decision)
+
+        threading.Thread(target=_ask, daemon=True).start()
+
+    return _handler

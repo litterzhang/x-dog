@@ -21,8 +21,8 @@ def test_prompt_api_key(capsys):
 
 
 def test_config_selector(monkeypatch, tmp_path):
-    # simulate: default model 'opus', thinking 'high', no custom instructions
-    inputs = iter(["opus", "high", ""])
+    # simulate: model, thinking, permission mode, no custom instructions
+    inputs = iter(["opus", "high", "ask-all", ""])
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
 
     cfg_path = tmp_path / "settings.json"
@@ -30,4 +30,5 @@ def test_config_selector(monkeypatch, tmp_path):
 
     assert cfg.default_model == "opus"
     assert cfg.thinking_level == "high"
+    assert cfg.permission_mode == "ask-all"
     assert cfg_path.exists()

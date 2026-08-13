@@ -38,6 +38,29 @@ async def test_cmd_clear(agent_session):
     result = await execute_command("clear", "", agent_session)
     assert "cleared" in result.output.lower()
 
+
+@pytest.mark.asyncio
+async def test_cmd_thinking_sets_level(agent_session):
+    result = await execute_command("thinking", "high", agent_session)
+    assert result.output == "Thinking level set to: high"
+    assert agent_session.agent.options.thinking == "high"
+
+
+@pytest.mark.asyncio
+async def test_cmd_thinking_turns_level_off(agent_session):
+    await execute_command("thinking", "xhigh", agent_session)
+    result = await execute_command("thinking", "off", agent_session)
+    assert result.output == "Thinking level set to: off"
+    assert agent_session.agent.options.thinking is None
+
+
+@pytest.mark.asyncio
+async def test_cmd_thinking_rejects_invalid_level(agent_session):
+    result = await execute_command("thinking", "deep", agent_session)
+    assert "Invalid thinking level" in result.output
+    assert agent_session.agent.options.thinking is None
+
+
 @pytest.mark.asyncio
 async def test_cmd_fork(agent_session):
     # Add some messages first

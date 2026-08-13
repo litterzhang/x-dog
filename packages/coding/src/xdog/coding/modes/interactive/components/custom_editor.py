@@ -8,6 +8,56 @@ from xdog.coding.core.slash_commands import list_commands
 from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.keys import KeyEvent
 from xdog.tui.tui import Component
+from xdog.tui.utils import char_width
+
+_MAX_INPUT_ROWS = 8
+
+
+def _layout_input(text: str, width: int) -> tuple[list[str], list[tuple[int, int]]]:
+    """Hard-wrap input and map every string offset to a visual row/column."""
+    width = max(1, width)
+    rows: list[list[str]] = [[]]
+    row_widths = [0]
+    positions = [(0, 0) for _ in range(len(text) + 1)]
+    row = 0
+
+    for index, ch in enumerate(text):
+        positions[index] = (row, row_widths[row])
+        if ch == "\n":
+            rows.append([])
+            row_widths.append(0)
+            row += 1
+            positions[index + 1] = (row, 0)
+            continue
+
+        display_width = char_width(ch)
+        if row_widths[row] > 0 and row_widths[row] + display_width > width:
+            rows.append([])
+            row_widths.append(0)
+            row += 1
+            positions[index] = (row, 0)
+
+        rows[row].append(ch)
+        row_widths[row] += display_width
+        positions[index + 1] = (row, row_widths[row])
+
+    # A cursor after a completely full final row needs its own display cell.
+    if positions[-1][1] >= width:
+        rows.append([])
+        row_widths.append(0)
+        positions[-1] = (len(rows) - 1, 0)
+
+    return ["".join(row_chars) for row_chars in rows], positions
+
+
+def _with_cursor(text: str, column: int) -> str:
+    """Render a reverse-video cursor at a display-column boundary."""
+    current = 0
+    for index, ch in enumerate(text):
+        if current >= column:
+            return text[:index] + f"\x1b[7m{ch}\x1b[27m" + text[index + 1:]
+        current += char_width(ch)
+    return text + " " * max(0, column - current) + "\x1b[7m \x1b[27m"
 
 
 class SlashSelectList:
@@ -115,13 +165,27 @@ class CustomEditorComponent(Component):
         # Top border
         lines.append(t.border("─" * width))
 
-        # Input line with cursor
-        prompt = t.bold(t.accent("> "))
-        before = self._value[:self._cursor]
-        after = self._value[self._cursor:]
-        cursor_ch = after[0] if after else " "
-        rest = after[1:] if after else ""
-        lines.append(prompt + before + f"\x1b[7m{cursor_ch}\x1b[27m" + rest)
+        # Reserve two columns for the prompt/continuation prefix and hard-wrap
+        # by terminal cell width. Terminal autowrap is disabled by TUI, so an
+        # overlong physical line would otherwise disappear past the right edge.
+        content_width = max(1, width - 2)
+        visual_rows, positions = _layout_input(self._value, content_width)
+        cursor_row, cursor_col = positions[self._cursor]
+        first_row = max(0, cursor_row - _MAX_INPUT_ROWS + 1)
+        last_row = min(len(visual_rows), first_row + _MAX_INPUT_ROWS)
+
+        for row_index in range(first_row, last_row):
+            if row_index == 0:
+                prefix = t.bold(t.accent("> "))
+            elif row_index == first_row and first_row > 0:
+                prefix = t.dim("… ")
+            else:
+                prefix = "  "
+
+            row_text = visual_rows[row_index]
+            if row_index == cursor_row:
+                row_text = _with_cursor(row_text, cursor_col)
+            lines.append(prefix + row_text)
 
         # Bottom border
         lines.append(t.border("─" * width))
@@ -133,6 +197,14 @@ class CustomEditorComponent(Component):
         return lines
 
     def handle_input(self, event: KeyEvent) -> bool:
+        # Alt+Enter works in traditional terminals; Shift+Enter works when the
+        # terminal reports modifiers (for example through the Kitty protocol).
+        if event.key == "enter" and (event.alt or event.shift):
+            self._value = self._value[:self._cursor] + "\n" + self._value[self._cursor:]
+            self._cursor += 1
+            self._select_list = None
+            return True
+
         # Escape
         if event.key == "escape":
             if self._select_list is not None:
@@ -198,21 +270,39 @@ class CustomEditorComponent(Component):
         if event.key == "right":
             self._cursor = min(len(self._value), self._cursor + 1)
             return True
-        if event.key == "home" or (event.ctrl and event.key == "a"):
+        if event.key == "home":
+            self._cursor = self._value.rfind("\n", 0, self._cursor) + 1
+            return True
+        if event.key == "end":
+            line_end = self._value.find("\n", self._cursor)
+            self._cursor = len(self._value) if line_end < 0 else line_end
+            return True
+        if event.ctrl and event.key == "a":
             self._cursor = 0
             return True
-        if event.key == "end" or (event.ctrl and event.key == "e"):
+        if event.ctrl and event.key == "e":
             self._cursor = len(self._value)
             return True
 
-        # Kill line
+        # Move between explicit input lines. At the outer boundaries, up/down
+        # retain their existing history behavior.
+        if event.key == "up" and self._move_vertical(-1):
+            return True
+        if event.key == "down" and self._move_vertical(1):
+            return True
+
+        # Kill to the end/start of the current logical line.
         if event.ctrl and event.key == "k":
-            self._value = self._value[:self._cursor]
+            line_end = self._value.find("\n", self._cursor)
+            if line_end < 0:
+                line_end = len(self._value)
+            self._value = self._value[:self._cursor] + self._value[line_end:]
             self._update_select_list()
             return True
         if event.ctrl and event.key == "u":
-            self._value = self._value[self._cursor:]
-            self._cursor = 0
+            line_start = self._value.rfind("\n", 0, self._cursor) + 1
+            self._value = self._value[:line_start] + self._value[self._cursor:]
+            self._cursor = line_start
             self._update_select_list()
             return True
 
@@ -248,6 +338,29 @@ class CustomEditorComponent(Component):
             return True
 
         return False
+
+    def _move_vertical(self, direction: int) -> bool:
+        """Move to the adjacent explicit line, preserving the text column."""
+        line_start = self._value.rfind("\n", 0, self._cursor) + 1
+        column = self._cursor - line_start
+
+        if direction < 0:
+            if line_start == 0:
+                return False
+            previous_end = line_start - 1
+            previous_start = self._value.rfind("\n", 0, previous_end) + 1
+            self._cursor = min(previous_start + column, previous_end)
+            return True
+
+        line_end = self._value.find("\n", self._cursor)
+        if line_end < 0:
+            return False
+        next_start = line_end + 1
+        next_end = self._value.find("\n", next_start)
+        if next_end < 0:
+            next_end = len(self._value)
+        self._cursor = min(next_start + column, next_end)
+        return True
 
     def _submit(self) -> None:
         """Submit the current input."""

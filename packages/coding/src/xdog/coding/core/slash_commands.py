@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import cast
 
 from xdog.agent.skills import Skill, SkillManager
+from xdog.ai.types import ThinkingLevel
 from xdog.coding.config import get_skills_dir
 from xdog.coding.core.agent_session import AgentSession
 
@@ -261,11 +263,11 @@ def _cmd_thinking(args: str, session: AgentSession) -> CommandResult:
             output=f"Invalid thinking level: {requested}\nValid levels: {', '.join(valid_levels)}"
         )
 
-    if level == "off":
+    if requested == "off":
         session.set_thinking_level(None)
     else:
-        session.set_thinking_level(level)
-    return CommandResult(output=f"Thinking level set to: {level}")
+        session.set_thinking_level(cast(ThinkingLevel, requested))
+    return CommandResult(output=f"Thinking level set to: {requested}")
 
 
 async def _cmd_compact(session: AgentSession) -> CommandResult:
@@ -288,6 +290,7 @@ def _cmd_session(session: AgentSession) -> CommandResult:
         f"Messages:   {len(session.messages)}",
         f"Model:      {model_name}",
         f"Thinking:   {thinking}",
+        f"Permissions: {session.permissions.mode}",
         f"Working dir: {session.working_dir}",
     ]
     return CommandResult(output="\n".join(lines))

@@ -57,9 +57,18 @@ def config_selector(config_path: Path | None = None) -> GlobalConfig:
         cfg = cfg.model_copy(update={"default_model": new_model})
 
     # Thinking level
-    new_thinking = input(f"Thinking level [{cfg.thinking_level}] (off/normal/high): ").strip()
+    new_thinking = input(
+        f"Thinking level [{cfg.thinking_level}] (off/minimal/low/medium/high/xhigh): "
+    ).strip()
     if new_thinking:
         cfg = cfg.model_copy(update={"thinking_level": new_thinking})
+
+    # Tool permissions
+    new_permissions = input(
+        f"Permission mode [{cfg.permission_mode}] (ask/ask-all/allow-all/deny): "
+    ).strip()
+    if new_permissions:
+        cfg = cfg.model_copy(update={"permission_mode": new_permissions})
 
     # Custom instructions
     if cfg.custom_instructions:

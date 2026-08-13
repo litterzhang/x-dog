@@ -15,12 +15,14 @@ from typing import Any
 from xdog.agent.core import AgentMessage, CustomAgentMessage
 from xdog.ai.types import (
     AssistantMessage,
+    CostBreakdown,
     ImageContent,
     TextContent,
     ThinkingContent,
     ToolCall,
     ToolResultContentPart,
     ToolResultMessage,
+    Usage,
     UserContentPart,
     UserMessage,
 )
@@ -77,11 +79,38 @@ def message_to_dict(msg: AgentMessage) -> dict[str, Any]:
 
     if isinstance(msg, AssistantMessage):
         content = [_serialize_assistant_content_part(p) for p in msg.content]
-        d: dict[str, Any] = {"role": "assistant", "content": content}
+        d: dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "usage": {
+                "input": msg.usage.input,
+                "output": msg.usage.output,
+                "cache_read": msg.usage.cache_read,
+                "cache_write": msg.usage.cache_write,
+                "total_tokens": msg.usage.total_tokens,
+                "cost": {
+                    "input": msg.usage.cost.input,
+                    "output": msg.usage.cost.output,
+                    "cache_read": msg.usage.cost.cache_read,
+                    "cache_write": msg.usage.cost.cache_write,
+                    "total": msg.usage.cost.total,
+                },
+            },
+        }
         if msg.model:
             d["model"] = msg.model
         if msg.provider:
             d["provider"] = msg.provider
+        if msg.api:
+            d["api"] = msg.api
+        if msg.response_id:
+            d["response_id"] = msg.response_id
+        if msg.stop_reason != "stop":
+            d["stop_reason"] = msg.stop_reason
+        if msg.error_message:
+            d["error_message"] = msg.error_message
+        if msg.timestamp:
+            d["timestamp"] = msg.timestamp
         return d
 
     if isinstance(msg, ToolResultMessage):
@@ -170,10 +199,36 @@ def dict_to_message(d: dict[str, Any]) -> AgentMessage:
 
     if role == "assistant":
         content_raw = d.get("content", [])
+        usage_raw = d.get("usage", {})
+        if not isinstance(usage_raw, dict):
+            usage_raw = {}
+        cost_raw = usage_raw.get("cost", {})
+        if not isinstance(cost_raw, dict):
+            cost_raw = {}
+        usage = Usage(
+            input=usage_raw.get("input", 0),
+            output=usage_raw.get("output", 0),
+            cache_read=usage_raw.get("cache_read", 0),
+            cache_write=usage_raw.get("cache_write", 0),
+            total_tokens=usage_raw.get("total_tokens", 0),
+            cost=CostBreakdown(
+                input=cost_raw.get("input", 0.0),
+                output=cost_raw.get("output", 0.0),
+                cache_read=cost_raw.get("cache_read", 0.0),
+                cache_write=cost_raw.get("cache_write", 0.0),
+                total=cost_raw.get("total", 0.0),
+            ),
+        )
         return AssistantMessage(
             content=_parse_assistant_content(content_raw),
+            api=d.get("api", ""),
             model=d.get("model", ""),
             provider=d.get("provider", ""),
+            response_id=d.get("response_id"),
+            usage=usage,
+            stop_reason=d.get("stop_reason", "stop"),
+            error_message=d.get("error_message"),
+            timestamp=d.get("timestamp", 0.0),
         )
 
     if role == "toolResult":

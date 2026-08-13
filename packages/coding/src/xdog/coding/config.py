@@ -172,6 +172,7 @@ class GlobalConfig(BaseModel):
 
     default_model: str = ""
     thinking_level: str = "normal"
+    permission_mode: str = "ask"
     extensions: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     custom_instructions: str = ""
@@ -207,6 +208,7 @@ class ProjectConfig(BaseModel):
 
     model: str | None = None
     thinking_level: str | None = None
+    permission_mode: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     custom_instructions: str = ""
     extensions: list[str] = Field(default_factory=list)
@@ -233,6 +235,7 @@ class RuntimeConfig:
 
     model: str
     thinking_level: str
+    permission_mode: str
     allowed_tools: tuple[str, ...]
     custom_instructions: str
     extensions: tuple[str, ...]
@@ -253,6 +256,11 @@ class RuntimeConfig:
         pcfg = project_cfg or ProjectConfig()
         model = ov.get("model") or pcfg.model or global_cfg.default_model
         thinking = ov.get("thinking_level") or pcfg.thinking_level or global_cfg.thinking_level
+        permission_mode = (
+            ov.get("permission_mode")
+            or pcfg.permission_mode
+            or global_cfg.permission_mode
+        )
 
         merged_tools = list(global_cfg.allowed_tools) + list(pcfg.allowed_tools)
         merged_ext = list(global_cfg.extensions) + list(pcfg.extensions)
@@ -266,6 +274,7 @@ class RuntimeConfig:
         return cls(
             model=model,
             thinking_level=thinking,
+            permission_mode=permission_mode,
             allowed_tools=tuple(merged_tools),
             custom_instructions="\n\n".join(instructions_parts),
             extensions=tuple(merged_ext),

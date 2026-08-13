@@ -20,6 +20,7 @@ class FooterComponent(Text):
         session_id: str = "",
         message_count: int = 0,
         thinking: str = "off",
+        permission_mode: str = "ask",
         working_dir: str = "",
         context_tokens: int = 0,
         max_context: int = 200_000,
@@ -31,6 +32,8 @@ class FooterComponent(Text):
             parts.append(model)
         if thinking and thinking != "off":
             parts.append(f"thinking:{thinking}")
+        if permission_mode:
+            parts.append(f"permissions:{permission_mode}")
         if session_id:
             parts.append(f"session:{session_id[:8]}")
         if message_count > 0:

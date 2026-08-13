@@ -23,6 +23,7 @@ def test_build_environment_section():
     config = RuntimeConfig(
         model="sonnet",
         thinking_level="normal",
+        permission_mode="ask",
         allowed_tools=None,
         custom_instructions="",
         extensions=[],
@@ -44,6 +45,7 @@ def test_build_system_prompt():
     config = RuntimeConfig(
         model="sonnet",
         thinking_level="normal",
+        permission_mode="ask",
         allowed_tools=None,
         custom_instructions="Be concise.",
         extensions=[],

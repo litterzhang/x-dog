@@ -24,6 +24,7 @@ from xdog.ai.types import (
 from xdog.coding.core.defaults import COMPACTION_THRESHOLD_RATIO, MAX_CONTEXT_TOKENS
 from xdog.coding.core.event_bus import EventBus, get_event_bus
 from xdog.coding.core.messages import dicts_to_messages, messages_to_dicts
+from xdog.coding.core.permissions import PermissionManager
 from xdog.coding.core.session_manager import SessionData, SessionManager
 from xdog.coding.core.settings_manager import SettingsManager
 from xdog.coding.core.system_prompt import build_system_prompt
@@ -47,6 +48,9 @@ class AgentSession:
     tool_registry: Any  # kept for backward compat, may be None
     bash: Any  # kept for backward compat, may be None
     working_dir: Path
+    context_window: int = MAX_CONTEXT_TOKENS
+    max_prompt_tokens: int = 0
+    permissions: PermissionManager = field(default_factory=PermissionManager)
     event_bus: EventBus = field(default_factory=get_event_bus)
     _unsubscribe: Any = field(default=None, init=False, repr=False)
     #: Slugs of skills whose instructions are currently in the system prompt.
@@ -58,6 +62,9 @@ class AgentSession:
         # Restore session-level settings
         if self.session_data.settings:
             self.settings.load_session_settings(self.session_data.settings)
+
+        # Sessions constructed outside the SDK still receive enforcement.
+        self.agent.set_before_tool_call(self.permissions.before_tool_call)
 
         # Subscribe to agent events for persistence and event bus forwarding
         self._unsubscribe = self.agent.subscribe(self._on_agent_event)
@@ -79,6 +86,11 @@ class AgentSession:
     @property
     def is_streaming(self) -> bool:
         return self.agent.state.is_streaming
+
+    @property
+    def context_limit(self) -> int:
+        """Prompt limit used for compaction; falls back to the model window."""
+        return self.max_prompt_tokens or self.context_window or MAX_CONTEXT_TOKENS
 
     # -- Public API --
 
@@ -179,14 +191,26 @@ class AgentSession:
     # -- Model / thinking --
 
     def set_model(self, model: str) -> None:
-        """Switch the active model."""
+        """Switch the active model and refresh its provider-reported limits."""
         self.agent.set_model(model)
+        try:
+            import xdog.ai as ai
+
+            model_info = ai.provider("copilot").model(model)
+            if model_info is not None:
+                self.context_window = model_info.context_window or MAX_CONTEXT_TOKENS
+                self.max_prompt_tokens = model_info.max_prompt_tokens
+        except Exception:
+            logger.debug("could not refresh model limits for %s", model, exc_info=True)
+        self.settings.set_session_model(model)
         self._persist()
 
     def set_thinking_level(self, level: ThinkingLevel | None) -> None:
-        """Switch the thinking/reasoning level."""
+        """Switch and persist the thinking/reasoning level."""
         from dataclasses import replace
+
         self.agent.set_options(replace(self.agent.options, thinking=level))
+        self.settings.set_session_thinking(level or "off")
         self._persist()
 
     # -- Compaction --
@@ -222,7 +246,7 @@ class AgentSession:
                 char_count += 200
 
         estimated_tokens = char_count / 4
-        threshold = MAX_CONTEXT_TOKENS * COMPACTION_THRESHOLD_RATIO
+        threshold = self.context_limit * COMPACTION_THRESHOLD_RATIO
 
         if estimated_tokens > threshold:
             await self._run_compaction()
@@ -257,6 +281,7 @@ class AgentSession:
             return False
 
         self.session_data = loaded
+        self.permissions.clear_session_rules()
         restored_messages = list(self.session_data.messages)
         self.agent.replace_messages(restored_messages)
 
@@ -335,6 +360,7 @@ class AgentSession:
             RuntimeConfig(
                 model=self.agent.state.model or "unknown",
                 thinking_level=str(self.agent.options.thinking or "normal"),
+                permission_mode=self.permissions.mode,
                 allowed_tools=tuple(t.name for t in self.agent.state.tools),
                 custom_instructions=self.settings.custom_instructions,
                 extensions=(),
@@ -372,6 +398,7 @@ class AgentSession:
 
     def dispose(self) -> None:
         """Clean up resources."""
+        self.permissions.close()
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None

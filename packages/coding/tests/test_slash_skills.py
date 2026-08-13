@@ -419,7 +419,7 @@ def _cfg(model: str = "copilot/x"):
     from xdog.coding.config import PlatformInfo, RuntimeConfig
 
     return RuntimeConfig(
-        model=model, thinking_level="normal", allowed_tools=("read",),
+        model=model, thinking_level="normal", permission_mode="ask", allowed_tools=("read",),
         custom_instructions="", extensions=(), working_dir="/tmp",
         platform_info=PlatformInfo.detect(),
     )

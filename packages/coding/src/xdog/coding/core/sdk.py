@@ -27,7 +27,8 @@ from xdog.coding.config import (
     get_sessions_dir,
 )
 from xdog.coding.core.agent_session import AgentSession
-from xdog.coding.core.defaults import DEFAULT_MODEL, DEFAULT_THINKING_LEVEL
+from xdog.coding.core.defaults import DEFAULT_MODEL, DEFAULT_THINKING_LEVEL, MAX_CONTEXT_TOKENS
+from xdog.coding.core.permissions import PermissionManager
 from xdog.coding.core.session_manager import SessionData, SessionManager
 from xdog.coding.core.settings_manager import SettingsManager
 from xdog.coding.core.tools import get_default_tools
@@ -36,12 +37,16 @@ _THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("minimal", "low", "medium", "high
 
 
 def _as_thinking_level(raw: object) -> ThinkingLevel | None:
-    """Narrow a configured string to a level the provider accepts.
-
-    Settings arrive from JSON, so anything can be in there. Passing it through
-    untyped meant a typo like `thinking: hgih` reached the provider verbatim
-    instead of falling back.
-    """
+    """Normalize configured and legacy names to provider thinking levels."""
+    aliases: dict[str, ThinkingLevel | None] = {
+        "none": None,
+        "off": None,
+        "normal": "medium",
+        "deep": "high",
+        "ultrathink": "xhigh",
+    }
+    if isinstance(raw, str) and raw in aliases:
+        return aliases[raw]
     for level in _THINKING_LEVELS:
         if raw == level:
             return level
@@ -142,17 +147,33 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
         fallback_id = _first_model_id()
         model = provider.model(fallback_id)
         if model is not None:
+            model_id = model.id
+            session_data.model = model_id
             model_fallback_message += f". Using {model.id}"
 
-    # Resolve thinking level
-    thinking_level = ov.get("thinking_level") or config.thinking_level or DEFAULT_THINKING_LEVEL
+    # CLI override > saved session > project/global configuration. Session
+    # settings must participate here, before AgentSession loads its manager,
+    # because StreamOptions are constructed below.
+    saved_thinking = session_data.settings.get("thinking_level")
+    thinking_level = (
+        ov.get("thinking_level")
+        or saved_thinking
+        or config.thinking_level
+        or DEFAULT_THINKING_LEVEL
+    )
+    effective_thinking = _as_thinking_level(thinking_level)
     if model and not model.reasoning:
-        thinking_level = "off"
+        effective_thinking = None
+
+    context_window = (model.context_window if model is not None else 0) or MAX_CONTEXT_TOKENS
+    max_prompt_tokens = model.max_prompt_tokens if model is not None else 0
 
     # Create tools from agent built-in factories
     agent_tools: list[CoreAgentTool] = get_default_tools(wd)
 
     # Create Agent with explicit stream_fn from provider
+    permissions = PermissionManager(config.permission_mode)
+
     from xdog.agent import AgentConfig
     from xdog.agent.helpers import model_supports_tool_calls, stream_fn_from_provider
     from xdog.ai.types import StreamOptions
@@ -163,11 +184,14 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
             model=model_id,
             supports_tool_calls=model_supports_tool_calls(model_id),
             system_prompt="",  # will be rebuilt on first prompt
+            context_window=context_window,
+            max_prompt_tokens=max_prompt_tokens,
             options=StreamOptions(
-                thinking=_as_thinking_level(thinking_level),
+                thinking=effective_thinking,
             ),
         ),
         tools=agent_tools,
+        before_tool_call=permissions.before_tool_call,
         # The Agent owns where the index and the bodies go; this only says which
         # manager to read them from.
         skills=_coding_skill_manager(),
@@ -186,7 +210,13 @@ def create_agent_session(options: CreateSessionOptions | None = None) -> CreateS
         tool_registry=None,
         bash=None,
         working_dir=wd,
+        context_window=context_window,
+        max_prompt_tokens=max_prompt_tokens,
+        permissions=permissions,
     )
+    # Persist the effective value rather than a legacy alias such as "normal".
+    session.settings.set_session_thinking(effective_thinking or "off")
+    session._persist()
 
     return CreateSessionResult(
         session=session,

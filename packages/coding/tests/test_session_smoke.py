@@ -89,6 +89,19 @@ def test_rebuilding_survives_switching_model_and_thinking_level(
     assert session.agent.options.thinking == "high"
     assert session.agent.state.system_prompt
 
+    restored = session.session_manager.load_session(session.session_id)
+    assert restored is not None
+    assert restored.settings["thinking_level"] == "high"
+
+
+def test_disabling_thinking_is_persisted(session: AgentSession) -> None:
+    session.set_thinking_level("xhigh")
+    session.set_thinking_level(None)
+
+    restored = session.session_manager.load_session(session.session_id)
+    assert restored is not None
+    assert restored.settings["thinking_level"] == "off"
+
 
 def test_activating_a_skill_rebuilds_without_raising(session: AgentSession) -> None:
     """Activation triggers a rebuild from a different entry point."""

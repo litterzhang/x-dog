@@ -4,10 +4,10 @@ import asyncio
 from typing import Any
 
 import pytest
-from xdog.agent import AgentConfig
+from xdog.agent import AgentConfig, AgentTool, AgentToolResult
 from xdog.agent.agent import Agent
 from xdog.ai import AssistantMessage, CostBreakdown, TextContent, Usage, UserMessage
-from xdog.ai.types import DoneEvent, StartEvent
+from xdog.ai.types import DoneEvent, StartEvent, ToolCall, ToolResultMessage
 from xdog.ai.utils.event_stream import EventStream as AiEventStream
 
 # ---------------------------------------------------------------------------
@@ -151,3 +151,54 @@ class TestAgentIntegration:
         roles = [m.role for m in recent]
         assert roles == ["user", "assistant", "user", "assistant"]
         assert response_count[0] == 2
+
+    @pytest.mark.asyncio
+    async def test_tool_results_are_retained_in_agent_state(self) -> None:
+        responses = [
+            AssistantMessage(
+                content=(ToolCall(id="call-1", name="echo", arguments={"value": "hi"}),),
+                stop_reason="toolUse",
+            ),
+            _create_assistant_message("finished"),
+        ]
+        call_index = 0
+
+        def stream_fn(*_args: Any) -> AiEventStream[AssistantMessage]:
+            nonlocal call_index
+            message = responses[call_index]
+            call_index += 1
+            stream: AiEventStream[AssistantMessage] = AiEventStream()
+
+            async def push() -> None:
+                await stream.send(DoneEvent(stop_reason=message.stop_reason, message=message))
+                stream.set_result(message)
+                await stream.close()
+
+            asyncio.create_task(push())
+            return stream
+
+        async def execute(
+            _tool_call_id: str,
+            args: dict[str, Any],
+            *_args: Any,
+            **_kwargs: Any,
+        ) -> AgentToolResult:
+            return AgentToolResult(content=(TextContent(text=args["value"]),))
+
+        agent = Agent(
+            stream_fn,
+            config=AgentConfig(model=_MOCK_MODEL),
+            tools=[AgentTool(name="echo", execute=execute)],
+        )
+        events = await agent.prompt("use the tool")
+        async for _ in events:
+            pass
+
+        tool_results = [
+            message
+            for message in agent.state.messages
+            if isinstance(message, ToolResultMessage)
+        ]
+        assert len(tool_results) == 1
+        assert tool_results[0].tool_call_id == "call-1"
+        assert tool_results[0].content == (TextContent(text="hi"),)
