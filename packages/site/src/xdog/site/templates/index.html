@@ -1,16 +1,12 @@
 {% extends "base.html" %}
-{% block title %} — composable packages for AI agents{% endblock %}
 {% block ctitle %}{% endblock %}
 
 {% block content %}
 <section>
-  <h2>What is xdog?</h2>
-  <p>
-    xdog is a Python monorepo of small, composable packages for building AI
-    agents and managing LLM deployments. Each package does one thing and they
-    stack: a provider API at the bottom, an agent runtime and a workflow engine
-    in the middle, ready-to-use tools on top.
-  </p>
+  xdog is a Python monorepo of small, composable packages for building AI
+  agents and managing LLM deployments. Each package does one thing and they
+  stack: a provider API at the bottom, an agent runtime and a workflow engine
+  in the middle, ready-to-use tools on top.
 </section>
 
 <section>
@@ -29,10 +25,6 @@
   <pre><code>xdog-ai login copilot
 xdog-flow validate my_workflow.json
 xdog-flow run my_workflow.json</code></pre>
-  <p>
-    Every package shares the <code>xdog</code> namespace
-    (<code>import xdog.flow</code>), so they install side by side.
-  </p>
 </section>
 
 {% for title, pkgs in layers %}
@@ -43,7 +35,6 @@ xdog-flow run my_workflow.json</code></pre>
       <div class="card -5of12 cell" id="{{ pkg.name }}">
         <header class="card-header">
           <a href="{{ url_for('main.package_detail', name=pkg.name) }}">{{ pkg.name }}</a>
-          {% if pkg.cli %}&nbsp;|&nbsp;<span><code>{{ pkg.cli }}</code></span>{% endif %}
           &nbsp;|&nbsp;<a href="{{ pkg.pypi_url }}" title="on PyPI"><code>{{ pkg.dist }}</code></a>
         </header>
         <div class="card-content">

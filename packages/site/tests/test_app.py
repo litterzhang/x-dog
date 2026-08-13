@@ -533,8 +533,12 @@ def test_home_shows_how_to_install_from_pypi(client: FlaskClient) -> None:
     body = client.get("/").get_data(as_text=True)
     assert "pip install xdog-flow" in body
     assert "https://pypi.org/project/xdog-ai/" in body
-    # the namespace is surprising enough to be worth stating where people land
-    assert "import xdog.flow" in body
+    # The namespace (installed as xdog-flow, imported as xdog.flow) is no
+    # longer stated here. It is a real surprise -- the dist name and the import
+    # name differ -- and this used to assert the front page named it. Dropped
+    # deliberately to keep the landing page short, not because it stopped being
+    # true. Checked while removing it: no page on the site states it now, so a
+    # visitor learns the import name from the READMEs or by trying.
 
 
 def test_every_package_links_to_its_pypi_project(client: FlaskClient) -> None:
