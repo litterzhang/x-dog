@@ -218,11 +218,13 @@ class TestInteractiveMessageHandling:
         mode._handle_ui_event({"type": "assistant_end"})
         mode._handle_ui_event({
             "type": "tool_call",
+            "id": "call-1",
             "name": "bash",
             "arguments": {"command": "pwd"},
         })
         mode._handle_ui_event({
             "type": "tool_result",
+            "id": "call-1",
             "name": "bash",
             "result": "/workspace",
             "is_error": False,
@@ -239,6 +241,80 @@ class TestInteractiveMessageHandling:
             strip_ansi(line) for line in mode._chat_log.render(80)
         )
         assert rendered.index("/workspace") < rendered.index("latest answer")
+
+    def test_tool_events_keep_their_call_ids(self):
+        import queue
+
+        from xdog.agent import (
+            AgentToolResult,
+            ToolExecutionEndEvent,
+            ToolExecutionStartEvent,
+        )
+        from xdog.ai.types import TextContent
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        mode = object.__new__(InteractiveMode)
+        mode._event_queue = queue.Queue()
+        mode._dispatch_agent_event(ToolExecutionStartEvent(
+            tool_call_id="call-a",
+            tool_name="bash",
+            args={"command": "pwd"},
+        ))
+        mode._dispatch_agent_event(ToolExecutionEndEvent(
+            tool_call_id="call-a",
+            tool_name="bash",
+            result=AgentToolResult(content=(TextContent(text="done"),)),
+        ))
+
+        started = mode._event_queue.get_nowait()
+        finished = mode._event_queue.get_nowait()
+        assert started["id"] == "call-a"
+        assert finished["id"] == "call-a"
+
+    def test_parallel_tools_update_their_own_status_components(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.components.tool_execution import (
+            ToolExecutionComponent,
+        )
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+        from xdog.tui.utils import strip_ansi
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+
+        for index in range(3):
+            mode._handle_ui_event({
+                "type": "tool_call",
+                "id": f"call-{index}",
+                "name": "bash",
+                "arguments": {"command": f"echo {index}"},
+            })
+
+        # Parallel calls can finish in any order.
+        for index in (1, 0, 2):
+            mode._handle_ui_event({
+                "type": "tool_result",
+                "id": f"call-{index}",
+                "name": "bash",
+                "result": f"result-{index}",
+                "is_error": False,
+            })
+
+        components = [
+            child
+            for child in mode._chat_log.children
+            if isinstance(child, ToolExecutionComponent)
+        ]
+        assert len(components) == 3
+        assert all(component._state == "success" for component in components)
+        assert mode._tool_components == {}
+        rendered = "\n".join(
+            strip_ansi(line) for line in mode._chat_log.render(80)
+        )
+        assert all(f"result-{index}" in rendered for index in range(3))
 
     def test_replay_restores_tool_call_and_result(self):
         from types import SimpleNamespace

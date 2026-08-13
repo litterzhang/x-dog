@@ -597,21 +597,40 @@ class TUI(Container):
             nonlocal hardware_cursor_row, viewport_top
             buf = "\x1b[?2026h"  # Begin synchronized output
             if clear:
-                # Clear only the visible screen. CSI 3 J also erases terminal
-                # scrollback and can snap the user's viewport to the top during
-                # routine full redraws (resize, shrinking input, or pruning).
-                buf += "\x1b[2J\x1b[H"  # Clear screen and home; preserve scrollback
-            # A clear redraw starts from the visible screen, not from the
-            # beginning of the logical conversation. Reprinting every logical
-            # line would push the whole chat into terminal scrollback again and
-            # look like history was being replayed. The initial render still
-            # writes all lines once so genuine terminal scrollback is created.
-            first_line = max(0, len(new_lines) - height) if clear else 0
-            visible_lines = new_lines[first_line:]
-            for i, line in enumerate(visible_lines):
-                if i > 0:
-                    buf += "\r\n"
-                buf += line
+                # Repaint the active viewport in place. ED2 (CSI 2 J) is not
+                # safe for a main-buffer TUI: some terminals preserve its old
+                # screen as scrollback, producing snapshots that contain the
+                # editor and duplicate the current chat. Moving to the top and
+                # erasing each row neither scrolls nor touches history.
+                current_screen_row = max(
+                    0,
+                    min(height - 1, hardware_cursor_row - prev_viewport_top),
+                )
+                if current_screen_row > 0:
+                    buf += f"\x1b[{current_screen_row}A"
+                buf += "\r"
+                visible_lines = new_lines[max(0, len(new_lines) - height):]
+                for screen_row in range(height):
+                    buf += "\x1b[2K"
+                    if screen_row < len(visible_lines):
+                        buf += visible_lines[screen_row]
+                    if screen_row < height - 1:
+                        buf += "\r\n"
+                # The repaint ends on the last terminal row. Return the cursor
+                # to the final logical line when content is shorter than the
+                # viewport, leaving cleared rows below it.
+                target_screen_row = max(0, len(visible_lines) - 1)
+                move_up = height - 1 - target_screen_row
+                if move_up > 0:
+                    buf += f"\x1b[{move_up}A"
+                buf += "\r"
+            else:
+                # Initial render writes history once so genuine terminal
+                # scrollback is created.
+                for i, line in enumerate(new_lines):
+                    if i > 0:
+                        buf += "\r\n"
+                    buf += line
             buf += "\x1b[?2026l"  # End synchronized output
             sys.stdout.write(buf)
             sys.stdout.flush()

@@ -50,6 +50,7 @@ from xdog.coding.modes.interactive.components.chat_log import ChatLog
 from xdog.coding.modes.interactive.components.custom_editor import CustomEditorComponent
 from xdog.coding.modes.interactive.components.footer import FooterComponent
 from xdog.coding.modes.interactive.components.permission_prompt import PermissionPromptComponent
+from xdog.coding.modes.interactive.components.tool_execution import ToolExecutionComponent
 from xdog.coding.modes.interactive.theme import create_default_theme
 from xdog.tui.components.loader import Loader
 from xdog.tui.components.text import Text
@@ -114,7 +115,7 @@ class InteractiveMode:
         self._streaming_thinking = ""
         self._stream_sequence = 0
         self._stream_id = "assistant-0"
-        self._last_tool_component: Any = None
+        self._tool_components: dict[str, ToolExecutionComponent] = {}
         self._permission_prompt: PermissionPromptComponent | None = None
         self._awaiting_permission = False
 
@@ -442,6 +443,7 @@ class InteractiveMode:
         elif isinstance(event, ToolExecutionStartEvent):
             self._event_queue.put({
                 "type": "tool_call",
+                "id": event.tool_call_id,
                 "name": event.tool_name,
                 "arguments": event.args,
             })
@@ -455,6 +457,7 @@ class InteractiveMode:
                 if update_parts:
                     self._event_queue.put({
                         "type": "tool_update",
+                        "id": event.tool_call_id,
                         "name": event.tool_name,
                         "text": "".join(update_parts),
                     })
@@ -462,19 +465,19 @@ class InteractiveMode:
         elif isinstance(event, ToolExecutionEndEvent):
             result_text = ""
             if event.result is not None:
-                # Extract text content from the result
-                for result_part in event.result.content:
-                    if isinstance(result_part, TextContent):
-                        result_text = result_part.text
-                        break
-            # Detect errors
-            is_error = result_text.startswith("Error:")
+                result_text = "\n".join(
+                    result_part.text
+                    for result_part in event.result.content
+                    if isinstance(result_part, TextContent)
+                )
+            is_error = event.is_error or result_text.startswith("Error:")
             # Pass full result for edit diffs, truncate others
             is_edit = event.tool_name == "filesystem" and _is_diff_result(result_text)
             if not is_edit:
                 result_text = result_text[:500]
             self._event_queue.put({
                 "type": "tool_result",
+                "id": event.tool_call_id,
                 "name": event.tool_name,
                 "result": result_text,
                 "is_error": is_error,
@@ -577,10 +580,12 @@ class InteractiveMode:
             )
 
         elif event_type == "tool_call":
+            tool_call_id = event.get("id", "")
             name = event.get("name", "")
             arguments = event.get("arguments", {})
-            self._chat_log.add_tool(name, arguments)
-            self._last_tool_component = self._chat_log.get_last_tool()
+            started_component = self._chat_log.add_tool(name, arguments)
+            if tool_call_id:
+                self._tool_components[tool_call_id] = started_component
 
         elif event_type == "permission_request":
             request = event.get("request")
@@ -588,17 +593,21 @@ class InteractiveMode:
                 self._show_permission_request(request)
 
         elif event_type == "tool_update":
-            # Live streaming output from bash
-            if self._last_tool_component is not None:
-                text = event.get("text", "")
-                self._last_tool_component.set_streaming(text)
+            # Parallel tool calls must update their own component rather than a
+            # single "last tool" pointer.
+            tool_call_id = event.get("id", "")
+            update_component = self._tool_components.get(tool_call_id)
+            if update_component is not None:
+                update_component.set_streaming(event.get("text", ""))
 
         elif event_type == "tool_result":
-            result = event.get("result", "")
-            is_error = event.get("is_error", False)
-            if result and self._last_tool_component is not None:
-                self._last_tool_component.set_result(result, is_error=is_error)
-                self._last_tool_component = None
+            tool_call_id = event.get("id", "")
+            finished_component = self._tool_components.pop(tool_call_id, None)
+            if finished_component is not None:
+                finished_component.set_result(
+                    event.get("result", ""),
+                    is_error=event.get("is_error", False),
+                )
 
         elif event_type == "assistant_end":
             self._finalize_streaming_assistant()
