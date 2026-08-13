@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "xdog-site"
 version = "2.1.1"
-description = "x-dog public site: package overview, blog, and FAQ (Flask)"
+description = "xdog public site: package overview, blog, and FAQ (Flask)"
 requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -30,9 +30,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://xdog.942295.xyz"
-Repository = "https://github.com/litterzhang/x-dog"
+Repository = "https://github.com/litterzhang/xdog"
 Documentation = "https://xdog.942295.xyz"
-Issues = "https://github.com/litterzhang/x-dog/issues"
+Issues = "https://github.com/litterzhang/xdog/issues"
 
 [project.scripts]
 xdog-site = "xdog.site.app:main"

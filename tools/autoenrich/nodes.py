@@ -1,4 +1,4 @@
-"""flow script-node entry points for the x-dog auto-enrich workflow.
+"""flow script-node entry points for the xdog auto-enrich workflow.
 
 Two thin, pure-Python nodes adapted to the flow script-node signature
 ``f(ctx, **ports) -> value``.  The workflow (``enrich.json``) references them as

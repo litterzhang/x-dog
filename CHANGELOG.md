@@ -333,6 +333,6 @@ Also in 1.0:
   **model cannot unload one**, since a skill is often a constraint and the
   constrained party should not hold the release.
 
-[Unreleased]: https://github.com/litterzhang/x-dog/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/litterzhang/x-dog/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/litterzhang/x-dog/releases/tag/v1.0.0
+[Unreleased]: https://github.com/litterzhang/xdog/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/litterzhang/xdog/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/litterzhang/xdog/releases/tag/v1.0.0

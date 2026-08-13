@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
-    "x-dog",
+    "xdog",
     "xdog-agent",
     "xdog-ai",
     "xdog-claw",
@@ -1705,7 +1705,7 @@ wheels = [
 ]
 
 [[package]]
-name = "x-dog"
+name = "xdog"
 version = "2.1.1"
 source = { editable = "." }
 dependencies = [

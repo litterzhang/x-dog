@@ -36,7 +36,13 @@ def default_unit_dir() -> Path:
 
 
 def default_data_dir() -> Path:
-    return Path.home() / ".local" / "share" / "xdog-flow"
+    """Bundles and the install registry, under the shared ``xdog`` root.
+
+    ``~/.local/share/xdog/flow`` rather than ``~/.local/share/xdog-flow``, so
+    every package's state sits together under one directory the user can find,
+    back up or delete as a unit -- the same root ``xdog.ai.paths`` uses.
+    """
+    return Path.home() / ".local" / "share" / "xdog" / "flow"
 
 
 @dataclass(frozen=True)

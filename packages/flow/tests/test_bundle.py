@@ -118,7 +118,7 @@ def test_bundle_runs_without_the_flow_package(tmp_path: Path) -> None:
     path (never the flow package), yet the workflow executes and produces output.
     """
     out = build_bundle(_script_wf(), tmp_path / "b")
-    # A driver that scrubs any x-dog path, keeps only stdlib + the bundle, and runs it.
+    # A driver that scrubs any xdog path, keeps only stdlib + the bundle, and runs it.
     driver = textwrap.dedent(
         f"""
         import sys, asyncio

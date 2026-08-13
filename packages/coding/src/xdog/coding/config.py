@@ -1,9 +1,9 @@
 """Global configuration and paths for the coding agent.
 
 Follows XDG Base Directory Specification:
-- Config:  $XDG_CONFIG_HOME/x-dog/coding/  (settings, models, keybindings)
-- Data:    $XDG_DATA_HOME/x-dog/coding/    (sessions, auth, extensions)
-- State:   $XDG_STATE_HOME/x-dog/coding/   (logs, cache)
+- Config:  $XDG_CONFIG_HOME/xdog/coding/  (settings, models, keybindings)
+- Data:    $XDG_DATA_HOME/xdog/coding/    (sessions, auth, extensions)
+- State:   $XDG_STATE_HOME/xdog/coding/   (logs, cache)
 - Project: <cwd>/.coding/                        (project-local config)
 
 Override all XDG paths with a single directory via CODING_DIR env var.
@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 # Constants
 # ---------------------------------------------------------------------------
 
-MONOREPO_NAME = "x-dog"
+MONOREPO_NAME = "xdog"
 APP_NAME = "coding"
 VERSION = "0.57.1"
 PROJECT_DIR_NAME = ".coding"
@@ -45,7 +45,7 @@ def _env_override_dir() -> Path | None:
 
 
 def get_config_dir() -> Path:
-    """$XDG_CONFIG_HOME/x-dog/coding/"""
+    """$XDG_CONFIG_HOME/xdog/coding/"""
     override = _env_override_dir()
     if override is not None:
         return override
@@ -54,7 +54,7 @@ def get_config_dir() -> Path:
 
 
 def get_data_dir() -> Path:
-    """$XDG_DATA_HOME/x-dog/coding/"""
+    """$XDG_DATA_HOME/xdog/coding/"""
     override = _env_override_dir()
     if override is not None:
         return override
@@ -63,7 +63,7 @@ def get_data_dir() -> Path:
 
 
 def get_state_dir() -> Path:
-    """$XDG_STATE_HOME/x-dog/coding/"""
+    """$XDG_STATE_HOME/xdog/coding/"""
     override = _env_override_dir()
     if override is not None:
         return override

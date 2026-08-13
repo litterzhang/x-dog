@@ -2,7 +2,7 @@
 """guards CLI — run the deterministic content/feature guards under the depins venv.
 
 The guards import depins' live registries (flask/flask-babel/tinydb), so they must
-run in the *depins* virtualenv, not the flow/x-dog one.  The flow ``guards`` script
+run in the *depins* virtualenv, not the flow/xdog one.  The flow ``guards`` script
 node shells out to this file with ``<depins-venv>/python guards_cli.py`` and feeds a
 JSON job on stdin::
 

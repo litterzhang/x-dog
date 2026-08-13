@@ -1,9 +1,9 @@
 """Configuration loading and persistence for claw.
 
 Follows XDG Base Directory Specification:
-- Config:  $XDG_CONFIG_HOME/x-dog/claw/  (config.yaml)
-- Data:    $XDG_DATA_HOME/x-dog/claw/    (sessions, groups, goals)
-- State:   $XDG_STATE_HOME/x-dog/claw/   (gateway.sock, gateway.pid, logs)
+- Config:  $XDG_CONFIG_HOME/xdog/claw/  (config.yaml)
+- Data:    $XDG_DATA_HOME/xdog/claw/    (sessions, groups, goals)
+- State:   $XDG_STATE_HOME/xdog/claw/   (gateway.sock, gateway.pid, logs)
 
 Override all XDG paths with a single directory via CLAW_DIR env var.
 """
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MONOREPO_NAME = "x-dog"
+MONOREPO_NAME = "xdog"
 APP_NAME = "claw"
 ENV_OVERRIDE = "CLAW_DIR"
 
@@ -39,7 +39,7 @@ def _env_override_dir() -> Path | None:
 
 
 def get_config_dir() -> Path:
-    """$XDG_CONFIG_HOME/x-dog/claw/"""
+    """$XDG_CONFIG_HOME/xdog/claw/"""
     override = _env_override_dir()
     if override is not None:
         return override
@@ -48,7 +48,7 @@ def get_config_dir() -> Path:
 
 
 def get_data_dir() -> Path:
-    """$XDG_DATA_HOME/x-dog/claw/"""
+    """$XDG_DATA_HOME/xdog/claw/"""
     override = _env_override_dir()
     if override is not None:
         return override
@@ -57,7 +57,7 @@ def get_data_dir() -> Path:
 
 
 def get_state_dir() -> Path:
-    """$XDG_STATE_HOME/x-dog/claw/"""
+    """$XDG_STATE_HOME/xdog/claw/"""
     override = _env_override_dir()
     if override is not None:
         return override
@@ -66,7 +66,7 @@ def get_state_dir() -> Path:
 
 
 def get_config_path() -> Path:
-    """Default config file: $XDG_CONFIG_HOME/x-dog/claw/config.yaml"""
+    """Default config file: $XDG_CONFIG_HOME/xdog/claw/config.yaml"""
     return get_config_dir() / "config.yaml"
 
 

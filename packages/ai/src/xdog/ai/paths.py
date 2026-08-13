@@ -1,12 +1,12 @@
-"""XDG-compliant path helpers for x-dog storage.
+"""XDG-compliant path helpers for xdog storage.
 
-* ``~/.config/x-dog/`` — configuration
-* ``~/.local/x-dog/`` — data (auth, model cache)
+* ``~/.config/xdog/`` — configuration
+* ``~/.local/xdog/`` — data (auth, model cache)
 """
 
 from pathlib import Path
 
-_APP_NAME = "x-dog"
+_APP_NAME = "xdog"
 
 
 def config_dir() -> Path:

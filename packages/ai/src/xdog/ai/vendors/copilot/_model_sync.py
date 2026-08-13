@@ -9,7 +9,7 @@ Three public operations:
 * :func:`list_models` -- return cached models (or fallback) without network.
 * :func:`get_synced_model` -- look up a single model by id.
 
-The local cache lives at ``~/.local/x-dog/models_cache.json`` with a
+The local cache lives at ``~/.local/xdog/models_cache.json`` with a
 configurable TTL (default 24 h).  When the API is unreachable or the token is
 not available the module falls back to :data:`_FALLBACK_MODELS`.
 """

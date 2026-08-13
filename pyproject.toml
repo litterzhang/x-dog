@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "x-dog"
+name = "xdog"
 version = "2.1.1"
 description = "Tools for building AI agents and managing LLM deployments"
 readme = "README.md"
@@ -37,9 +37,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://xdog.942295.xyz"
-Repository = "https://github.com/litterzhang/x-dog"
+Repository = "https://github.com/litterzhang/xdog"
 Documentation = "https://xdog.942295.xyz"
-Issues = "https://github.com/litterzhang/x-dog/issues"
+Issues = "https://github.com/litterzhang/xdog/issues"
 
 [dependency-groups]
 dev = [

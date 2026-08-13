@@ -1,12 +1,12 @@
-"""Seed FAQ entries for the x-dog site."""
+"""Seed FAQ entries for the xdog site."""
 
 from __future__ import annotations
 
 FAQS: list[dict[str, str]] = [
     {
-        "q": "What is x-dog?",
+        "q": "What is xdog?",
         "a": (
-            "x-dog is a Python monorepo of composable packages for building AI agents and managing "
+            "xdog is a Python monorepo of composable packages for building AI agents and managing "
             "LLM deployments: a unified provider API (ai), an agent runtime (agent), a terminal UI "
             "library (tui), an interactive coding CLI (coding), an orchestration runtime with "
             "long-term memory (claw), and a typed local-first workflow format/compiler for humans "
@@ -79,6 +79,6 @@ FAQS: list[dict[str, str]] = [
     },
     {
         "q": "What is the license?",
-        "a": "x-dog is MIT-licensed.",
+        "a": "xdog is MIT-licensed.",
     },
 ]

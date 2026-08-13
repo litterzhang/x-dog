@@ -1,4 +1,4 @@
-"""x-dog site — Flask app exposing package overviews, a blog, and an FAQ.
+"""xdog site — Flask app exposing package overviews, a blog, and an FAQ.
 
 Import :func:`create_app` for WSGI servers::
 

@@ -1,4 +1,4 @@
-"""Authored metadata for each x-dog package.
+"""Authored metadata for each xdog package.
 
 Content is hand-written (kept accurate against each package's ``pyproject.toml``
 description, README, and public modules) rather than introspected at runtime, so
@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-_GITHUB = "https://github.com/litterzhang/x-dog"
+_GITHUB = "https://github.com/litterzhang/xdog"
 
 
 @dataclass(frozen=True)
 class Package:
-    """A single x-dog package as presented on the site."""
+    """A single xdog package as presented on the site."""
 
     name: str
     cli: str  # console-script command, or "" when it's a library

@@ -52,7 +52,7 @@ inspect, schedule, and maintain:
 
 ## Flagship demo — Flow Release Radar
 
-The Release Radar audits this local x-dog repository every Monday:
+The Release Radar audits this local xdog repository every Monday:
 
 ```text
 collect_repo (deterministic script)

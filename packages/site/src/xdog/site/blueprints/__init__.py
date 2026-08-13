@@ -1,4 +1,4 @@
-"""Blueprint registration for the x-dog site."""
+"""Blueprint registration for the xdog site."""
 
 from __future__ import annotations
 

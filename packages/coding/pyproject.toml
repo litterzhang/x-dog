@@ -31,9 +31,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://xdog.942295.xyz"
-Repository = "https://github.com/litterzhang/x-dog"
+Repository = "https://github.com/litterzhang/xdog"
 Documentation = "https://xdog.942295.xyz"
-Issues = "https://github.com/litterzhang/x-dog/issues"
+Issues = "https://github.com/litterzhang/xdog/issues"
 
 [project.scripts]
 xdog-coding = "xdog.coding.main:main"

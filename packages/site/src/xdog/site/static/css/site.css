@@ -89,7 +89,7 @@ body.hack {
   padding: 0.4rem 0.8rem;
 }
 
-/* x-dog-only elements (blog meta, FAQ accordion, pagination) — depins has no
+/* xdog-only elements (blog meta, FAQ accordion, pagination) — depins has no
    equivalents. No .card rules here: card styling comes entirely from hack.css. */
 .muted {
   color: #888;

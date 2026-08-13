@@ -245,7 +245,7 @@ def render_listener_service(python: str = "/usr/bin/python3", registry_path: Pat
     It reads the install registry to route every hook workflow's events; installing
     another hook workflow updates the registry and reloads this service.
     """
-    reg = str(registry_path) if registry_path is not None else "%S/xdog-flow/registry.json"
+    reg = str(registry_path) if registry_path is not None else "%S/xdog/flow/registry.json"
     return (
         "[Unit]\n"
         "Description=xdog-flow shared hook listener\n"

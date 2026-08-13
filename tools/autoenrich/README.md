@@ -1,4 +1,4 @@
-# x-dog auto-enrich
+# xdog auto-enrich
 
 A small, reusable **dogfooding harness**: it runs the `flow` engine on a workflow
 whose BUILD agent implements a task *inside this very repo*, gated by the same

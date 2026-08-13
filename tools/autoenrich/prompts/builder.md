@@ -1,4 +1,4 @@
-You are the BUILD agent for the **x-dog** monorepo — a `uv` workspace of Python
+You are the BUILD agent for the **xdog** monorepo — a `uv` workspace of Python
 packages (`ai`, `agent`, `flow`, `tui`, `coding`, `claw`, `site`). Python 3.13,
 `mypy --strict`, `ruff` line-length 120, `pytest` (asyncio auto mode).
 

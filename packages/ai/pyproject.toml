@@ -31,9 +31,9 @@ all = ["openai>=2.38,<3"]
 
 [project.urls]
 Homepage = "https://xdog.942295.xyz"
-Repository = "https://github.com/litterzhang/x-dog"
+Repository = "https://github.com/litterzhang/xdog"
 Documentation = "https://xdog.942295.xyz"
-Issues = "https://github.com/litterzhang/x-dog/issues"
+Issues = "https://github.com/litterzhang/xdog/issues"
 
 [project.scripts]
 xdog-ai = "xdog.ai.cli:main"

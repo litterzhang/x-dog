@@ -6,7 +6,7 @@
   },
   "entry": "collect_repo",
   "state": {
-    "repo": "/data/workspaces/pyspace/x-dog",
+    "repo": "/data/workspaces/pyspace/xdog",
     "base_ref": "origin/main"
   },
   "in_schema": {
@@ -23,7 +23,7 @@
     "mode": "timer",
     "cron": "0 9 * * 1",
     "inputs": {
-      "repo": "/data/workspaces/pyspace/x-dog",
+      "repo": "/data/workspaces/pyspace/xdog",
       "base_ref": "origin/main"
     }
   },

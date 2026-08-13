@@ -93,7 +93,7 @@ so `interpret == compile` holds by construction. See the
 ## Flow Release Radar (local repository audit)
 
 `release_readiness.json` is the flagship demonstration of Flow's product vision:
-an Agent-authored, human-reviewable workflow that audits this local x-dog
+an Agent-authored, human-reviewable workflow that audits this local xdog
 repository and can run every Monday.
 
 ```text
@@ -133,7 +133,7 @@ uv run xdog-flow generate packages/flow/examples/release_readiness.json -o relea
 uv run xdog-flow scheduling install packages/flow/examples/release_readiness.json --dry-run
 ```
 
-The workflow defaults to `/data/workspaces/pyspace/x-dog`, but `repo` and
+The workflow defaults to `/data/workspaces/pyspace/xdog`, but `repo` and
 `base_ref` are ordinary `$in` values and can be overridden per run.
 
 ### Its test suite

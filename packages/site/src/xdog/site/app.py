@@ -14,7 +14,7 @@ from xdog.site.blueprints import init_bp
 
 
 def create_app() -> Flask:
-    """Build and configure the x-dog site Flask app.
+    """Build and configure the xdog site Flask app.
 
     Set ``XDOG_SITE_DEV=1`` to auto-reload templates and stop caching static
     files, so template/CSS edits take effect on the next request without a

@@ -1,4 +1,4 @@
-# Deploying the x-dog site
+# Deploying the xdog site
 
 Two artifacts, mirroring how the sibling `depins` site is deployed:
 

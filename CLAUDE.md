@@ -1,4 +1,4 @@
-# CLAUDE.md — x-dog Project Intelligence
+# CLAUDE.md — xdog Project Intelligence
 
 > Tools for building AI agents and managing LLM deployments.
 > Version: 0.57.1 | Python 3.13 | Author: Mario Zechner

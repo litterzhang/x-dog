@@ -1,4 +1,4 @@
-"""Route + content contract tests for the x-dog site."""
+"""Route + content contract tests for the xdog site."""
 
 from __future__ import annotations
 

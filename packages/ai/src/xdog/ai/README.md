@@ -235,7 +235,7 @@ Events are discriminated by `event.type`:
 
 ## Storage
 
-XDG-compliant paths under `~/.local/x-dog/`:
+XDG-compliant paths under `~/.local/xdog/`:
 
 | File | Purpose |
 |------|---------|

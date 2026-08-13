@@ -1,8 +1,8 @@
-# x-dog
+# xdog
 
-[![CI](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml/badge.svg)](https://github.com/litterzhang/x-dog/actions/workflows/ci.yml)
+[![CI](https://github.com/litterzhang/xdog/actions/workflows/ci.yml/badge.svg)](https://github.com/litterzhang/xdog/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/xdog-flow?label=xdog-flow&amp;cacheSeconds=3600)](https://pypi.org/project/xdog-flow/)
-[![Release](https://img.shields.io/github/v/release/litterzhang/x-dog?label=release)](https://github.com/litterzhang/x-dog/releases)
+[![Release](https://img.shields.io/github/v/release/litterzhang/xdog?label=release)](https://github.com/litterzhang/xdog/releases)
 [![Python](https://img.shields.io/pypi/pyversions/xdog-flow?cacheSeconds=3600)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-xdog.942295.xyz-informational.svg)](https://xdog.942295.xyz)
@@ -18,10 +18,10 @@ control plane, no database, no hosted service.**
 
 ## What this is · 这是什么
 
-x-dog is a monorepo of small, composable packages that share one idea: **what you
+xdog is a monorepo of small, composable packages that share one idea: **what you
 build should be a file you own, running on a machine you control.**
 
-x-dog 是一组小而可组合的包，共享同一个想法：**你构建出来的东西，应该是一份你拥有的文件，
+xdog 是一组小而可组合的包，共享同一个想法：**你构建出来的东西，应该是一份你拥有的文件，
 跑在你控制的机器上。**
 
 The centrepiece is **flow** — a typed workflow format and compiler. A workflow is
@@ -275,18 +275,18 @@ written for another client works here unmodified.
 | | |
 |---|---|
 | **[xdog.942295.xyz](https://xdog.942295.xyz)** | documentation, design notes, blog · 文档、设计笔记、博客 |
-| **[CHANGELOG](https://github.com/litterzhang/x-dog/blob/main/CHANGELOG.md)** | what changed since 1.0.0 · 1.0.0 以来的变更 |
-| **[flow's README](https://github.com/litterzhang/x-dog/blob/main/packages/flow/README.md)** | the full workflow schema, execution model and CLI · 完整 schema、执行模型与 CLI |
-| **[examples/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples)** | runnable examples · 可运行示例 |
-| **[depins_enrich/](https://github.com/litterzhang/x-dog/tree/main/packages/flow/examples/depins_enrich)** | a case study — a workflow that runs unattended every four hours and writes real commits · 案例研究：每四小时无人值守运行并产生真实提交的工作流 |
+| **[CHANGELOG](https://github.com/litterzhang/xdog/blob/main/CHANGELOG.md)** | what changed since 1.0.0 · 1.0.0 以来的变更 |
+| **[flow's README](https://github.com/litterzhang/xdog/blob/main/packages/flow/README.md)** | the full workflow schema, execution model and CLI · 完整 schema、执行模型与 CLI |
+| **[examples/](https://github.com/litterzhang/xdog/tree/main/packages/flow/examples)** | runnable examples · 可运行示例 |
+| **[depins_enrich/](https://github.com/litterzhang/xdog/tree/main/packages/flow/examples/depins_enrich)** | a case study — a workflow that runs unattended every four hours and writes real commits · 案例研究：每四小时无人值守运行并产生真实提交的工作流 |
 
 ---
 
 ## Development · 开发
 
 ```bash
-git clone https://github.com/litterzhang/x-dog.git
-cd x-dog
+git clone https://github.com/litterzhang/xdog.git
+cd xdog
 uv sync                                  # editable install of every package · 全部包 editable 安装
 
 uv run pytest packages/flow/tests -q     # test one package · 单包测试

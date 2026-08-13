@@ -23,7 +23,7 @@ from xdog.site.content.docpages import render_markdown
 _BLOG_DIR = Path(__file__).resolve().parent / "pages" / "blog"
 
 # Default post author when a markdown file's frontmatter omits ``author``.
-_DEFAULT_AUTHOR = "x-dog"
+_DEFAULT_AUTHOR = "xdog"
 
 
 @dataclass(frozen=True)

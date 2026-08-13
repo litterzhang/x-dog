@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x-dog auto-enrich driver — one cycle per invocation.
+"""xdog auto-enrich driver — one cycle per invocation.
 
 Runs the ``enrich.json`` flow workflow (build -> scope -> gate -> validate) in
 process via ``flow.executor.execute``, then owns the side-effects the flow engine
@@ -209,7 +209,7 @@ def main() -> int:
     reasons = str(review.get("reasons", ""))[:400]
     msg = (
         f"feat(flow): {task_title} (autonomous auto-enrich)\n\n"
-        f"Implemented by the x-dog auto-enrich workflow "
+        f"Implemented by the xdog auto-enrich workflow "
         f"(build + scope + gate[ruff/mypy/pytest] + validate).\n"
         f"Validator: {reasons}\n"
     )

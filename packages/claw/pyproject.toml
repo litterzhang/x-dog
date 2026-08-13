@@ -38,9 +38,9 @@ all = ["sentence-transformers>=3.0.0", "sqlite-vec>=0.1.1", "rank-bm25>=0.2.2", 
 
 [project.urls]
 Homepage = "https://xdog.942295.xyz"
-Repository = "https://github.com/litterzhang/x-dog"
+Repository = "https://github.com/litterzhang/xdog"
 Documentation = "https://xdog.942295.xyz"
-Issues = "https://github.com/litterzhang/x-dog/issues"
+Issues = "https://github.com/litterzhang/xdog/issues"
 
 [project.scripts]
 xdog-claw = "xdog.claw.cli:main"
