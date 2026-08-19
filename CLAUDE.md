@@ -1,419 +1,127 @@
-# CLAUDE.md — xdog Project Intelligence
+# CLAUDE.md
 
-> Tools for building AI agents and managing LLM deployments.
-> Version: 0.57.1 | Python 3.13 | Author: Mario Zechner
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Quick Reference
+## Repository and toolchain
+
+XDOG is a local-first Python 3.12+ `uv` workspace; its core tools do not require a hosted control plane or database. Seven distributions share the `xdog.*` namespace under `packages/`: `ai`, `agent`, `flow`, `coding`, `claw`, `tui`, and `site`. Run development commands from the repository root so the root `pyproject.toml` configuration applies.
 
 ```bash
-# Setup
-pyenv local 3.13.5 && python -m venv .venv && source .venv/bin/activate
-pip install -e .
+# Create/update the workspace environment
+uv sync
 
-# Test
-pytest                           # all packages (asyncio_mode=auto)
-pytest tests/coding            # coding agent tests only
-pytest tests/agent               # agent runtime tests only
-pytest tests/ai                  # LLM API tests only
-pytest tests/claw             # orchestrator tests only
-pytest tests/tui                 # terminal UI tests only
-pytest -k test_agent_tools       # single test file
+# Core test, lint, and type-check commands used by CI
+uv run pytest -q
+uv run ruff check packages
+uv run mypy --strict \
+  -p xdog.ai -p xdog.agent -p xdog.tui -p xdog.flow \
+  -p xdog.site -p xdog.claw -p xdog.coding
 
-# Lint & Type Check
-ruff check . --line-length 120 --target-version py311
-mypy src/ --strict
+# Package, file, and individual-test examples
+uv run pytest packages/flow/tests -q
+uv run pytest packages/agent/tests/test_agent_tools.py
+uv run pytest packages/agent/tests/test_agent_tools.py::test_name
+uv run pytest -k 'expression'
+
+# Validate the shipped workflow examples (also run by CI)
+uv run xdog-flow test packages/flow/examples/ --allow-script-stub
+
+# Build and inspect a distribution; substitute another workspace package as needed
+uv build --package xdog-flow --out-dir dist
+uvx twine check dist/*
 ```
 
----
+Pytest uses `asyncio_mode=auto` and importlib import mode. Ruff is configured for Python 3.12 with a 120-character line length. Package-local `pyproject.toml` files allow tests to be run from within an individual package, but root paths are `packages/<package>/tests`, not `tests/<package>`.
 
-## Architecture Overview
+Useful entry points after `uv sync`:
 
-```
-                    +-----------+
-                    | pods      |  GPU pod management (vLLM)
-                    +-----------+
-                         |
-+--------+    +--------+    +-----------+    +----------------+
-| tui    | -> | claw   | -> | agent     | -> |    ai          |
-| (TUI)  |    | (orch) |    | (runtime) |    | (LLM gateway)  |
-+--------+    +--------+    +-----------+    +----------------+
-     |             |                              |
-     |       +-----+-----+              +--------+--------+
-     |       | mom       |              | Providers:      |
-     |       | (Slack    |              | Anthropic       |
-     |       |  bot)     |              | OpenAI          |
-     |       +-----------+              | Google/Vertex   |
-     |                                  | Bedrock         |
-     +-- coding                        | Mistral         |
-         (xdog-coding CLI)               | Copilot         |
-                                       +-----------------+
+```bash
+uv run xdog-flow --help       # workflow CLI
+uv run xdog-coding            # interactive coding agent
+uv run xdog-claw --help       # persistent assistant runtime
+uv run xdog-ai --help         # model/provider CLI
+uv run xdog-agent --help      # generic agent CLI
+uv run xdog-site              # documentation/demo site
 ```
 
-### Data Flow (claw runtime)
+## Architecture
 
-```
-User Input (TUI/WeChat)          System Input (scheduler/goal_runner)
-         |                                |
-    [UserInput]                    [SystemInput]
-         |                                |
-         +---------- GroupInput ----------+
-                         |
-                         v
-[Gateway] -- Unix socket server (gateway.sock)
-    |
-    v
-[Orchestrator] -- single dispatch path for ALL messages
-    |
-    +---> [MessageQueue] -- collect/steer/steer-backlog (OpenClaw pattern)
-    |
-    v
-[SessionManager] -- get_or_create_agent_session(runtime)
-    |                  daily/idle resets, caching, eviction
-    v
-[AgentSession] -- owns long-lived agent.Agent
-    |
-    +---> pre-turn: build_system_prompt(), _maybe_compact()
-    +---> agent.prompt(content) -> event stream
-    +---> drain events: TextDelta -> TUI, ToolExecution -> track
-    +---> persist via _persisted_count (incremental, no full reload)
-    +---> push-persist via Agent.subscribe(AgentEndEvent) (crash-safe)
-    |
-    v
-[agent.Agent] -- thought-action-observation loop
-    |
-    +---> stream_fn via [AgentBridge] -> ai.stream()
-    +---> tools: memory, filesystem, messaging, scheduling, goals
-    +---> steering & follow_up queues for mid-turn control
-    |
-    v
-[Compaction] -- pre-turn, when context nears limit:
-    +---> [FlushRunner] -- silent agent turn, saves to memory
-    +---> [Summarizer] -- direct LLM call via ai.stream.complete()
-    +---> archive transcript to conversations/
-    +---> compact transcript
-    |
-    v
-Response -> [BlockChunker] -> [Channel] -> User
+Dependency direction (`A -> B` means A builds on B):
+
+```text
+flow   -----> agent -----> ai
+coding -----> agent/ai + tui
+claw   -----> agent/ai + tui
+site   -----> flow/agent/ai (workflow demo integration)
+tui           standalone terminal rendering/components
 ```
 
----
+### `xdog.ai`: model and protocol foundation
 
-## Package Details
+`packages/ai/src/xdog/ai/` defines the provider-neutral model, context, streaming event, completion, embedding, and web-search interfaces. `providers/runtime.py` resolves provider/model names; the production provider currently registered is GitHub Copilot. Files under `protocols/` implement Anthropic/OpenAI wire formats used according to model metadata—they are not separate configured providers. `proxy.py` exposes an Anthropic-compatible local HTTP/SSE facade over the same runtime.
 
-### 1. `ai` — Unified Multi-Provider LLM API
+Keep provider/authentication, model routing, and wire-protocol adaptation separate when changing this layer.
 
-**Purpose**: Common streaming interface for all LLM providers.
+### `xdog.agent`: reusable tool-calling runtime
 
-**Key Files**:
-- `types.py` — All frozen dataclasses: `Model`, `Message` (User/Assistant/ToolResult), `Context`, `Tool`, `StreamOptions`, `Usage`, streaming events (`TextDeltaEvent`, `ToolCallDoneEvent`, etc.)
-- `stream.py` — High-level `stream()` and `complete()` functions
-- `api_registry.py` — Provider registration system (`register_api()`, `get_api()`)
-- `models.py` + `models_generated.py` — Model definitions with pricing, context windows
-- `providers/` — Provider implementations:
-  - `anthropic.py` — Anthropic Messages API
-  - `openai_completions.py` — OpenAI Chat Completions
-  - `openai_responses.py` — OpenAI Responses API
-  - `google.py` — Google Generative AI
-  - `google_vertex.py` — Google Vertex AI
-  - `amazon_bedrock.py` — AWS Bedrock Converse
-  - `mistral.py` — Mistral Conversations
-  - `register_builtins.py` — Auto-registers all providers on import
-- `utils/oauth/` — GitHub Copilot OAuth flow (PKCE, token management)
-- `utils/event_stream.py` — Async EventStream iterator pattern
-- `env_api_keys.py` — Environment variable API key resolution
+`packages/agent/src/xdog/agent/agent.py` owns stateful conversations, lifecycle events, cancellation, steering/follow-ups, skills, and persistence snapshots. `agent_loop.py` converts history to an `xdog.ai` context, streams a response, validates and executes tool calls, appends results, and repeats until the turn ends.
 
-**Design Pattern**: Registry-based provider dispatch. Each provider registers a `StreamFunction` that takes `(Model, Context, StreamOptions)` and returns an async iterator of `AssistantMessageEvent`.
+Coding, claw, and SDK-backed flow agent nodes reuse this runtime. Flow's external CLI backends intentionally use `CliRunner`; do not introduce a second in-process tool loop for SDK-backed nodes. Tool calls execute in parallel by default, while preparation/finalization hooks are serial. Callers enforce tool permissions through hooks—the generic tools themselves are not a security boundary. Built-ins are registered at import time and include `bash`, `filesystem`, `current_time`, and `submit_result`.
 
-### 2. `agent` — Agent Runtime with Tool Calling
+### `xdog.flow`: typed workflow engine and primary product surface
 
-**Purpose**: Generic thought-action-observation agent loop.
+A flow definition travels through:
 
-**Key Files**:
-- `agent.py` — `Agent` class: high-level wrapper with state management, event subscriptions, steering/follow-up queues
-- `agent_loop.py` — Core async loop: stream LLM -> extract tool calls -> execute tools -> repeat
-- `types.py` — `AgentTool`, `AgentToolResult`, `AgentState`, `AgentContext`, `AgentLoopConfig`, `AgentEvent` union (12 event types)
-- `event_stream.py` — `AgentEventStream`: push-based async iterator for broadcasting lifecycle events
-- `proxy.py` — Remote proxy implementation via SSE
-
-**Agent Lifecycle**:
-1. `agent.prompt(message)` -> creates `UserMessage`, starts loop
-2. Loop: stream LLM -> check for tool calls -> execute tools sequentially -> check steering/follow-up -> repeat
-3. `agent.steer(msg)` — interrupt mid-turn (skips pending tools)
-4. `agent.follow_up(msg)` — queue for after tool execution
-5. `agent.abort()` — cancel via asyncio.Event
-
-**Key Types**:
-- `AgentTool` — name, description, parameters (JSON schema), async `execute(tool_call_id, params, cancel, on_update) -> AgentToolResult`
-- `AgentState` — immutable snapshot: system_prompt, model, tools, messages, is_streaming, pending_tool_calls, error
-- `StreamFn` — async callable that bridges Agent to any LLM backend
-
-### 3. `claw` — AI Agent Orchestration Runtime (CORE)
-
-**Purpose**: NanoClaw/OpenClaw-inspired orchestration layer for running AI agents as personal assistants. This is the most complex and most important package.
-
-**Architecture** (see data flow diagram above):
-
-#### Gateway (`gateway.py`)
-- Unix socket server (`GatewayServer`)
-- JSON-line protocol: `message`, `reset`, `status`, `ping`
-- Streams text deltas to TUI client as they arrive
-- Scheduler polling loop (30s interval) for cron/interval/one-off tasks
-- Goal runner loop with cooldown (120s) for autonomous task progression
-- WeChat channel integration (optional)
-- PID file management, signal handling (SIGTERM/SIGINT)
-
-#### Orchestrator (`orchestrator.py`)
-- Central coordinator: channels, groups, runtimes
-- `register_group()` — creates `GroupRuntime` (single `_runtimes` dict)
-- `route_message()` — public entry with streaming callback support
-- All messages (TUI, WeChat, scheduler, goals) go through queue
-- Queue modes: collect (coalesce), steer (interrupt), steer-backlog (both)
-- Chunked response delivery via `BlockChunker`
-- Task scheduling and goal runner integration
-
-#### GroupRuntime (`group_runtime.py`)
-- Per-group infrastructure container (created once per `register_group()`)
-- Owns: workspace, `SessionManager`, `MemoryManager`, `GoalTracker`, tools
-- Resolves per-group `AgentConfig` (model_id → Model, thinking_level, temperature)
-- Holds `FlushRunner` and `Summarizer` (reusable compaction helpers)
-- `build_system_prompt()` — concatenates workspace identity files + goals
-
-#### AgentSession (`agent_session.py`)
-- Owns a long-lived `agent.Agent` (one per session, reused across turns)
-- `run_turn()` flow:
-  1. Build system prompt from workspace identity files
-  2. Pre-turn compaction check (`_maybe_compact`)
-  3. `agent.prompt(content)` — full tool loop
-  4. Drain event stream: text deltas, tool results, usage
-  5. Incremental persist (only new messages, no full reload)
-- Push-based crash-safe persistence via `Agent.subscribe(AgentEndEvent)`
-- `dispose()` — unsubscribe from agent events
-- Session branching: `create_branch()`, `restore_branch()`, `list_branches()`
-- `TurnResult` — frozen dataclass with response_text, tool_calls, error, usage
-
-#### Agent Bridge (`agent_bridge.py`)
-- `create_pi_ai_stream_fn()` — bridges agent event model to ai streaming
-
-#### Session Manager (`session.py`)
-- JSONL transcript storage per session
-- Session index (sessions.json) per group
-- AgentSession lifecycle: `get_or_create_agent_session(runtime)` with daily/idle resets
-- Cached AgentSession instances with LRU eviction (`evict_idle()`)
-- `steer()`, `follow_up()`, `abort()` — delegates to cached session
-- Branch storage: `save_branch()`, `load_branch()`, `list_branches()`
-- Pure check methods: `needs_daily_reset()`, `needs_idle_reset()`
-
-#### Compaction (`compaction/`)
-- `transcript.py` — `estimate_tokens()`, `compact_transcript()`, `archive_transcript()`
-- `flush_runner.py` — `FlushRunner`: pre-compaction silent agent turn (uses Agent with memory tools)
-- `summarizer.py` — `Summarizer`: structured summary via `ai.stream.complete()` (no Agent needed)
-- Pre-turn compaction (prevents token overflow, unlike post-turn)
-
-#### Memory System (`memory/`)
-- `manager.py` — `MemoryManager` facade: composes DailyLog + LongTermMemory + Search
-- `daily_log.py` — Append-only `memory/YYYY-MM-DD.md` files
-- `long_term.py` — `MEMORY.md` read/write (evergreen)
-- `indexer.py` — Chunks .md files -> embeds via sentence-transformers -> SQLite with sqlite-vec
-- `search.py` — Hybrid pipeline: vector similarity + BM25 keyword + MMR re-rank
-- `simple_search.py` — Keyword-only fallback
-- `flush.py` — Prompt templates for flush and summary
-
-#### Workspace (`workspace.py`)
-- Per-group directory with identity files:
-  - `AGENTS.md` — operating instructions
-  - `SOUL.md` — persona, tone, boundaries
-  - `IDENTITY.md` — agent name
-  - `USER.md` — human description
-  - `TOOLS.md` — tool usage guidance
-  - `BOOTSTRAP.md` — one-time first-run (deleted after)
-  - `MEMORY.md` — long-term durable memory
-  - `memory/` — daily logs
-  - `conversations/` — archived transcripts
-- `build_system_prompt()` — concatenates all identity files
-- `run_bootstrap()` — reads and deletes BOOTSTRAP.md
-
-#### Tools (`tools/`)
-- `__init__.py` — `ToolContext` dataclass + `create_all_tools(ctx)` factory
-- Built-in agent tools: `bash`, `filesystem`, `grep`, `find`, `current_time`
-- Claw-specific tools (all return `AgentTool`):
-  - `memory_search` — hybrid semantic recall
-  - `memory_get` — targeted .md file read
-  - `memory_write` — append to daily log or MEMORY.md
-  - `send_message` — cross-group messaging
-  - `schedule_task` — create cron/interval/one-off tasks
-  - `cancel_task` — remove scheduled tasks
-  - `list_tasks` — list scheduled tasks
-  - `read_file` — read file (workspace-scoped)
-  - `write_file` — write file (workspace-scoped)
-  - `list_dir` — list directory (workspace-scoped)
-  - `goal_create` — create goal with tasks
-  - `goal_update` — update task/goal status
-  - `goal_list` — list goals
-  - `todo_write` — progress tracking checklist
-
-#### Goals (`goals.py`)
-- `GoalTracker` — persistent goal/task management
-- JSON persistence (goals.json per group)
-- States: active/completed/abandoned (goals), pending/in_progress/completed/skipped (tasks)
-- Notification queue for TUI updates
-- Active summary injected into system prompt
-
-#### Channels (`channels/`)
-- `base.py` — Abstract `Channel` interface: connect, disconnect, send_message, send_chunk
-- `tui_channel.py` — tui integration
-- `weixin/` — WeChat channel with polling, auth, context token management
-
-#### Other
-- `config.py` — YAML config with layered resolution (defaults < file < CLI)
-- `queue.py` — Lane-aware FIFO with semaphore concurrency control
-- `scheduler.py` — Cron (croniter), interval, one-off scheduling
-- `pruning.py` — In-memory tool result trimming
-- `chunker.py` — Paragraph-aware message splitting (respects code fences)
-- `cli.py` — CLI entry point
-- `tui_app.py` / `tui_client.py` — TUI client connecting to gateway
-
-### 4. `tui` — Terminal UI Library
-
-**Purpose**: Custom terminal UI with differential rendering.
-
-**Key Files**:
-- `tui.py` — Main TUI application class
-- `terminal.py` — Raw terminal I/O, ANSI escape handling
-- `keys.py` / `keybindings.py` — Key event parsing and binding
-- `stdin_buffer.py` — Buffered stdin reader
-- `components/` — Component library:
-  - `box.py`, `container.py` — Layout components
-  - `editor.py`, `input.py` — Text editing with undo/redo
-  - `markdown.py` — Markdown rendering
-  - `image.py` — Terminal image rendering
-  - `text.py`, `truncated_text.py` — Text display
-  - `select_list.py` — Selection menus
-  - `loader.py`, `spacer.py` — Utility components
-- `autocomplete.py` / `fuzzy.py` — Fuzzy matching for autocomplete
-- `kill_ring.py` / `undo_stack.py` — Emacs-style editing features
-
-### 5. `coding` — Interactive Coding Agent CLI (`xdog-coding`)
-
-**Purpose**: Standalone coding agent with session management, TUI interface, and slash commands. Uses `agent.Agent` as its core engine with built-in tools from `agent.tools` (bash, filesystem, grep, find).
-
-**Key Files**:
-- `main.py` — CLI entry point (`xdog-coding` command)
-- `config.py` — Hierarchical config (global < project < CLI)
-- `core/agent_session.py` — Main session controller with compaction and branching
-- `core/compaction/` — Context compaction with LLM summarization
-- `core/extensions/` — Plugin system (`~/.pi/extensions/`)
-- `core/skills.py` — Slash commands from YAML
-- `core/session_manager.py` — JSON-based session persistence
-- `core/model_registry.py` / `model_resolver.py` — Model lookup
-- `core/system_prompt.py` / `prompt_templates.py` — Prompt construction
-- `core/event_bus.py` — Event dispatching
-- `cli/` — CLI argument parsing, session picker, model listing
-- `modes/interactive/` — TUI-based interactive mode with streaming, diff display, tool execution visualization
-
-**Note**: The `coding` package now uses `agent.Agent` as its core engine with built-in tools from `agent.tools` (bash, filesystem, grep, find). The old per-tool classes (`core/tools/`, `core/bash_executor.py`) are legacy code pending removal.
-
-### 6. `mom` — Slack Bot for Coding Agent
-
-**Purpose**: Slack-connected coding agent with sandbox execution.
-
-**Key Files**:
-- `main.py` — Entry point
-- `agent.py` — Agent orchestration
-- `slack.py` — Slack API integration
-- `sandbox.py` — Sandboxed execution environment
-- `context.py` — Conversation context management
-- `store.py` — Persistence
-- `tools/` — Tool implementations: `attach`, `bash`, `edit`, `read`, `write`, `truncate`
-
-### 7. `flow` — Multi-Agent Workflow Engine & Code Generator
-
-**Purpose**: Define multi-agent pipelines as JSON, execute them at runtime, or compile them to a self-contained Python module.
-
-**Key Files**:
-- `models.py` — frozen dataclasses: `WorkflowDef`, `NodeDef`, `EdgeDef`, `Condition`
-- `loader.py` — `load_workflow(path)` — parse + validate JSON into `WorkflowDef`
-- `executor.py` — `execute(wf, ...)` — async thought-action-observation loop with conditional edges and bounded back-edge loops
-- `codegen.py` — `generate(wf)` — emit a self-contained Python module from a workflow
-- `graph.py` — `to_ascii()` / `to_mermaid()` — topology rendering
-- `cli.py` — `xdog-flow` CLI: `validate`, `run` (`--timeout` per-node), `generate`, `graph` (`--mermaid`/`--svg`), `build`
-- `graph.py` — `to_ascii` / `to_mermaid` / `to_svg` topology rendering. `to_svg` uses Graphviz auto-layout (via `pydot` + system `dot`), colour-coded by node type, with a dependency-free `_to_svg_fallback` when `dot` is absent.
-- `builder/` — visual workflow builder: `serialize.py` (workflow↔JSON round-trip), `model.py` + `actions.py` (headless, fully-tested edit core, re-validates on every edit), `app.py` (TUI shell — 3 modes: normal/prompt-edit/edge), `svg_doc.py` (SVG-as-editable-document: embeds workflow JSON in an `<metadata id=flow-workflow>` element so a saved `.svg` is both a diagram and its own source), `io.py` (`.svg`/`.json` load/save dispatch). `app.py` + `to_svg` + `svg_doc` were **generated by flow workflows** (`examples/builder_codegen.json`, `examples/svg_codegen.json`). `xdog-flow build <file.json|file.svg>` opens it.
-- `examples/research_write_review.json` — 3-node research→write→review with conditional loop
-- `examples/tools_script.json` — script node + per-node tools demo
-- `examples/auto_enrich.json` — declared inputs + structured output via submit_result demo
-- `examples/codegen_builder.json` — codegen pipeline demo (design→implement→verify→review loop; script+bash+filesystem+submit_result); `codegen_tools.py` backs it. Orchestration demo only — no git isolation/revert (use the autobuild loop for gated codegen).
-- `tools.py` — `ToolRegistry` (register/resolve `AgentTool` by name) + `default_registry()` (now includes agent builtins: bash/filesystem/submit_result/…)
-
-**Design**: Each node is an `agent.Agent` turn (type `"agent"`) or a Python function (type `"script"`). Data flows through **node-private named ports** wired by **explicit edge mappings** (`nodeA.output.x -> nodeB.input.a`), not a shared global state — an edge's `"map": {src_port: dst_port}` says which source output port feeds which destination input port. A node declares `"inputs"`/`"outputs"` port lists (bare name or `{name,type}`). The workflow's `"state"` block seeds the output ports of a reserved source node `$in`. A script node's function is `f(ctx, <input ports by name>) -> output` with typed ports (JSON types coerced to/from the string wire value); its code is either **inline** (`"code"` field, exec'd) or a **ref** (`"run": "module:func"` imported from the workflow file's own directory). `ctx` is a `RuntimeContext` (inputs/workflow_name/node_id) where `ctx.inputs` is this node's port-local input mapping. Prompt `{{x}}` reads the node's own input port `x`; an edge `when` condition's `{{x}}` reads the source node's output port. Inline code is validated at load (compile + ctx-first signature matching declared input ports). Validation rejects an input port fed by no edge, a `map` to a nonexistent port, and two unconditional edges feeding one input port (the old shared-key clash). Edges are walked after each node; back-edges (loops) require `loop.max` and are bounded at runtime. `execute()` returns `ExecResult.outputs` nested as `outputs[node_id][port]`. Provider is resolved once via `ai.provider()` and shared across all nodes. Per-node `"tools"` lists are resolved via `ToolRegistry`. Agent nodes support `"output_schema": {field: type}` (forces the agent to call the `submit_result` builtin tool; validated JSON stored in the node's output port).
-
----
-
-### 8. `pods` — GPU Pod Management CLI
-
-**Purpose**: CLI for managing vLLM deployments on GPU pods.
-
-**Key Files**:
-- `cli.py` — CLI entry point
-- `config.py` — Pod configuration
-- `ssh.py` — SSH connection management
-- `model_configs.py` — vLLM model configurations
-- `commands/` — CLI commands: `pods` (manage), `models` (list), `prompt` (run)
-
----
-
-## Data Directory Layout (claw)
-
-```
-data/
-  groups/
-    <groupId>/
-      workspace/           # Agent workspace (identity + memory)
-        AGENTS.md          # Operating instructions
-        SOUL.md            # Persona, tone, boundaries
-        IDENTITY.md        # Agent name
-        USER.md            # Human description
-        TOOLS.md           # Tool usage guidance
-        BOOTSTRAP.md       # One-time first-run (deleted after)
-        MEMORY.md          # Long-term durable memory
-        memory/            # Daily logs (YYYY-MM-DD.md)
-        conversations/     # Archived transcripts (.md)
-      sessions/
-        sessions.json      # Active sessions index
-        <sessionId>.jsonl  # Conversation transcripts
-      goals.json           # Persistent goals and tasks
-      memory.db            # SQLite + sqlite-vec (if hybrid search enabled)
-  scheduled_tasks.json     # Cron/interval/one-off task definitions
+```text
+JSON or metadata-bearing SVG
+  -> loader and whole-graph validation
+  -> readiness/frontier executor
+  -> script | SDK agent | external CLI agent | human | subflow nodes
+  -> mapped outputs, trace, and token usage
 ```
 
----
+The core invariant in `models.py` and `loader.py` is node-private typed ports connected by explicit edge mappings. `$in` and `$output` are synthetic source/sink nodes; there is no shared global workflow state. Conditions, bounded loops, joins, fan-out, retries, isolation, session inheritance, and schema compatibility are validated before execution.
 
-## Code Conventions
+`executor.py` schedules ready nodes concurrently; it dispatches script, SDK-agent, external-CLI-agent, human, and subflow nodes while handling checkpoints/resume, memoization, loops, failure policy, token budgets, and human pauses. `runners.py` implements the SDK and external CLI agent backends. Structured agent output is captured through the injected `submit_result` tool rather than parsed from prose. Agent history crosses nodes or loop iterations only through explicit `inherit` configuration.
 
-- **Immutability**: All core types are `@dataclass(frozen=True)`. State updates use `dataclasses.replace()`.
-- **Async**: asyncio throughout. No blocking I/O in agent loop.
-- **Type Unions**: Discriminated unions via `Literal` type fields (e.g., `AgentEvent`, `AssistantMessageEvent`).
-- **Tool Pattern**: All tools return native `AgentTool`. `ToolContext` dataclass holds shared dependencies; `create_all_tools(ctx)` assembles them.
-- **Testing**: pytest + pytest-asyncio (asyncio_mode=auto). 192 tests for claw, 579 total.
-- **Config**: YAML-based with layered resolution. Sensitive keys (api_key, tokens) never written to disk.
-- **Logging**: Standard `logging` module throughout.
+`codegen.py` and the interpreter are expected to preserve behavioral parity. Generated workflows containing subflows still import parts of `xdog.flow`; do not assume every generated module is completely standalone. Review `LICENSE-EXCEPTION.md` when changing codegen, portable bundles, scheduling-unit generation, or copied runtime templates because it defines the generated-output licensing boundary. The `xdog-flow` CLI provides `validate`, `run`, `test`, `generate`, `graph`, `build`, and scheduling commands. The headless builder model is under `builder/`; its TUI and SVG document support sit on top of that model.
 
-## Key Design Decisions
+### `xdog.coding`: interactive coding client
 
-1. **In-process asyncio** (not Docker/subprocess) — matches OpenClaw's embedded agent pattern
-2. **JSONL** for session transcripts — simple, append-only, human-readable
-3. **Workspace = agent brain** — markdown files are source of truth for identity + memory
-4. **agent.Agent directly embedded** — long-lived per session with event subscription for persistence
-5. **Local embeddings** (sentence-transformers) — zero API cost, offline capable
-6. **Queue modes** from OpenClaw — collect/steer/steer-backlog for mid-run message handling
-7. **Pre-turn compaction** — prevents token overflow; FlushRunner + Summarizer as explicit entities
-8. **Gateway daemon** — long-running process with Unix socket, TUI connects as client
-9. **Goal runner** — background autonomous task progression with cooldown
-10. **SessionManager owns AgentSession lifecycle** — creation, resets, caching, eviction in one place
-11. **Single dispatch path** — gateway always routes through orchestrator queue
+`packages/coding/src/xdog/coding/main.py` selects interactive TUI, one-shot print, or JSON-lines RPC modes. `core/sdk.py` resolves layered configuration, model metadata, permissions, skills, tools, and persisted state before constructing an `xdog.agent.Agent`. Configuration precedence is global settings, project `.coding/settings.json`, then CLI overrides.
 
-## Current Status
+`core/agent_session.py` rebuilds the prompt and checks compaction before each turn, then adapts agent events to the selected UI mode. Session history, settings, summaries, and branches are persisted as JSON by `core/session_manager.py`. Project context discovery is non-recursive from the working directory: `CLAUDE.md`, `AGENTS.md`, `.coding/INSTRUCTIONS.md`, and `.coding/instructions.md`, each capped at 64 KiB. Permissions belong in the coding client's pre-tool hook, not in the generic agent runtime. Preserve the default fail-closed behavior: read-only calls may run automatically, mutating calls require approval, and unattended execution may mutate only when `allow-all` was explicitly selected. Permission gates are not an OS sandbox.
 
-- **All feature areas** fully implemented in claw
-- **Implemented**: Long-lived Agent with event subscription, push-based persistence, pre-turn compaction, session branching, LRU eviction, ToolContext, MemoryManager facade
-- **Not implemented**: Memory vector search (embeddings, sentence-transformers, sqlite-vec, BM25) — uses SimpleMemorySearch keyword fallback
-- **All 192 claw tests passing (579 total)**
+### `xdog.claw`: persistent multi-channel assistant
+
+The main path is:
+
+```text
+TUI Unix socket or Weixin channel
+  -> core/runtime/gateway.py
+  -> Orchestrator and per-group queue (collect/steer/steer-backlog)
+  -> GroupRuntime's active AgentSession
+  -> prompt rebuild and pre-turn compaction
+  -> xdog.agent stream/tools
+  -> JSONL transcript persistence and channel output
+```
+
+Scheduler and goal work re-enter through the same orchestrator path as system input. A group runtime owns its workspace, tools, memory, goals, prompt builder, transcript store, and one active cached agent session. Transcripts are JSONL with a `sessions.json` index; `SessionManager` is a compatibility alias for `TranscriptStore`, not an LRU multi-session manager.
+
+Prompt construction intentionally separates a cacheable static prefix from mutable workspace, memory, environment, and goal content. Compaction flushes durable memory, summarizes through the LLM, archives the transcript, then replaces older history. Memory uses vector+BM25 search when optional dependencies initialize and falls back to keyword search otherwise.
+
+Importing `xdog.claw.core` intentionally registers claw-specific tools. Preserve these side-effect imports when reorganizing code.
+
+### `xdog.tui` and `xdog.site`
+
+`xdog.tui` is a dependency-light component/rendering library, not an application policy layer. Components render ANSI line arrays; `TUI` performs differential updates in the main terminal buffer so scrollback is preserved.
+
+`xdog.site` is a Flask documentation/marketing site with a workflow viewer/runner. The HaveFun runner trusts submitted workflow code, is not a sandbox, and is suitable only for trusted/local use. Deployments must set `XDOG_SITE_SECRET` to a strong externally managed value instead of relying on the development fallback. The demo integration dynamically imports flow/agent/ai and assumes the workspace/umbrella installation; check package metadata before treating `xdog-site` as independently runtime-complete.
+
+## Cross-cutting invariants
+
+- Core state models favor frozen dataclasses and replacement over in-place mutation.
+- Agent and provider paths are asynchronous; avoid blocking I/O in their event loops.
+- Skills with session scope belong in the cacheable prompt prefix; turn-scoped skill bodies are messages so removing them does not invalidate that prefix.
+- Flow script workspace checks are audit/confinement guards against accidental access, not a hostile-code sandbox.
+- Do not infer current capabilities from old module names or protocol adapters; check package registration and public exports.

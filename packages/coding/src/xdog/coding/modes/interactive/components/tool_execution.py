@@ -9,6 +9,7 @@ from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.components.diff import Diff
 from xdog.tui.components.text import Text
 from xdog.tui.tui import Container
+from xdog.tui.utils import redact_sensitive_text, sanitize_terminal_text
 
 # Threshold for collapsing large non-diff output
 _COLLAPSE_THRESHOLD = 500
@@ -31,11 +32,14 @@ class ToolExecutionComponent(Container):
     ) -> None:
         super().__init__()
         self._theme = theme
-        self._tool_name = tool_name
+        self._tool_name = sanitize_terminal_text(tool_name)
         self._state = "running"  # running → success | error
         self._result_text: Text | None = None
         self._diff_component: Diff | None = None
         self._header_text: Text | None = None
+        self._result = ""
+        self._is_error = False
+        self._expanded = False
 
         # Tool call header with state icon
         header_str = self._make_header()
@@ -50,12 +54,18 @@ class ToolExecutionComponent(Container):
 
     def _make_header(self) -> str:
         """Build header string with state-appropriate icon and color."""
-        icons = {"running": "⚡", "success": "✓", "error": "✗"}
+        icons = {
+            "running": "⚡",
+            "success": "✓",
+            "error": "✗",
+            "canceled": "■",
+        }
         icon = icons.get(self._state, "⚡")
         color_fns = {
             "running": self._theme.tool,
             "success": self._theme.success,
             "error": self._theme.error,
+            "canceled": self._theme.dim,
         }
         color_fn = color_fns.get(self._state, self._theme.tool)
         return color_fn(f"  {icon} {self._tool_name}")
@@ -67,9 +77,10 @@ class ToolExecutionComponent(Container):
 
     def set_streaming(self, text: str) -> None:
         """Show live streaming output preview (e.g. bash stdout)."""
-        # Show last 10 lines of streaming output
-        lines = text.strip().split("\n")
-        preview = "\n".join(lines[-10:]) if len(lines) > 10 else text.strip()
+        # Show last 10 lines of sanitized streaming output.
+        safe_text = sanitize_terminal_text(text)
+        lines = safe_text.strip().split("\n")
+        preview = "\n".join(lines[-10:]) if len(lines) > 10 else safe_text.strip()
         display = _truncate(preview, 500)
         if self._result_text is not None:
             self._result_text.set_text(self._theme.dim(f"    ⏳ {display}"))
@@ -80,62 +91,80 @@ class ToolExecutionComponent(Container):
             )
             self.add_child(self._result_text)
 
-    def set_result(self, result: str, *, is_error: bool = False) -> None:
-        """Set the tool result text.
-
-        If the result contains a custom diff (lines prefixed with ``+linenum``
-        or ``-linenum``), it is rendered using the Diff component with colored
-        lines and intra-line highlighting. Otherwise, a truncated plain text
-        summary is shown. Large outputs (>500 chars) are collapsed.
-        """
-        # Update state
-        self._state = "error" if is_error else "success"
+    def set_canceled(self) -> None:
+        """Mark an active tool terminal without discarding its last preview."""
+        self._state = "canceled"
         self._update_header()
+        if self._result_text is None:
+            self._result_text = Text(
+                self._theme.dim("    → Cancelled"),
+                0,
+                0,
+            )
+            self.add_child(self._result_text)
 
-        if _contains_diff(result):
-            # Extract the diff portion (after the summary line)
-            diff_text = _extract_diff(result)
-            summary = _extract_summary(result)
+    def set_result(self, result: str, *, is_error: bool = False) -> None:
+        """Retain a complete tool result and render its selected detail level."""
+        self._state = "error" if is_error else "success"
+        self._result = sanitize_terminal_text(result)
+        self._is_error = is_error
+        self._update_header()
+        self._render_result()
 
-            # Show the summary line
-            if summary and self._result_text is None:
-                self._result_text = Text(
-                    self._theme.dim(f"    → {summary}"),
-                    0, 0,
-                )
-                self.add_child(self._result_text)
+    def set_expanded(self, expanded: bool) -> None:
+        """Show the complete result or a compact summary."""
+        if self._expanded == expanded:
+            return
+        self._expanded = expanded
+        self._render_result()
 
-            # Render the diff with colors and intra-line highlighting
+    def _render_result(self) -> None:
+        result = self._result
+        if not result:
             if self._diff_component is not None:
-                self._diff_component.set_diff(diff_text)
-            else:
-                self._diff_component = Diff(
-                    diff_text,
-                    padding_left=4,
-                    color_added=self._theme.diff_added,
-                    color_removed=self._theme.diff_removed,
-                    color_context=self._theme.diff_context,
-                    inverse=self._theme.inverse,
-                )
-                self.add_child(self._diff_component)
-        else:
-            # Plain text result — collapse large outputs
-            if len(result) > _COLLAPSE_THRESHOLD:
-                display = result[:200].replace("\n", " ").replace("\r", "")
-                line_count = result.count("\n")
-                display += f" [...{len(result) - 200} more chars, {line_count} lines]"
-            else:
-                display = _truncate(result, 200)
-
-            color_fn = self._theme.error if is_error else self._theme.dim
+                self.remove_child(self._diff_component)
+                self._diff_component = None
             if self._result_text is not None:
-                self._result_text.set_text(color_fn(f"    → {display}"))
-            else:
-                self._result_text = Text(
-                    color_fn(f"    → {display}"),
-                    0, 0,
-                )
-                self.add_child(self._result_text)
+                self._result_text.set_text(self._theme.dim("    → (no output)"))
+            return
+
+        if self._diff_component is not None:
+            self.remove_child(self._diff_component)
+            self._diff_component = None
+
+        if _contains_diff(result) and self._expanded:
+            summary = _extract_summary(result)
+            display = summary or "diff"
+            self._set_result_text(display)
+            self._diff_component = Diff(
+                _extract_diff(result),
+                padding_left=4,
+                color_added=self._theme.diff_added,
+                color_removed=self._theme.diff_removed,
+                color_context=self._theme.diff_context,
+                inverse=self._theme.inverse,
+            )
+            self.add_child(self._diff_component)
+            return
+
+        if self._expanded:
+            display = result
+        elif len(result) > _COLLAPSE_THRESHOLD:
+            preview = result[:200].replace("\n", " ").replace("\r", "")
+            line_count = len(result.splitlines())
+            display = f"{preview} [...{len(result) - 200} more chars, {line_count} lines; Ctrl+O to expand]"
+        else:
+            display = _truncate(result, 200)
+        self._set_result_text(display)
+
+    def _set_result_text(self, display: str) -> None:
+        color_fn = self._theme.error if self._is_error else self._theme.dim
+        rendered = color_fn(f"    → {display}")
+        if self._result_text is None:
+            self._result_text = Text(rendered, 0, 0)
+            self.add_child(self._result_text)
+        else:
+            self._result_text.set_text(rendered)
 
 
 _DIFF_LINE_RE = re.compile(r"^[+\-]\s*\d+\s", re.MULTILINE)
@@ -177,19 +206,19 @@ def _summarize_args(args: dict[str, Any], tool_name: str = "") -> str:
     and falls back to generic key=value pairs for unknown tools.
     """
     if tool_name == "bash":
-        cmd = str(args.get("command", ""))
+        cmd = redact_sensitive_text(str(args.get("command", "")))
         return cmd if len(cmd) <= 80 else cmd[:77] + "..."
     if tool_name == "filesystem":
-        action = args.get("action", "")
-        path = args.get("path", "")
+        action = sanitize_terminal_text(str(args.get("action", "")))
+        path = redact_sensitive_text(str(args.get("path", "")))
         return f"{action} {path}"
     if tool_name == "grep":
-        pattern = args.get("pattern", "")
-        path = args.get("path", ".")
+        pattern = redact_sensitive_text(str(args.get("pattern", "")))
+        path = redact_sensitive_text(str(args.get("path", ".")))
         return f"/{pattern}/ in {path}"
     if tool_name == "find":
-        pattern = args.get("pattern", "")
-        path = args.get("path", ".")
+        pattern = redact_sensitive_text(str(args.get("pattern", "")))
+        path = redact_sensitive_text(str(args.get("path", ".")))
         return f"{pattern} in {path}"
     return _generic_summarize_args(args)
 
@@ -199,7 +228,8 @@ def _generic_summarize_args(args: dict[str, Any]) -> str:
     parts: list[str] = []
     for key, value in args.items():
         if isinstance(value, str):
-            display = value if len(value) <= 60 else value[:57] + "..."
+            safe_value = redact_sensitive_text(value)
+            display = safe_value if len(safe_value) <= 60 else safe_value[:57] + "..."
             parts.append(f"{key}={display!r}")
         elif isinstance(value, (int, float, bool)):
             parts.append(f"{key}={value}")

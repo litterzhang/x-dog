@@ -8,20 +8,21 @@ from xdog.coding.modes.interactive.components.assistant_message import Assistant
 from xdog.coding.modes.interactive.components.tool_execution import ToolExecutionComponent
 from xdog.coding.modes.interactive.components.user_message import UserMessageComponent
 from xdog.coding.modes.interactive.theme import Theme
+from xdog.tui.components.details import set_details_expanded
 from xdog.tui.components.text import Text
 from xdog.tui.tui import Component, Container
+from xdog.tui.utils import sanitize_terminal_text
 
 
 class ChatLog(Container):
-    """Scrollable chat log with streaming support and component pruning."""
-
-    MAX_COMPONENTS = 200
+    """Retained chat components plus a mutable streaming tail."""
 
     def __init__(self, theme: Theme) -> None:
         super().__init__()
         self._theme = theme
         self._streaming: dict[str, AssistantMessageComponent] = {}
         self._last_tool: ToolExecutionComponent | None = None
+        self._details_expanded = False
 
     def add_user(self, text: str) -> None:
         """Add a user message."""
@@ -33,7 +34,8 @@ class ChatLog(Container):
 
     def add_system(self, text: str) -> None:
         """Add a system/info message."""
-        self._append(Text(self._theme.system(f"  {text}"), 1, 0))
+        safe_text = sanitize_terminal_text(text)
+        self._append(Text(self._theme.system(f"  {safe_text}"), 1, 0))
 
     def add_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolExecutionComponent:
         """Add a tool execution component."""
@@ -105,15 +107,12 @@ class ChatLog(Container):
         self.clear()
         self._streaming.clear()
 
-    def _append(self, comp: Component) -> None:
-        self.add_child(comp)
-        self._prune()
+    def set_details_expanded(self, expanded: bool) -> None:
+        """Apply a presentation-only detail mode to retained components."""
+        self._details_expanded = expanded
+        for child in tuple(self.children):
+            set_details_expanded(child, expanded)
 
-    def _prune(self) -> None:
-        while len(self.children) > self.MAX_COMPONENTS:
-            oldest = self.children[0]
-            self.children.pop(0)
-            # Clean up streaming references
-            for sid, msg in list(self._streaming.items()):
-                if msg is oldest:
-                    del self._streaming[sid]
+    def _append(self, comp: Component) -> None:
+        set_details_expanded(comp, self._details_expanded)
+        self.add_child(comp)

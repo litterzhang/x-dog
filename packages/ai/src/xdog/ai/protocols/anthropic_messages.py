@@ -353,10 +353,9 @@ async def _stream_impl(
         else:
             headers["Authorization"] = f"Bearer {auth.api_key}"
 
-    yield StartEvent(partial=output.snapshot())
-
     active_block_index: int = -1
     active_block_type: str | None = None
+    started = False
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
@@ -386,10 +385,23 @@ async def _stream_impl(
                     for evt_or_update in events:
                         if isinstance(evt_or_update, tuple):
                             active_block_index, active_block_type = evt_or_update
-                        else:
+                            continue
+                        if isinstance(evt_or_update, ErrorEvent):
                             yield evt_or_update
+                            return
+                        if not started:
+                            started = True
+                            yield StartEvent(partial=output.snapshot())
+                        yield evt_or_update
+
+                if not started:
+                    raise httpx.RemoteProtocolError(
+                        "Upstream stream ended before producing an event",
+                    )
 
     except httpx.HTTPError as exc:
+        if not started:
+            raise
         output.stop_reason = "error"
         output.error_message = f"HTTP error: {exc}"
         output.mark_dirty()

@@ -103,6 +103,16 @@ def test_disabling_thinking_is_persisted(session: AgentSession) -> None:
     assert restored.settings["thinking_level"] == "off"
 
 
+def test_cancel_clears_queued_agent_messages(session: AgentSession) -> None:
+    session.agent.follow_up("later")
+    session.agent.steer("interrupt")
+    assert session.agent.has_queued_messages()
+
+    session.cancel()
+
+    assert not session.agent.has_queued_messages()
+
+
 def test_activating_a_skill_rebuilds_without_raising(session: AgentSession) -> None:
     """Activation triggers a rebuild from a different entry point."""
     session.activate_skill("does-not-exist")

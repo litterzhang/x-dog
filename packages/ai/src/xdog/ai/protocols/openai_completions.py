@@ -289,15 +289,29 @@ def stream(
         # -- Message builder -----------------------------------------------
         output = MessageBuilder(model)
 
-        yield StartEvent(partial=output.snapshot())
-
         # Current block being streamed (mutable dict in output.content)
         current_block: dict[str, Any] | None = None
+        started = False
 
         try:
             response = await client.chat.completions.create(**body)
+            iterator = response.__aiter__()
+            try:
+                first_chunk = await anext(iterator)
+            except StopAsyncIteration as exc:
+                raise httpx.RemoteProtocolError(
+                    "Upstream stream ended before producing an event",
+                ) from exc
 
-            async for chunk in response:
+            async def chunks() -> AsyncIterator[Any]:
+                yield first_chunk
+                async for item in iterator:
+                    yield item
+
+            started = True
+            yield StartEvent(partial=output.snapshot())
+
+            async for chunk in chunks():
                 if not chunk or not isinstance(chunk, object):
                     continue
 
@@ -474,6 +488,8 @@ def stream(
             result_future.set_result(final_msg)
 
         except Exception as exc:
+            if not started:
+                raise
             output.stop_reason = "error"
             output.error_message = str(exc)
             error_snapshot = output.snapshot()

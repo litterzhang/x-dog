@@ -6,6 +6,7 @@ from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.components.markdown import Markdown
 from xdog.tui.components.spacer import Spacer
 from xdog.tui.tui import Container
+from xdog.tui.utils import sanitize_terminal_text
 
 
 class UserMessageComponent(Container):
@@ -16,7 +17,7 @@ class UserMessageComponent(Container):
         self.add_child(Spacer(1))
         self.add_child(
             Markdown(
-                text, 1, 1,
+                sanitize_terminal_text(text), 1, 1,
                 theme.markdown,
                 default_text_style=theme.user_default_text,
             )

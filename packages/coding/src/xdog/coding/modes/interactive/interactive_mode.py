@@ -11,7 +11,9 @@ Component tree:
         ├── chat_log (ChatLog)
         ├── status_container (Container)
         ├── footer (FooterComponent)
-        └── editor (CustomEditorComponent)
+        ├── editor (CustomEditorComponent)
+        ├── message_queue (Container)
+        └── permission_prompt (Container)
 """
 
 from __future__ import annotations
@@ -20,12 +22,14 @@ import asyncio
 import logging
 import queue
 import random
-import re
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 from xdog.agent import (
+    AgentEndEvent,
     AgentEvent,
     MessageEndEvent,
     MessageStartEvent,
@@ -55,10 +59,33 @@ from xdog.coding.modes.interactive.theme import create_default_theme
 from xdog.tui.components.loader import Loader
 from xdog.tui.components.text import Text
 from xdog.tui.tui import TUI, Container
+from xdog.tui.utils import sanitize_terminal_text
 
 logger = logging.getLogger(__name__)
 
 # Waiting phrases for the shimmer animation
+@dataclass(frozen=True, slots=True)
+class _TurnStamp:
+    generation: int
+    cancel_epoch: int
+
+
+_TURN_EVENT_TYPES = frozenset({
+    "assistant_start",
+    "text_update",
+    "assistant_end",
+    "tool_call",
+    "tool_update",
+    "tool_result",
+    "permission_request",
+    "turn_footer_update",
+    "queued_message_started",
+    "queue_changed",
+    "turn_end",
+    "error",
+})
+
+
 WAITING_PHRASES = [
     "pondering",
     "conjuring",
@@ -118,6 +145,15 @@ class InteractiveMode:
         self._tool_components: dict[str, ToolExecutionComponent] = {}
         self._permission_prompt: PermissionPromptComponent | None = None
         self._awaiting_permission = False
+        self._details_expanded = verbose
+        self._pending_messages: deque[tuple[str, bool]] = deque()
+        self._queue_lock = threading.Lock()
+        self._worker_active = False
+        self._cancel_requested = False
+        self._worker_generation = 0
+        self._cancel_epoch = 0
+        self._active_stamp = _TurnStamp(0, 0)
+        self._dispatch_stamp: _TurnStamp | None = None
 
         # Event queue for thread-safe UI updates from agent events
         self._event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -127,9 +163,11 @@ class InteractiveMode:
 
         self._header = Text("", 1, 0)
         self._chat_log = ChatLog(self._theme)
+        self._chat_log.set_details_expanded(self._details_expanded)
         self._status_container = Container()
         self._footer = FooterComponent(self._theme)
         self._editor = CustomEditorComponent(self._theme)
+        self._message_queue_container = Container()
         self._permission_container = Container()
 
         # Status components
@@ -143,12 +181,15 @@ class InteractiveMode:
         root.add_child(self._status_container)
         root.add_child(self._footer)
         root.add_child(self._editor)
+        root.add_child(self._message_queue_container)
         # Approval belongs directly after the input, not over conversation
         # history. The container is empty except while a call is pending.
         root.add_child(self._permission_container)
 
         self._tui.add_child(root)
         self._tui.set_focus(self._editor)
+        self._editor.set_focus(True)
+        self._tui.add_input_listener(self._handle_global_input)
 
         # Wire editor callbacks
         self._editor.on_submit = self._handle_submit
@@ -156,10 +197,21 @@ class InteractiveMode:
         self._editor.on_ctrl_d = self._request_exit
         self._editor.on_escape = self._handle_escape
 
-        # Subscribe to agent events and permission requests. The latter callback
-        # runs in the background agent thread and only enqueues TUI work.
+        # Subscribe to agent events. Permission handlers are bound per turn so
+        # a canceled turn cannot surface an approval panel during its successor.
         self._unsubscribe = self._session.agent.subscribe(self._on_agent_event)
-        self._session.permissions.set_request_handler(self._on_permission_request)
+
+    def _handle_global_input(self, event: Any) -> dict[str, object] | None:
+        """Handle global detail toggling and active-turn cancellation."""
+        if event.matches("escape") and self._is_busy:
+            self._handle_escape()
+            return {"consume": True}
+        if event.matches("ctrl+o"):
+            self._details_expanded = not self._details_expanded
+            self._chat_log.set_details_expanded(self._details_expanded)
+            self._tui.request_render()
+            return {"consume": True}
+        return None
 
     def run(self) -> None:
         """Start the interactive TUI (blocking)."""
@@ -303,13 +355,43 @@ class InteractiveMode:
         # Regular message
         self._start_turn(value)
 
-    def _start_turn(self, message: str, *, echo: bool = True) -> None:
-        """Run one agent turn in a background thread.
+    def _update_message_queue(self) -> None:
+        """Render messages waiting behind the active turn."""
+        with self._queue_lock:
+            pending = list(self._pending_messages)
+        self._message_queue_container.clear()
+        if not pending:
+            return
+        previews: list[str] = []
+        for index, (message, _echo) in enumerate(pending, 1):
+            preview = sanitize_terminal_text(message).replace("\n", " ↵ ")
+            if len(preview) > 120:
+                preview = preview[:120] + "…"
+            previews.append(f"  {index}. {preview}")
+        text = f"Queued messages ({len(pending)}):\n" + "\n".join(previews)
+        self._message_queue_container.add_child(
+            Text(self._theme.system(text), 1, 0),
+        )
 
-        ``echo`` is False for text the user did not type — a skill's
-        instructions can run to hundreds of lines, and replaying them into the
-        chat log would bury the conversation they were meant to help with.
-        """
+    def _start_turn(self, message: str, *, echo: bool = True) -> None:
+        """Start immediately or enqueue behind the active worker."""
+        with self._queue_lock:
+            if self._worker_active:
+                self._pending_messages.append((message, echo))
+                queued = True
+            else:
+                self._worker_active = True
+                self._cancel_requested = False
+                self._worker_generation += 1
+                generation = self._worker_generation
+                self._active_stamp = _TurnStamp(generation, self._cancel_epoch)
+                queued = False
+
+        if queued:
+            self._update_message_queue()
+            self._tui.request_render()
+            return
+
         if echo:
             self._chat_log.add_user(message)
         self._set_busy(True)
@@ -318,7 +400,7 @@ class InteractiveMode:
 
         thread = threading.Thread(
             target=self._run_agent_turn,
-            args=(message,),
+            args=(message, generation),
             daemon=True,
         )
         thread.start()
@@ -355,10 +437,7 @@ class InteractiveMode:
             return
 
         if self._is_busy:
-            self._session.abort()
-            self._set_busy(False)
-            self._chat_log.add_system("aborted")
-            self._tui.request_render()
+            self._cancel_active_work()
             self._last_ctrl_c_at = now
             return
 
@@ -369,14 +448,48 @@ class InteractiveMode:
             self._last_ctrl_c_at = now
             self._tui.request_render()
 
+    def _cancel_active_work(self) -> None:
+        """Cancel active work and restore queued messages to the editor."""
+        with self._queue_lock:
+            if self._cancel_requested:
+                return
+            self._cancel_requested = True
+            self._cancel_epoch += 1
+            self._active_stamp = _TurnStamp(
+                self._worker_generation,
+                self._cancel_epoch,
+            )
+            queued = list(self._pending_messages)
+            self._pending_messages.clear()
+
+        queued_text = "\n\n".join(message for message, _echo in queued)
+        draft = self._editor.get_text()
+        restored = "\n\n".join(text for text in (queued_text, draft) if text.strip())
+        if restored:
+            self._editor.set_text(restored)
+
+        for component in self._tool_components.values():
+            component.set_canceled()
+        self._tool_components.clear()
+
+        self._session.cancel()
+        self._permission_container.clear()
+        self._permission_prompt = None
+        self._awaiting_permission = False
+        self._tui.set_focus(self._editor)
+        self._update_message_queue()
+        self._chat_log.drop_assistant(self._stream_id)
+        self._set_status_text("cancelling active turn...")
+        notice = "cancelling active turn"
+        if queued:
+            notice += f"; restored {len(queued)} queued message(s) to editor"
+        self._chat_log.add_system(notice)
+        self._tui.request_render()
+
     def _handle_escape(self) -> None:
-        """Escape: abort the current request."""
+        """Escape cancels the active model turn or running tool task."""
         if self._is_busy:
-            self._session.abort()
-            self._set_busy(False)
-            self._chat_log.drop_assistant(self._stream_id)
-            self._chat_log.add_system("aborted")
-            self._tui.request_render()
+            self._cancel_active_work()
 
     def _request_exit(self) -> None:
         """Request clean exit."""
@@ -388,34 +501,122 @@ class InteractiveMode:
 
     # -- Agent execution --
 
-    def _run_agent_turn(self, message: str) -> None:
-        """Run an agent turn in a background thread."""
+    def _run_agent_turn(self, message: str, generation: int) -> None:
+        """Drain the active turn and every message queued behind it."""
         try:
-            asyncio.run(self._async_agent_turn(message))
+            asyncio.run(self._async_agent_queue(message, generation))
         except Exception as exc:
+            with self._queue_lock:
+                self._worker_active = False
+                queued = list(self._pending_messages)
+                self._pending_messages.clear()
+            if queued:
+                queued_text = "\n\n".join(text for text, _echo in queued)
+                draft = self._editor.get_text()
+                restored = "\n\n".join(
+                    text for text in (queued_text, draft) if text.strip()
+                )
+                if restored:
+                    self._editor.set_text(restored)
+            self._event_queue.put({
+                "type": "queue_changed",
+                "generation": generation,
+            })
             self._event_queue.put({
                 "type": "error",
                 "message": str(exc),
+                "generation": generation,
             })
 
+    async def _async_agent_queue(
+        self,
+        first_message: str,
+        generation: int | None = None,
+    ) -> None:
+        if generation is None:
+            generation = self._worker_generation
+        message = first_message
+        while True:
+            await self._async_agent_turn(message)
+            self._session._expire_turn_scoped_skills()
+
+            with self._queue_lock:
+                if self._cancel_requested:
+                    # Escape restored the pre-existing queue into the editor.
+                    # Anything submitted while cancellation settles remains
+                    # queued for the next explicit worker cycle.
+                    self._cancel_requested = False
+                    settling = list(self._pending_messages)
+                    self._pending_messages.clear()
+                    next_item = None
+                    self._worker_active = False
+                    if settling:
+                        queued_text = "\n\n".join(
+                            text for text, _echo in settling
+                        )
+                        draft = self._editor.get_text()
+                        restored = "\n\n".join(
+                            text for text in (queued_text, draft) if text.strip()
+                        )
+                        if restored:
+                            self._editor.set_text(restored)
+                elif self._pending_messages:
+                    next_item = self._pending_messages.popleft()
+                else:
+                    next_item = None
+                if next_item is None:
+                    self._worker_active = False
+
+            if next_item is None:
+                break
+
+            message, echo = next_item
+            self._event_queue.put({
+                "type": "queued_message_started",
+                "message": message,
+                "echo": echo,
+            })
+
+        self._event_queue.put({"type": "queue_changed", "generation": generation})
+        self._event_queue.put({"type": "turn_end", "generation": generation})
+
     async def _async_agent_turn(self, message: str) -> None:
-        """Run the full agent turn."""
-        self._session._rebuild_system_prompt()
-        await self._session._maybe_compact()
+        """Run one agent turn without releasing the queue worker."""
+        stamp = self._active_stamp
+        self._dispatch_stamp = stamp
+        self._session.permissions.set_request_handler(
+            lambda request: self._put_turn_event(
+                "permission_request",
+                request=request,
+            )
+        )
+        try:
+            self._session._rebuild_system_prompt()
+            await self._session._maybe_compact()
 
-        event_stream = await self._session.agent.prompt(message)
+            event_stream = await self._session.agent.prompt(message)
+            async for event in event_stream:
+                self._dispatch_agent_event(event)
 
-        async for event in event_stream:
-            self._dispatch_agent_event(event)
+            self._session._persist()
+        finally:
+            self._dispatch_stamp = None
+            self._session.permissions.set_request_handler(None)
 
-        self._session._persist()
-        self._event_queue.put({"type": "turn_end"})
+    def _put_turn_event(self, event_type: str, **payload: Any) -> None:
+        dispatch_stamp = getattr(self, "_dispatch_stamp", None)
+        stamp = dispatch_stamp or getattr(self, "_active_stamp", _TurnStamp(0, 0))
+        self._event_queue.put({
+            "type": event_type,
+            "stamp": stamp,
+            **payload,
+        })
 
     def _dispatch_agent_event(self, event: AgentEvent) -> None:
-        """Convert agent events to UI update events (thread-safe)."""
+        """Convert agent events to stamped UI update events."""
         if isinstance(event, MessageStartEvent):
             if isinstance(event.message, AssistantMessage):
-                self._event_queue.put({"type": "assistant_start"})
+                self._put_turn_event("assistant_start")
 
         elif isinstance(event, (MessageUpdateEvent, MessageEndEvent)):
             # Some providers emit no incremental text event and deliver the
@@ -424,29 +625,43 @@ class InteractiveMode:
             # response paths.
             msg = event.message
             if isinstance(msg, AssistantMessage):
+                if isinstance(event, MessageEndEvent) and msg.stop_reason == "error":
+                    self._put_turn_event(
+                        "error",
+                        message=msg.error_message or "Provider request failed",
+                    )
+                    return
                 text, thinking = _assistant_content(msg)
                 if text or thinking:
-                    self._event_queue.put({
-                        "type": "text_update",
-                        "text": text,
-                        "thinking": thinking,
-                    })
+                    self._put_turn_event(
+                        "text_update",
+                        text=text,
+                        thinking=thinking,
+                    )
                 if isinstance(event, MessageEndEvent):
-                    self._event_queue.put({"type": "assistant_end"})
+                    self._put_turn_event("assistant_end")
+
+        elif isinstance(event, AgentEndEvent):
+            final = event.messages[-1] if event.messages else None
+            if isinstance(final, AssistantMessage) and final.stop_reason == "error":
+                self._put_turn_event(
+                    "error",
+                    message=final.error_message or "Provider request failed",
+                )
 
         elif isinstance(event, TurnEndEvent):
             # One user prompt can contain several model/tool turns. Refresh the
             # footer after each one so message count and context usage do not
             # remain stale until the entire agent loop finishes.
-            self._event_queue.put({"type": "turn_footer_update"})
+            self._put_turn_event("turn_footer_update")
 
         elif isinstance(event, ToolExecutionStartEvent):
-            self._event_queue.put({
-                "type": "tool_call",
-                "id": event.tool_call_id,
-                "name": event.tool_name,
-                "arguments": event.args,
-            })
+            self._put_turn_event(
+                "tool_call",
+                id=event.tool_call_id,
+                name=event.tool_name,
+                arguments=event.args,
+            )
 
         elif isinstance(event, ToolExecutionUpdateEvent):
             if event.partial_result is not None:
@@ -455,12 +670,12 @@ class InteractiveMode:
                     if isinstance(update_part, TextContent):
                         update_parts.append(update_part.text)
                 if update_parts:
-                    self._event_queue.put({
-                        "type": "tool_update",
-                        "id": event.tool_call_id,
-                        "name": event.tool_name,
-                        "text": "".join(update_parts),
-                    })
+                    self._put_turn_event(
+                        "tool_update",
+                        id=event.tool_call_id,
+                        name=event.tool_name,
+                        text="".join(update_parts),
+                    )
 
         elif isinstance(event, ToolExecutionEndEvent):
             result_text = ""
@@ -471,22 +686,18 @@ class InteractiveMode:
                     if isinstance(result_part, TextContent)
                 )
             is_error = event.is_error or result_text.startswith("Error:")
-            # Pass full result for edit diffs, truncate others
-            is_edit = event.tool_name == "filesystem" and _is_diff_result(result_text)
-            if not is_edit:
-                result_text = result_text[:500]
-            self._event_queue.put({
-                "type": "tool_result",
-                "id": event.tool_call_id,
-                "name": event.tool_name,
-                "result": result_text,
-                "is_error": is_error,
-            })
+            self._put_turn_event(
+                "tool_result",
+                id=event.tool_call_id,
+                name=event.tool_name,
+                result=result_text,
+                is_error=is_error,
+            )
 
     # -- Agent event subscription (runs in agent thread) --
 
     def _on_permission_request(self, request: PermissionRequest) -> None:
-        self._event_queue.put({"type": "permission_request", "request": request})
+        self._put_turn_event("permission_request", request=request)
 
     def _on_agent_event(self, event: AgentEvent) -> None:
         """Handle agent lifecycle events (called from agent thread)."""
@@ -533,6 +744,7 @@ class InteractiveMode:
             self._permission_prompt = None
             self._awaiting_permission = False
             self._tui.set_focus(self._editor)
+            self._editor.set_focus(True)
             if self._is_busy:
                 self._set_status_busy("resuming...")
             self._tui.request_render()
@@ -540,6 +752,7 @@ class InteractiveMode:
         prompt = PermissionPromptComponent(request, self._theme, _decide)
         self._permission_prompt = prompt
         self._permission_container.add_child(prompt)
+        self._editor.set_focus(False)
         self._tui.set_focus(prompt)
         self._awaiting_permission = True
         self._set_status_text("awaiting tool permission")
@@ -558,6 +771,10 @@ class InteractiveMode:
     def _handle_ui_event(self, event: dict[str, Any]) -> None:
         """Handle a UI event from the event queue."""
         event_type = event.get("type")
+        if event_type in _TURN_EVENT_TYPES:
+            stamp = event.get("stamp")
+            if stamp is not None and stamp != self._active_stamp:
+                return
 
         if event_type == "assistant_start":
             # Every model response gets its own chat component. Reusing one
@@ -612,11 +829,25 @@ class InteractiveMode:
         elif event_type == "assistant_end":
             self._finalize_streaming_assistant()
 
+        elif event_type == "queued_message_started":
+            if event.get("echo", True):
+                self._chat_log.add_user(event.get("message", ""))
+            self._update_message_queue()
+
+        elif event_type == "queue_changed":
+            generation = event.get("generation")
+            if generation is not None and generation != self._worker_generation:
+                return
+            self._update_message_queue()
+
         elif event_type == "turn_footer_update":
             self._update_footer()
             self._update_header()
 
         elif event_type == "turn_end":
+            generation = event.get("generation")
+            if generation is not None and generation != self._worker_generation:
+                return
             self._set_busy(False)
             self._finalize_streaming_assistant()
             self._update_footer()
@@ -635,6 +866,9 @@ class InteractiveMode:
             self._update_footer()
 
         elif event_type == "error":
+            generation = event.get("generation")
+            if generation is not None and generation != self._worker_generation:
+                return
             message = event.get("message", "Unknown error")
             self._set_busy(False)
             self._chat_log.drop_assistant(self._stream_id)
@@ -667,11 +901,3 @@ def run_interactive_mode(
     """
     mode = InteractiveMode(session, verbose=verbose)
     mode.run()
-
-
-_DIFF_LINE_RE = re.compile(r"^[+\-]\s*\d+\s", re.MULTILINE)
-
-
-def _is_diff_result(text: str) -> bool:
-    """Check if tool result contains a custom diff (``+linenum`` / ``-linenum`` format)."""
-    return _DIFF_LINE_RE.search(text) is not None

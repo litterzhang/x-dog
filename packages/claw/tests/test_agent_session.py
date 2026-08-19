@@ -197,6 +197,77 @@ async def test_tool_call_loop(setup):
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0]["name"] == "filesystem"
 
+
+@pytest.mark.asyncio
+async def test_tool_display_events_are_structured_and_lossless(setup):
+    from xdog.claw.core.runtime.display_events import ToolFinished, ToolStarted
+
+    ws, tmp_path = setup
+    full_result = "result:" + "x" * 700
+    tool = create_filesystem_tool()
+
+    async def execute(tool_call_id, params, cancel, on_update, *, ctx=None):
+        from xdog.agent import AgentToolResult
+        return AgentToolResult(content=(TextContent(text=full_result),))
+
+    tool = type(tool)(
+        name=tool.name,
+        description=tool.description,
+        parameters=tool.parameters,
+        execute=execute,
+    )
+    stream_fn = make_multi_round_stream_fn([
+        ("", [{"id": "call-1", "name": "filesystem", "arguments": {"action": "read", "path": "x"}}]),
+        ("done", None),
+    ])
+    session = _make_session(ws, tmp_path, stream_fn=stream_fn, tools=[tool])
+    events = []
+
+    await session.run_turn(
+        UserInput(group_id="g1", content="read", sender="user"),
+        on_display_event=events.append,
+    )
+
+    started = next(event for event in events if isinstance(event, ToolStarted))
+    finished = next(event for event in events if isinstance(event, ToolFinished))
+    assert started.tool_call_id == "call-1"
+    assert finished.tool_call_id == "call-1"
+    assert finished.result == full_result
+
+
+def test_tool_display_wire_redacts_sensitive_arguments() -> None:
+    from xdog.claw.core.runtime.display_events import ToolStarted
+
+    event = ToolStarted(
+        tool_call_id="call-1",
+        name="bash",
+        arguments={
+            "command": "curl example",
+            "authorization": "Bearer secret",
+            "nested": {"api_key": "secret", "safe": "visible"},
+        },
+    )
+
+    wire = event.to_wire()
+    assert wire["arguments"]["authorization"] == "<redacted>"
+    assert wire["arguments"]["nested"]["api_key"] == "<redacted>"
+    assert wire["arguments"]["nested"]["safe"] == "visible"
+
+
+def test_tool_display_wire_redacts_inline_result_secrets() -> None:
+    from xdog.claw.core.runtime.display_events import ToolFinished
+
+    wire = ToolFinished(
+        tool_call_id="call-1",
+        name="bash",
+        result="Authorization: Bearer abc123\napi_key=xyz987\nvisible",
+        is_error=False,
+    ).to_wire()
+
+    assert "abc123" not in wire["result"]
+    assert "xyz987" not in wire["result"]
+    assert "visible" in wire["result"]
+
 @pytest.mark.asyncio
 async def test_write_file_tool(setup):
     """write_file tool creates a file in workspace."""

@@ -23,6 +23,7 @@ from xdog.agent import (
     MessageUpdateEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
+    ToolExecutionUpdateEvent,
 )
 from xdog.ai.types import (
     AssistantMessage,
@@ -39,6 +40,13 @@ from xdog.claw.core.persistence.transcript_convert import (
     transcript_to_messages,
 )
 from xdog.claw.core.prompt.workspace import run_bootstrap
+from xdog.claw.core.runtime.display_events import (
+    AssistantTextDelta,
+    DisplayEvent,
+    ToolFinished,
+    ToolStarted,
+    ToolUpdated,
+)
 from xdog.claw.core.types import GroupInput, SessionMeta, SystemInput, UserInput
 
 if TYPE_CHECKING:
@@ -230,8 +238,15 @@ class AgentSession:
         self,
         input: GroupInput,
         on_text_delta: Any = None,
+        *,
+        on_display_event: Any = None,
     ) -> TurnResult:
-        """Execute an agentic turn using the long-lived Agent."""
+        """Execute a turn and emit structured display events when requested."""
+        if on_display_event is None and on_text_delta is not None:
+            def _compat_display_event(event: DisplayEvent) -> None:
+                if isinstance(event, AssistantTextDelta):
+                    on_text_delta(event.delta)
+            on_display_event = _compat_display_event
         self._restore_messages()
         try:
             system_prompt = self._rebuild_system_prompt(input)
@@ -239,8 +254,11 @@ class AgentSession:
 
             previous_count = len(self._agent.state.messages)
             event_stream = await self._agent.prompt(input.content)
-            turn = await self._drain_events(event_stream, on_text_delta)
+            turn = await self._drain_events(event_stream, on_display_event)
 
+            if self._agent.cancellation_requested:
+                self._persist_turn(input, turn.usage)
+                return TurnResult(error="aborted")
             if self._agent.state.error:
                 return TurnResult(error=self._agent.state.error)
             if len(self._agent.state.messages) <= previous_count + 1:
@@ -296,18 +314,16 @@ class AgentSession:
         return system_prompt_text(blocks) or ""
 
     async def _drain_events(
-        self, event_stream: Any, on_text_delta: Any = None,
+        self, event_stream: Any, on_display_event: Any = None,
     ) -> _DrainResult:
         tool_calls: list[dict[str, Any]] = []
         usage: dict[str, int] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
-        # Track pending tool starts so we can pair results with them
-        pending_starts: dict[str, str] = {}  # tool_call_id → tool_name
 
         async for event in event_stream:
             if isinstance(event, MessageUpdateEvent):
                 inner = event.assistant_message_event
-                if on_text_delta and isinstance(inner, TextDeltaEvent):
-                    on_text_delta(inner.delta)
+                if on_display_event and isinstance(inner, TextDeltaEvent):
+                    on_display_event(AssistantTextDelta(inner.delta))
 
             elif isinstance(event, ToolExecutionStartEvent):
                 tool_calls.append({
@@ -315,22 +331,39 @@ class AgentSession:
                     "name": event.tool_name,
                     "arguments": event.args,
                 })
-                pending_starts[event.tool_call_id] = event.tool_name
-                if on_text_delta:
-                    _emit_tool_start(on_text_delta, event.tool_name, event.args)
+                if on_display_event:
+                    on_display_event(ToolStarted(
+                        tool_call_id=event.tool_call_id,
+                        name=event.tool_name,
+                        arguments=dict(event.args),
+                    ))
+
+            elif isinstance(event, ToolExecutionUpdateEvent):
+                if on_display_event and event.partial_result:
+                    update_text = "\n".join(
+                        part.text
+                        for part in event.partial_result.content
+                        if isinstance(part, TextContent)
+                    )
+                    on_display_event(ToolUpdated(
+                        tool_call_id=event.tool_call_id,
+                        name=event.tool_name,
+                        result=update_text,
+                    ))
 
             elif isinstance(event, ToolExecutionEndEvent):
-                pending_starts.pop(event.tool_call_id, None)
-                if on_text_delta and event.result:
-                    text_parts: list[str] = []
-                    for part in event.result.content:
-                        if isinstance(part, TextContent):
-                            text_parts.append(part.text)
-                    result_text = "\n".join(text_parts) if text_parts else ""
-                    _emit_tool_end(
-                        on_text_delta, event.tool_name,
-                        result_text, event.is_error,
-                    )
+                if on_display_event:
+                    text_parts = [
+                        part.text
+                        for part in event.result.content
+                        if isinstance(part, TextContent)
+                    ] if event.result else []
+                    on_display_event(ToolFinished(
+                        tool_call_id=event.tool_call_id,
+                        name=event.tool_name,
+                        result="\n".join(text_parts),
+                        is_error=event.is_error,
+                    ))
 
             elif isinstance(event, MessageEndEvent):
                 msg = event.message

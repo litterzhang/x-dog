@@ -22,6 +22,7 @@ from xdog.claw.core.persistence.transcript_convert import TOOL_RESULT_ROLE, entr
 from xdog.claw.core.persistence.transcript_store import TranscriptStore
 from xdog.claw.core.planning.goal_manager import GoalManager
 from xdog.claw.core.prompt import build_system_prompt, init_workspace, workspace_path
+from xdog.claw.core.runtime.display_events import display_arguments, display_result
 from xdog.claw.core.tools import create_tools
 from xdog.claw.core.types import Group
 
@@ -279,6 +280,10 @@ class GroupRuntime:
         if self._active_session is not None:
             self._active_session.abort()
 
+    async def wait_for_idle(self) -> None:
+        if self._active_session is not None:
+            await self._active_session.agent.wait_for_idle()
+
     # -- Goal facades ----------------------------------------------------------
 
     def has_running_goals(self) -> bool:
@@ -297,10 +302,11 @@ class GroupRuntime:
             info["session_id"] = meta.session_id
             info["turn_count"] = meta.turn_count
             transcript = self.transcript_store.load_transcript(meta.session_id)
+            info["history_format"] = 2
             info["history"] = [
-                {"role": t["role"], "content": entry_text(t), "channel": t.get("channel", "")}
-                for t in transcript
-                if t.get("role") in ("user", "assistant") and entry_text(t)
+                display_entry
+                for entry in transcript
+                if (display_entry := _display_history_entry(entry)) is not None
             ]
             info["usage"] = _sum_transcript_usage(transcript)
         if self.model:
@@ -316,6 +322,41 @@ class GroupRuntime:
             self._active_session.dispose()
             self._active_session = None
         self._session_last_active = 0.0
+
+
+def _display_history_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a bounded, redacted display projection from a transcript entry."""
+    role = entry.get("role")
+    if role not in ("user", "assistant", TOOL_RESULT_ROLE):
+        return None
+    content = entry.get("content")
+    if not isinstance(content, list):
+        text = display_result(str(content or ""))
+        return {"role": role, "content": text, "channel": entry.get("channel", "")}
+
+    parts: list[dict[str, Any]] = []
+    for part in content[:16]:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            parts.append({"type": "text", "text": display_result(str(part.get("text", "")))})
+        elif part_type == "thinking" and not part.get("redacted"):
+            parts.append({"type": "thinking", "thinking": display_result(str(part.get("thinking", "")))})
+        elif part_type == "toolCall":
+            arguments = part.get("arguments")
+            parts.append({
+                "type": "toolCall",
+                "id": str(part.get("id", "")),
+                "name": str(part.get("name", "tool")),
+                "arguments": display_arguments(arguments) if isinstance(arguments, dict) else {},
+            })
+
+    projected: dict[str, Any] = {"role": role, "content": parts}
+    for key in ("channel", "tool_call_id", "tool_name", "is_error"):
+        if key in entry:
+            projected[key] = entry[key]
+    return projected
 
 
 def _sum_transcript_usage(transcript: list[dict[str, Any]]) -> dict[str, int]:

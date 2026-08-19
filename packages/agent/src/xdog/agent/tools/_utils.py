@@ -114,14 +114,19 @@ def try_update_cwd(command: str, cwd: Path) -> Path:
     return cwd
 
 
-def kill_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """Kill a process and its entire process tree."""
+def kill_process_tree(
+    proc: asyncio.subprocess.Process,
+    *,
+    pgid: int | None = None,
+    force: bool = False,
+) -> None:
+    """Signal a process and its entire process tree."""
     pid = proc.pid
     if pid is None:
         return
     try:
-        pgid = os.getpgid(pid)
-        os.killpg(pgid, signal.SIGTERM)
+        process_group = pgid if pgid is not None else os.getpgid(pid)
+        os.killpg(process_group, signal.SIGKILL if force else signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.kill()

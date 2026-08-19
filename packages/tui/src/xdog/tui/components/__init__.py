@@ -6,6 +6,7 @@ Re-exports all built-in components for convenient imports.
 from xdog.tui.components.box import Box, BoxComponent
 from xdog.tui.components.cancellable_loader import CancellableLoader
 from xdog.tui.components.container import Container
+from xdog.tui.components.details import ExpandableComponent, set_details_expanded
 from xdog.tui.components.editor import Editor, EditorComponent, EditorOptions, EditorTheme
 from xdog.tui.components.image import Image, ImageComponent, ImageOptions, ImageTheme
 from xdog.tui.components.input import Input, InputComponent
@@ -24,6 +25,7 @@ __all__ = [
     "Container",
     "Editor",
     "EditorComponent",
+    "ExpandableComponent",
     "EditorOptions",
     "EditorTheme",
     "Image",
@@ -45,4 +47,5 @@ __all__ = [
     "Text",
     "TextComponent",
     "TruncatedTextComponent",
+    "set_details_expanded",
 ]

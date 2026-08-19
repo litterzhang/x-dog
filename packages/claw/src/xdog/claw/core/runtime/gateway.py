@@ -11,7 +11,8 @@ import logging
 import os
 import signal
 import stat
-from dataclasses import asdict
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,34 @@ from xdog.claw.core.runtime.orchestrator import Orchestrator
 from xdog.claw.core.types import Group, UserInput
 
 logger = logging.getLogger(__name__)
+
+_HISTORY_FRAME_LIMIT = 512 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _ClientRun:
+    group_id: str
+    task: asyncio.Task[None]
+    started: asyncio.Event
+
+
+def _history_chunks(history: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group projected history into JSON frames below the reader limit."""
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_size = 0
+    for entry in history:
+        encoded_size = len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) + 1
+        if current and current_size + encoded_size > _HISTORY_FRAME_LIMIT:
+            chunks.append(current)
+            current = []
+            current_size = 0
+        current.append(entry)
+        current_size += encoded_size
+    if current:
+        chunks.append(current)
+    return chunks
+
 
 _THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("minimal", "low", "medium", "high", "xhigh")
 
@@ -94,6 +123,8 @@ class GatewayServer:
         self._scheduler_task: asyncio.Task[Any] | None = None
         self._client_tasks: set[asyncio.Task[Any]] = set()
         self._client_counter = 0
+        self._group_runs: dict[str, str] = {}
+        self._group_runs_lock = asyncio.Lock()
         self._shutdown_event = asyncio.Event()
 
     async def start(self) -> None:
@@ -165,6 +196,13 @@ class GatewayServer:
         peer = f"client-{client_id}"
         logger.info("Client connected: %s", peer)
 
+        write_lock = asyncio.Lock()
+        runs: dict[str, _ClientRun] = {}
+
+        async def write(data: dict[str, Any]) -> None:
+            async with write_lock:
+                await self._write_response(writer, data)
+
         try:
             while not reader.at_eof():
                 try:
@@ -192,6 +230,119 @@ class GatewayServer:
                     })
                     continue
 
+                msg_type = request.get("type", "") if isinstance(request, dict) else ""
+                if msg_type == "message":
+                    group_id = str(request.get("group_id", "main"))
+                    if self._orchestrator and group_id not in self._orchestrator.get_group_ids():
+                        await write({
+                            "type": "error",
+                            "message": f"Unknown group: {group_id}",
+                        })
+                        continue
+                    run_id = str(request.get("run_id") or f"run-{time.time_ns()}")
+                    request = {**request, "run_id": run_id}
+                    content = request.get("content")
+                    if not isinstance(content, str) or not content.strip():
+                        await write({
+                            "type": "error",
+                            "message": "Empty message content",
+                            "run_id": run_id,
+                        })
+                        continue
+                    if len(run_id) > 128:
+                        await write({"type": "error", "message": "Invalid run_id"})
+                        continue
+                    if runs:
+                        await write({
+                            "type": "error",
+                            "message": "Client already has an active run",
+                            "run_id": run_id,
+                        })
+                        continue
+                    async with self._group_runs_lock:
+                        busy = (
+                            group_id in self._group_runs
+                            or not bool(
+                                self._orchestrator
+                                and self._orchestrator.try_reserve_group(group_id)
+                            )
+                        )
+                        if not busy:
+                            self._group_runs[group_id] = run_id
+                    if busy:
+                        await write({
+                            "type": "busy",
+                            "group_id": group_id,
+                            "run_id": run_id,
+                        })
+                        continue
+                    assert self._orchestrator is not None
+                    started = asyncio.Event()
+                    task = asyncio.create_task(
+                        self._handle_chat_message(
+                            request,
+                            writer,
+                            write=write,
+                            started=started,
+                        )
+                    )
+                    group_id = str(request.get("group_id", "main"))
+                    runs[run_id] = _ClientRun(
+                        group_id=group_id,
+                        task=task,
+                        started=started,
+                    )
+                    await started.wait()
+                    await write({
+                        "type": "run_ack",
+                        "group_id": request.get("group_id", "main"),
+                        "run_id": run_id,
+                    })
+
+                    def _remove_run(_task: asyncio.Task[None], rid: str = run_id, gid: str = group_id) -> None:
+                        runs.pop(rid, None)
+
+                        async def _release() -> None:
+                            if self._orchestrator:
+                                self._orchestrator.release_group_reservation(gid)
+                            async with self._group_runs_lock:
+                                if self._group_runs.get(gid) == rid:
+                                    self._group_runs.pop(gid, None)
+
+                        asyncio.create_task(_release())
+
+                    task.add_done_callback(_remove_run)
+                    continue
+                if msg_type == "reset":
+                    reset_group = str(request.get("group_id", "main"))
+                    async with self._group_runs_lock:
+                        reset_busy = reset_group in self._group_runs
+                    if reset_busy or bool(
+                        self._orchestrator
+                        and self._orchestrator.is_group_running(reset_group)
+                    ):
+                        await write({
+                            "type": "error",
+                            "message": "Cannot reset while a run is active",
+                        })
+                        continue
+                if msg_type == "abort":
+                    run_id = str(request.get("run_id", ""))
+                    group_id = str(request.get("group_id", "main"))
+                    run = runs.get(run_id)
+                    requested = bool(
+                        run
+                        and run.group_id == group_id
+                        and self._orchestrator
+                        and self._orchestrator.abort_group(run.group_id)
+                    )
+                    await write({
+                        "type": "abort_ack",
+                        "group_id": group_id,
+                        "run_id": run_id,
+                        "status": "requested" if requested else "not_active",
+                    })
+                    continue
                 await self._dispatch(request, writer)
 
         except (ConnectionResetError, BrokenPipeError):
@@ -199,6 +350,21 @@ class GatewayServer:
         except Exception:
             logger.exception("Error handling client %s", peer)
         finally:
+            for run in tuple(runs.values()):
+                if self._orchestrator:
+                    self._orchestrator.abort_group(run.group_id)
+            if self._orchestrator:
+                await asyncio.gather(
+                    *(self._orchestrator.wait_group_idle(run.group_id) for run in runs.values()),
+                    return_exceptions=True,
+                )
+            for run in tuple(runs.values()):
+                run.task.cancel()
+            if runs:
+                await asyncio.gather(
+                    *(run.task for run in runs.values()),
+                    return_exceptions=True,
+                )
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -221,14 +387,26 @@ class GatewayServer:
         elif msg_type == "ping":
             group_id = request.get("group_id", "main")
             session_info: dict[str, Any] = {"type": "pong"}
+            history: list[dict[str, Any]] = []
             if self._orchestrator:
                 session_info.update(self._orchestrator.get_session_info(group_id))
+                raw_history = session_info.pop("history", [])
+                if isinstance(raw_history, list):
+                    history = raw_history
                 notifications = self._orchestrator.pop_goal_notifications(group_id)
                 if notifications:
                     session_info["goal_notifications"] = [
                         asdict(n) for n in notifications
                     ]
+            session_info["history_count"] = len(history)
             await self._write_response(writer, session_info)
+            for entries in _history_chunks(history):
+                await self._write_response(writer, {
+                    "type": "history_chunk",
+                    "entries": entries,
+                })
+            if history:
+                await self._write_response(writer, {"type": "history_end"})
         else:
             await self._write_response(writer, {
                 "type": "error",
@@ -236,23 +414,32 @@ class GatewayServer:
             })
 
     async def _handle_chat_message(
-        self, request: dict[str, Any], writer: asyncio.StreamWriter
+        self,
+        request: dict[str, Any],
+        writer: asyncio.StreamWriter,
+        *,
+        write: Any = None,
+        started: asyncio.Event | None = None,
     ) -> None:
         """Process a chat message from the TUI client with streaming deltas."""
         group_id = request.get("group_id", "main")
         content = request.get("content", "")
+        run_id = str(request.get("run_id", f"run-{time.time_ns()}"))
+        write_response = write or (lambda data: self._write_response(writer, data))
 
         if not content:
-            await self._write_response(writer, {
+            await write_response({
                 "type": "error",
                 "message": "Empty message content",
+                "run_id": run_id,
             })
             return
 
         if not self._orchestrator:
-            await self._write_response(writer, {
+            await write_response({
                 "type": "error",
                 "message": "Orchestrator not initialized",
+                "run_id": run_id,
             })
             return
 
@@ -262,58 +449,69 @@ class GatewayServer:
             sender="user",
             channel="tui",
         )
+        if started is not None:
+            started.set()
 
-        # Stream text deltas to the TUI client as they arrive
+        # Stream presentation-neutral turn events to the TUI client.
         accumulated_text = ""
-        loop = asyncio.get_running_loop()
+        streamed_any_text = False
+        pending_writes: list[asyncio.Task[None]] = []
 
-        async def _safe_drain() -> None:
-            """Drain the writer, silencing errors from a disconnected TUI."""
+        def on_display_event(event: Any) -> None:
+            nonlocal accumulated_text, streamed_any_text
             try:
-                await writer.drain()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass
-
-        def on_text_delta(delta: str) -> None:
-            nonlocal accumulated_text
-            accumulated_text += delta
-            try:
-                line = json.dumps({
-                    "type": "delta",
-                    "group_id": group_id,
-                    "content": accumulated_text,
-                    "run_id": "default",
-                }) + "\n"
-                writer.write(line.encode("utf-8"))
-                loop.create_task(_safe_drain())
-            except Exception:
-                pass
+                payload = event.to_wire()
+                event_type = payload.get("type")
+                if event_type == "assistant_delta":
+                    streamed_any_text = True
+                    accumulated_text += str(payload.pop("delta", ""))
+                    payload.update({
+                        "type": "delta",
+                        "content": accumulated_text,
+                    })
+                elif event_type == "tool_call":
+                    accumulated_text = ""
+                payload.update({"group_id": group_id, "run_id": run_id})
+                pending_writes.append(asyncio.create_task(write_response(payload)))
+            except (AttributeError, TypeError, ValueError):
+                logger.exception("Failed to serialize TUI display event")
 
         result = await self._orchestrator.route_message(
             message,
-            on_text_delta=on_text_delta,
+            on_display_event=on_display_event,
+            reserved=True,
         )
+        if pending_writes:
+            await asyncio.gather(*pending_writes)
 
         if result is None:
-            await self._write_response(writer, {
-                "type": "error",
+            await write_response({
+                "type": "queued",
                 "group_id": group_id,
-                "message": f"Unknown group: {group_id}",
+                "run_id": run_id,
             })
         elif result.error:
-            await self._write_response(writer, {
-                "type": "error",
-                "group_id": group_id,
-                "message": result.error,
-            })
+            if result.error == "aborted":
+                await write_response({
+                    "type": "aborted",
+                    "group_id": group_id,
+                    "run_id": run_id,
+                })
+            else:
+                await write_response({
+                    "type": "error",
+                    "group_id": group_id,
+                    "message": result.error,
+                    "run_id": run_id,
+                })
         else:
-            if accumulated_text:
-                # Deltas already delivered the content — send completion
+            if streamed_any_text:
+                # Deltas already delivered content — send completion
                 # signal only to avoid the TUI rendering the text twice.
                 resp: dict[str, Any] = {
                     "type": "final",
                     "group_id": group_id,
-                    "run_id": "default",
+                    "run_id": run_id,
                 }
             else:
                 # No streaming happened — send the full content
@@ -321,11 +519,11 @@ class GatewayServer:
                     "type": "response",
                     "group_id": group_id,
                     "content": result.response_text or "(no response)",
-                    "run_id": "default",
+                    "run_id": run_id,
                 }
             if result.usage:
                 resp["usage"] = result.usage
-            await self._write_response(writer, resp)
+            await write_response(resp)
 
     async def _handle_reset(
         self, request: dict[str, Any], writer: asyncio.StreamWriter

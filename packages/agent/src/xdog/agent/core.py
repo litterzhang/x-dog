@@ -110,8 +110,8 @@ class AgentToolResult:
     details: Any = None
 
 
-AgentToolUpdateCallback = Callable[[AgentToolResult], None]
-"""Called by tool implementations to report incremental progress."""
+AgentToolUpdateCallback = Callable[[AgentToolResult], Awaitable[None]]
+"""Awaited by tool implementations to report incremental progress."""
 
 
 # ---------------------------------------------------------------------------

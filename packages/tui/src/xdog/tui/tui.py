@@ -433,23 +433,40 @@ class TUI(Container):
 
     # -- input dispatch ------------------------------------------------------
 
-    def _dispatch_input(self, event: KeyEvent) -> None:
-        # Input listeners get first pass
+    def _dispatch_input(self, event: KeyEvent) -> bool:
+        """Dispatch input and report whether a component consumed it."""
+        # Escape belongs to the most specific active surface first. This lets a
+        # permission panel deny one call instead of the global listener
+        # canceling the entire turn.
+        if event.matches("escape"):
+            overlay = self._get_topmost_visible_overlay()
+            offered = overlay.component if overlay is not None else None
+            if offered is not None and offered.handle_input(event):
+                return True
+            if (
+                self._focused is not None
+                and self._focused is not offered
+                and self._focused.handle_input(event)
+            ):
+                return True
+
+        # Global listeners get first pass for non-contextual shortcuts.
         for listener in self._input_listeners:
             result = listener(event)
             if result and result.get("consume"):
-                return
+                return True
 
-        # Overlay gets focus if topmost
+        # Overlay gets focus if topmost.
         overlay = self._get_topmost_visible_overlay()
         if overlay is not None:
-            overlay.component.handle_input(event)
-            return
+            if event.matches("escape"):
+                return False
+            return overlay.component.handle_input(event)
 
-        if self._focused is not None:
+        if self._focused is not None and not event.matches("escape"):
             if self._focused.handle_input(event):
-                return
-        self.handle_input(event)
+                return True
+        return self.handle_input(event)
 
     # -- overlay compositing -------------------------------------------------
 
@@ -581,16 +598,47 @@ class TUI(Container):
             target_screen_row = target_row - viewport_top
             return target_screen_row - current_screen_row
 
-        # Render all components to get new lines
+        # Detect resize before rendering so width-dependent components are
+        # invalidated once and rendered once at the new dimensions.
+        width_changed = self._previous_width != 0 and self._previous_width != width
+        height_changed = self._previous_height != 0 and self._previous_height != height
+        if width_changed or height_changed:
+            self.invalidate()
+            for entry in self._overlay_stack:
+                entry.component.invalidate()
+
+        # Render all components to get new lines.
         new_lines = self.render(width)
 
         # Composite overlays on top
         if self._overlay_stack:
             new_lines = self._composite_overlays(new_lines, width, height)
 
-        # Width or height changed — need full re-render
-        width_changed = self._previous_width != 0 and self._previous_width != width
-        height_changed = self._previous_height != 0 and self._previous_height != height
+        cursor_target: tuple[int, int] | None = None
+        clean_lines: list[str] = []
+        visible_top = max(0, len(new_lines) - height)
+        for row, line in enumerate(new_lines):
+            marker_index = line.find(CURSOR_MARKER)
+            if marker_index >= 0:
+                if row >= visible_top:
+                    from xdog.tui.utils import string_width
+                    cursor_target = (row, string_width(line[:marker_index]))
+                line = line.replace(CURSOR_MARKER, "")
+            clean_lines.append(line)
+        new_lines = clean_lines
+
+        def position_cursor(buf: str, current_row: int) -> tuple[str, int]:
+            if cursor_target is None:
+                return buf, current_row
+            target_row, target_col = cursor_target
+            current_screen_row = current_row - viewport_top
+            target_screen_row = target_row - viewport_top
+            delta = target_screen_row - current_screen_row
+            if delta < 0:
+                buf += f"\x1b[{-delta}A"
+            elif delta > 0:
+                buf += f"\x1b[{delta}B"
+            return buf + f"\x1b[{target_col + 1}G", target_row
 
         # -- fullRender helper (matches TypeScript) --------------------------
         def full_render(clear: bool) -> None:
@@ -632,10 +680,12 @@ class TUI(Container):
                         buf += "\r\n"
                     buf += line
             buf += "\x1b[?2026l"  # End synchronized output
+            render_row = max(0, len(new_lines) - 1)
+            buf, positioned_row = position_cursor(buf, render_row)
             sys.stdout.write(buf)
             sys.stdout.flush()
-            self._cursor_row = max(0, len(new_lines) - 1)
-            self._hardware_cursor_row = self._cursor_row
+            self._cursor_row = render_row
+            self._hardware_cursor_row = positioned_row
             # Reset max lines when clearing, otherwise track growth
             if clear:
                 self._max_lines_rendered = len(new_lines)
@@ -657,12 +707,6 @@ class TUI(Container):
 
         # -- Width or height changed -----------------------------------------
         if width_changed or height_changed:
-            self.invalidate()
-            for entry in self._overlay_stack:
-                entry.component.invalidate()
-            new_lines = self.render(width)
-            if self._overlay_stack:
-                new_lines = self._composite_overlays(new_lines, width, height)
             full_render(True)
             return
 
@@ -727,10 +771,11 @@ class TUI(Container):
                 if extra_lines > 0:
                     buf += f"\x1b[{extra_lines}A"
                 buf += "\x1b[?2026l"
+                buf, positioned_row = position_cursor(buf, target_row)
                 sys.stdout.write(buf)
                 sys.stdout.flush()
                 self._cursor_row = target_row
-                self._hardware_cursor_row = target_row
+                self._hardware_cursor_row = positioned_row
             self._previous_lines = new_lines
             self._previous_width = width
             self._previous_height = height
@@ -784,13 +829,14 @@ class TUI(Container):
             buf += new_lines[i]
 
         buf += "\x1b[?2026l"  # End synchronized output
-        sys.stdout.write(buf)
-        sys.stdout.flush()
 
         # Update state
         final_cursor_row = render_end
+        buf, positioned_row = position_cursor(buf, final_cursor_row)
+        sys.stdout.write(buf)
+        sys.stdout.flush()
         self._cursor_row = max(0, len(new_lines) - 1)
-        self._hardware_cursor_row = final_cursor_row
+        self._hardware_cursor_row = positioned_row
         self._max_lines_rendered = max(self._max_lines_rendered, len(new_lines))
         self._previous_viewport_top = max(
             0, self._max_lines_rendered - height

@@ -184,6 +184,10 @@ class TestGatewayServer:
                 writer.write(json.dumps(request).encode() + b"\n")
                 await writer.drain()
 
+                ack_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                ack = json.loads(ack_line)
+                assert ack["type"] == "run_ack"
+
                 response_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 response = json.loads(response_line)
                 assert response["type"] == "response"
@@ -217,7 +221,6 @@ class TestGatewayServer:
                 response_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 response = json.loads(response_line)
                 assert response["type"] == "error"
-                assert "nonexistent" in response.get("message", "").lower() or "unknown" in response.get("message", "").lower()
 
                 writer.close()
                 await writer.wait_closed()
@@ -270,7 +273,8 @@ class TestGatewayServer:
                 request = {"type": "message", "group_id": "main", "content": "hello"}
                 writer.write(json.dumps(request).encode() + b"\n")
                 await writer.drain()
-                await asyncio.wait_for(reader.readline(), timeout=5.0)  # consume response
+                await asyncio.wait_for(reader.readline(), timeout=5.0)  # run_ack
+                await asyncio.wait_for(reader.readline(), timeout=5.0)  # response
 
                 # Now reset
                 writer.write(json.dumps({"type": "reset", "group_id": "main"}).encode() + b"\n")

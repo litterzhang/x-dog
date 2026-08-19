@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -26,6 +27,24 @@ async def _noop() -> None:
     unconditionally would raise rather than simply produce no output.
     """
     return None
+
+
+async def _terminate_process_group(
+    proc: asyncio.subprocess.Process,
+    pgid: int,
+    process_task: asyncio.Task[int],
+    io_task: asyncio.Future[Any],
+) -> None:
+    """Terminate a process group, escalating after a short grace period."""
+    kill_process_tree(proc, pgid=pgid)
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(process_task, io_task, return_exceptions=True),
+            timeout=0.5,
+        )
+    except TimeoutError:
+        kill_process_tree(proc, pgid=pgid, force=True)
+        await asyncio.gather(process_task, io_task, return_exceptions=True)
 
 
 def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
@@ -71,8 +90,10 @@ def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
                 start_new_session=True,
             )
 
+            process_group = os.getpgid(proc.pid)
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []
+            update_lock = asyncio.Lock()
 
             async def _read_stream(
                 stream: asyncio.StreamReader,
@@ -85,24 +106,69 @@ def create_bash_tool(*, initial_cwd: Path | None = None) -> AgentTool:
                         break
                     lines_out.append(line.decode("utf-8", errors="replace"))
                     if on_update is not None:
-                        on_update(AgentToolResult(
-                            content=(TextContent(text="".join(lines_out)),),
-                        ))
+                        async with update_lock:
+                            combined = "".join(stdout_lines + stderr_lines)
+                            await on_update(AgentToolResult(
+                                content=(TextContent(text=combined),),
+                            ))
 
+            io_task = asyncio.ensure_future(asyncio.gather(
+                _read_stream(proc.stdout, stdout_lines) if proc.stdout else _noop(),
+                _read_stream(proc.stderr, stderr_lines) if proc.stderr else _noop(),
+            ))
+            cancel_task: asyncio.Task[bool] | None = None
+            if cancel is not None and hasattr(cancel, "wait"):
+                cancel_task = asyncio.create_task(cancel.wait())
+
+            process_task = asyncio.create_task(proc.wait())
+            waiters: set[asyncio.Future[Any]] = {process_task, io_task}
+            if cancel_task is not None:
+                waiters.add(cancel_task)
+
+            timed_out = False
             try:
-                await asyncio.wait_for(
-                    asyncio.gather(
-                        _read_stream(proc.stdout, stdout_lines) if proc.stdout else _noop(),
-                        _read_stream(proc.stderr, stderr_lines) if proc.stderr else _noop(),
-                    ),
-                    timeout=timeout_s,
-                )
-                await proc.wait()
-            except asyncio.TimeoutError:
-                kill_process_tree(proc)
-                return AgentToolResult(
-                    content=(TextContent(text=f"Command timed out after {timeout_ms}ms."),),
-                )
+                deadline = asyncio.get_running_loop().time() + timeout_s
+                while not (process_task.done() and io_task.done()):
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    done, _ = await asyncio.wait(
+                        waiters,
+                        timeout=remaining,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task is not None and cancel_task in done:
+                        await _terminate_process_group(
+                            proc,
+                            process_group,
+                            process_task,
+                            io_task,
+                        )
+                        raise asyncio.CancelledError
+                    waiters = {
+                        waiter for waiter in waiters
+                        if not waiter.done() or waiter is cancel_task
+                    }
+
+                if timed_out:
+                    await _terminate_process_group(
+                        proc,
+                        process_group,
+                        process_task,
+                        io_task,
+                    )
+                    return AgentToolResult(
+                        content=(TextContent(
+                            text=f"Command timed out after {timeout_ms}ms.",
+                        ),),
+                    )
+                await asyncio.gather(process_task, io_task)
+            finally:
+                if cancel_task is not None and not cancel_task.done():
+                    cancel_task.cancel()
+                if not process_task.done():
+                    process_task.cancel()
 
             stdout = "".join(stdout_lines)
             stderr = "".join(stderr_lines)

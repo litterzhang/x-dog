@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Callable
 
 from xdog.coding.core.slash_commands import list_commands
+from xdog.coding.modes.interactive.components.editor_layout import layout_editor
 from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.keys import KeyEvent
-from xdog.tui.tui import Component
+from xdog.tui.tui import CURSOR_MARKER, Component
 from xdog.tui.utils import char_width
 
 _MAX_INPUT_ROWS = 8
@@ -48,6 +49,22 @@ def _layout_input(text: str, width: int) -> tuple[list[str], list[tuple[int, int
         positions[-1] = (len(rows) - 1, 0)
 
     return ["".join(row_chars) for row_chars in rows], positions
+
+
+def _insert_at_column(text: str, column: int, marker: str) -> str:
+    current = 0
+    index = 0
+    while index < len(text):
+        if text[index] == "\x1b":
+            end = text.find("m", index)
+            if end >= 0:
+                index = end + 1
+                continue
+        if current >= column:
+            return text[:index] + marker + text[index:]
+        current += char_width(text[index])
+        index += 1
+    return text + marker
 
 
 def _with_cursor(text: str, column: int) -> str:
@@ -112,6 +129,9 @@ class CustomEditorComponent(Component):
         self._hist_idx = -1
         self._hist_stash = ""
         self._select_list: SlashSelectList | None = None
+        self._render_width = 80
+        self._preferred_column: int | None = None
+        self._focused = False
 
         # Callbacks
         self.on_submit: Callable[[str], None] | None = None
@@ -122,9 +142,13 @@ class CustomEditorComponent(Component):
     def get_text(self) -> str:
         return self._value
 
+    def set_focus(self, focused: bool) -> None:
+        self._focused = focused
+
     def set_text(self, value: str) -> None:
         self._value = value
         self._cursor = len(value)
+        self._preferred_column = None
 
     def add_to_history(self, text: str) -> None:
         if text and (not self._history or self._history[-1] != text):
@@ -159,6 +183,7 @@ class CustomEditorComponent(Component):
             self._select_list = None
 
     def render(self, width: int) -> list[str]:
+        self._render_width = width
         t = self._theme
         lines: list[str] = []
 
@@ -169,10 +194,10 @@ class CustomEditorComponent(Component):
         # by terminal cell width. Terminal autowrap is disabled by TUI, so an
         # overlong physical line would otherwise disappear past the right edge.
         content_width = max(1, width - 2)
-        visual_rows, positions = _layout_input(self._value, content_width)
-        cursor_row, cursor_col = positions[self._cursor]
+        layout = layout_editor(self._value, content_width)
+        cursor_row, cursor_col = layout.position(self._cursor)
         first_row = max(0, cursor_row - _MAX_INPUT_ROWS + 1)
-        last_row = min(len(visual_rows), first_row + _MAX_INPUT_ROWS)
+        last_row = min(len(layout.rows), first_row + _MAX_INPUT_ROWS)
 
         for row_index in range(first_row, last_row):
             if row_index == 0:
@@ -182,9 +207,11 @@ class CustomEditorComponent(Component):
             else:
                 prefix = "  "
 
-            row_text = visual_rows[row_index]
+            row_text = layout.rows[row_index].text
             if row_index == cursor_row:
                 row_text = _with_cursor(row_text, cursor_col)
+                if self._focused:
+                    row_text = _insert_at_column(row_text, cursor_col, CURSOR_MARKER)
             lines.append(prefix + row_text)
 
         # Bottom border
@@ -250,25 +277,42 @@ class CustomEditorComponent(Component):
             self._submit()
             return True
 
-        # Backspace
+        # Backspace/Delete operate on display clusters, not code points.
         if event.key == "backspace" and self._cursor > 0:
-            self._value = self._value[:self._cursor - 1] + self._value[self._cursor:]
-            self._cursor -= 1
+            previous = max(
+                boundary for boundary in self._safe_boundaries()
+                if boundary < self._cursor
+            )
+            self._value = self._value[:previous] + self._value[self._cursor:]
+            self._cursor = previous
+            self._preferred_column = None
             self._update_select_list()
             return True
 
-        # Delete
         if event.key == "delete" and self._cursor < len(self._value):
-            self._value = self._value[:self._cursor] + self._value[self._cursor + 1:]
+            following = min(
+                boundary for boundary in self._safe_boundaries()
+                if boundary > self._cursor
+            )
+            self._value = self._value[:self._cursor] + self._value[following:]
+            self._preferred_column = None
             self._update_select_list()
             return True
 
         # Movement
         if event.key == "left":
-            self._cursor = max(0, self._cursor - 1)
+            self._cursor = max(
+                (boundary for boundary in self._safe_boundaries() if boundary < self._cursor),
+                default=0,
+            )
+            self._preferred_column = None
             return True
         if event.key == "right":
-            self._cursor = min(len(self._value), self._cursor + 1)
+            self._cursor = min(
+                (boundary for boundary in self._safe_boundaries() if boundary > self._cursor),
+                default=len(self._value),
+            )
+            self._preferred_column = None
             return True
         if event.key == "home":
             self._cursor = self._value.rfind("\n", 0, self._cursor) + 1
@@ -339,27 +383,28 @@ class CustomEditorComponent(Component):
 
         return False
 
+    def _safe_boundaries(self) -> tuple[int, ...]:
+        layout = layout_editor(self._value, max(1, self._render_width - 2))
+        return tuple(sorted({
+            offset
+            for row in layout.rows
+            for offset, _column in row.boundaries
+        }))
+
     def _move_vertical(self, direction: int) -> bool:
-        """Move to the adjacent explicit line, preserving the text column."""
-        line_start = self._value.rfind("\n", 0, self._cursor) + 1
-        column = self._cursor - line_start
-
-        if direction < 0:
-            if line_start == 0:
-                return False
-            previous_end = line_start - 1
-            previous_start = self._value.rfind("\n", 0, previous_end) + 1
-            self._cursor = min(previous_start + column, previous_end)
-            return True
-
-        line_end = self._value.find("\n", self._cursor)
-        if line_end < 0:
+        """Move across wrapped visual rows while preserving display column."""
+        content_width = max(1, self._render_width - 2)
+        layout = layout_editor(self._value, content_width)
+        row_index, column = layout.position(self._cursor)
+        target_index = row_index + direction
+        if target_index < 0 or target_index >= len(layout.rows):
+            self._preferred_column = None
             return False
-        next_start = line_end + 1
-        next_end = self._value.find("\n", next_start)
-        if next_end < 0:
-            next_end = len(self._value)
-        self._cursor = min(next_start + column, next_end)
+        if self._preferred_column is None:
+            self._preferred_column = column
+        self._cursor = layout.rows[target_index].offset_for_column(
+            self._preferred_column
+        )
         return True
 
     def _submit(self) -> None:

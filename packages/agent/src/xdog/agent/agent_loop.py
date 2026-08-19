@@ -524,14 +524,21 @@ async def _execute_tool_calls_sequential(
     tools = list(current_context.tools) if current_context.tools else []
 
     for tc in tool_calls:
-        if _is_cancelled(cancel):
-            break
-
         await _emit_event(emit, ToolExecutionStartEvent(
             tool_call_id=tc.id,
             tool_name=tc.name,
             args=dict(tc.arguments),
         ))
+
+        if _is_cancelled(cancel):
+            result_msg = await _emit_tool_call_outcome(
+                tc,
+                _create_error_tool_result("Tool execution cancelled"),
+                True,
+                emit,
+            )
+            results.append(result_msg)
+            continue
 
         preparation = await _prepare_tool_call(
             current_context, assistant_message, tc, tools, config, cancel,
@@ -571,46 +578,66 @@ async def _execute_tool_calls_parallel(
     2. Execute all prepared calls concurrently.
     3. Finalize all results in order (after_tool_call hook is serial).
     """
-    results: list[ToolResultMessage] = []
     tools = list(current_context.tools) if current_context.tools else []
-    runnable_calls: list[dict[str, Any]] = []
+    immediate_outcomes: dict[int, tuple[ToolCall, AgentToolResult, bool]] = {}
+    runnable_calls: list[tuple[int, dict[str, Any]]] = []
 
-    for tc in tool_calls:
-        if _is_cancelled(cancel):
-            break
-
+    for index, tc in enumerate(tool_calls):
         await _emit_event(emit, ToolExecutionStartEvent(
             tool_call_id=tc.id,
             tool_name=tc.name,
             args=dict(tc.arguments),
         ))
 
+        if _is_cancelled(cancel):
+            immediate_outcomes[index] = (
+                tc,
+                _create_error_tool_result("Tool execution cancelled"),
+                True,
+            )
+            continue
+
         preparation = await _prepare_tool_call(
             current_context, assistant_message, tc, tools, config, cancel,
         )
 
         if preparation["kind"] == "immediate":
-            result_msg = await _emit_tool_call_outcome(
-                tc, preparation["result"], preparation["is_error"], emit,
+            immediate_outcomes[index] = (
+                tc,
+                preparation["result"],
+                preparation["is_error"],
             )
-            results.append(result_msg)
         else:
-            runnable_calls.append(preparation)
+            runnable_calls.append((index, preparation))
 
-    # Execute concurrently — create tasks so all start in parallel
-    tasks: list[asyncio.Task[dict[str, Any]]] = [
-        asyncio.ensure_future(_execute_prepared_tool_call(p, cancel, emit, tool_ctx))
-        for p in runnable_calls
-    ]
+    # Execute concurrently — create tasks so all start in parallel.
+    task_by_index: dict[int, tuple[dict[str, Any], asyncio.Task[dict[str, Any]]]] = {
+        index: (
+            preparation,
+            asyncio.ensure_future(
+                _execute_prepared_tool_call(preparation, cancel, emit, tool_ctx)
+            ),
+        )
+        for index, preparation in runnable_calls
+    }
 
-    # Finalize in source order (after_tool_call hook is serial)
-    for prepared, task in zip(runnable_calls, tasks):
+    # Emit and return every result in assistant source order.
+    results: list[ToolResultMessage] = []
+    for index, tc in enumerate(tool_calls):
+        immediate = immediate_outcomes.get(index)
+        if immediate is not None:
+            immediate_tc, result, is_error = immediate
+            results.append(await _emit_tool_call_outcome(
+                immediate_tc, result, is_error, emit,
+            ))
+            continue
+
+        prepared, task = task_by_index[index]
         executed = await task
-        result_msg = await _finalize_executed_tool_call(
+        results.append(await _finalize_executed_tool_call(
             current_context, assistant_message, prepared,
             executed, config, cancel, emit,
-        )
-        results.append(result_msg)
+        ))
 
     return results
 
@@ -661,7 +688,14 @@ async def _prepare_tool_call(
                 args=args,
                 context=current_context,
             )
-            before_result = await config.before_tool_call(before_ctx, cancel)
+            try:
+                before_result = await config.before_tool_call(before_ctx, cancel)
+            except asyncio.CancelledError:
+                return {
+                    "kind": "immediate",
+                    "result": _create_error_tool_result("Tool execution cancelled"),
+                    "is_error": True,
+                }
             if before_result is not None and before_result.block:
                 reason = before_result.reason or "Tool execution was blocked"
                 return {
@@ -695,38 +729,25 @@ async def _execute_prepared_tool_call(
     tc: ToolCall = prepared["tool_call"]
     args: dict[str, Any] = prepared["args"]
 
-    update_events: list[Any] = []
-
-    def on_update(partial_result: AgentToolResult) -> None:
-        update_events.append(
-            _emit_event(emit, ToolExecutionUpdateEvent(
-                tool_call_id=tc.id,
-                tool_name=tc.name,
-                args=args,
-                partial_result=partial_result,
-            ))
-        )
+    async def on_update(partial_result: AgentToolResult) -> None:
+        await _emit_event(emit, ToolExecutionUpdateEvent(
+            tool_call_id=tc.id,
+            tool_name=tc.name,
+            args=args,
+            partial_result=partial_result,
+        ))
 
     try:
         assert tool.execute is not None
         result = await tool.execute(tc.id, args, cancel, on_update, ctx=tool_ctx)
-        for coro in update_events:
-            if inspect.isawaitable(coro):
-                await coro
         return {"result": result, "is_error": False}
     except asyncio.CancelledError:
-        for coro in update_events:
-            if inspect.isawaitable(coro):
-                await coro
         return {
             "result": _create_error_tool_result("Tool execution cancelled"),
             "is_error": True,
         }
     except Exception as exc:
         logger.exception("Tool %s execution failed", tool.name)
-        for coro in update_events:
-            if inspect.isawaitable(coro):
-                await coro
         return {
             "result": _create_error_tool_result(f"Tool error: {exc}"),
             "is_error": True,
@@ -756,7 +777,12 @@ async def _finalize_executed_tool_call(
             is_error=is_error,
             context=current_context,
         )
-        after_result = await config.after_tool_call(after_ctx, cancel)
+        try:
+            after_result = await config.after_tool_call(after_ctx, cancel)
+        except asyncio.CancelledError:
+            result = _create_error_tool_result("Tool execution cancelled")
+            is_error = True
+            after_result = None
 
         if after_result is not None:
             if after_result.content is not None:

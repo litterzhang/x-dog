@@ -28,6 +28,51 @@ class TestAssistantMessageComponent:
         assert "reasoning details" in rendered
         assert "final answer" in rendered
 
+    def test_reasoning_can_collapse_and_reexpand(self):
+        from xdog.coding.modes.interactive.components.assistant_message import (
+            AssistantMessageComponent,
+        )
+        from xdog.tui.utils import strip_ansi
+
+        component = AssistantMessageComponent(
+            "final answer",
+            create_default_theme(),
+            thinking="reasoning start\nREASONING-TAIL",
+        )
+
+        component.set_expanded(False)
+        collapsed = "\n".join(strip_ansi(line) for line in component.render(80))
+        assert "Thinking" in collapsed
+        assert "REASONING-TAIL" not in collapsed
+        assert "final answer" in collapsed
+
+        component.set_expanded(True)
+        expanded = "\n".join(strip_ansi(line) for line in component.render(80))
+        assert "REASONING-TAIL" in expanded
+        assert "final answer" in expanded
+
+        component.set_expanded(False)
+        recollapsed = "\n".join(strip_ansi(line) for line in component.render(80))
+        assert "REASONING-TAIL" not in recollapsed
+        assert "final answer" in recollapsed
+
+    def test_reasoning_strips_terminal_control_sequences(self):
+        from xdog.coding.modes.interactive.components.assistant_message import (
+            AssistantMessageComponent,
+        )
+        from xdog.tui.utils import strip_ansi
+
+        component = AssistantMessageComponent(
+            "answer",
+            create_default_theme(),
+            thinking="safe\x1b[2J\x1b]52;c;clipboard\x07tail",
+        )
+        rendered = "\n".join(strip_ansi(line) for line in component.render(80))
+
+        assert "safetail" in rendered
+        assert "\x1b[2J" not in rendered
+        assert "\x1b]52" not in rendered
+
 
 class TestPermissionPromptComponent:
     def test_allow_once_and_escape_to_deny(self):
@@ -66,6 +111,31 @@ class TestPermissionPromptComponent:
         assert prompt.handle_input(KeyEvent(key="escape"))
         assert decisions == ["deny"]
 
+    def test_focused_permission_escape_denies_without_canceling_turn(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.core.permissions import PermissionRequest
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+        from xdog.tui.keys import KeyEvent
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._is_busy = True
+        request = PermissionRequest(
+            id="req-escape",
+            tool_name="bash",
+            arguments={"command": "pwd"},
+            summary="Run pwd",
+        )
+        mode._show_permission_request(request)
+
+        mode._tui._dispatch_input(KeyEvent(key="escape"))
+
+        session.permissions.resolve.assert_called_once_with("req-escape", "deny")
+        session.cancel.assert_not_called()
+
     def test_permission_panel_is_after_editor(self):
         from unittest.mock import MagicMock
 
@@ -78,7 +148,8 @@ class TestPermissionPromptComponent:
         mode = InteractiveMode(session)
         root = mode._tui.children[0]
 
-        assert root.children[-2] is mode._editor
+        assert root.children[-3] is mode._editor
+        assert root.children[-2] is mode._message_queue_container
         assert root.children[-1] is mode._permission_container
         assert mode._permission_container.children == []
 
@@ -126,16 +197,145 @@ class TestChatLog:
         lines = log.render(80)
         assert len(lines) > 0
 
-    def test_chat_log_pruning(self):
+    def test_completed_history_is_not_pruned_at_a_fixed_count(self):
         from xdog.coding.modes.interactive.components.chat_log import ChatLog
-        theme = create_default_theme()
-        log = ChatLog(theme)
-        for i in range(250):
-            log.add_system(f"msg {i}")
-        assert len(log.children) <= ChatLog.MAX_COMPONENTS
+        from xdog.tui.utils import strip_ansi
+
+        log = ChatLog(create_default_theme())
+        for index in range(201):
+            log.add_assistant(f"HISTORY-{index}")
+
+        rendered = "\n".join(strip_ansi(line) for line in log.render(80))
+        assert "HISTORY-0" in rendered
+        assert "HISTORY-200" in rendered
+
+    def test_detail_toggle_updates_retained_components(self):
+        from xdog.coding.modes.interactive.components.chat_log import ChatLog
+        from xdog.tui.utils import strip_ansi
+
+        log = ChatLog(create_default_theme())
+        log.add_assistant("answer", thinking="THINKING-TAIL")
+        tool = log.add_tool("bash", {"command": "pytest"})
+        tool.set_result(f"first\n{'x' * 600}\nTOOL-TAIL")
+
+        log.set_details_expanded(False)
+        collapsed = "\n".join(strip_ansi(line) for line in log.render(80))
+        assert "THINKING-TAIL" not in collapsed
+        assert "TOOL-TAIL" not in collapsed
+
+        log.set_details_expanded(True)
+        expanded = "\n".join(strip_ansi(line) for line in log.render(80))
+        assert "THINKING-TAIL" in expanded
+        assert "TOOL-TAIL" in expanded
 
 
 class TestInteractiveMessageHandling:
+    def test_submit_while_busy_queues_message_below_editor(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+        from xdog.tui.utils import strip_ansi
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._worker_active = True
+        mode._is_busy = True
+
+        mode._start_turn("run this after the current turn")
+        mode._start_turn("and include this too")
+
+        assert list(mode._pending_messages) == [
+            ("run this after the current turn", True),
+            ("and include this too", True),
+        ]
+        rendered = "\n".join(
+            strip_ansi(line) for line in mode._message_queue_container.render(80)
+        )
+        assert "Queued messages (2)" in rendered
+        assert "run this after the current turn" in rendered
+        assert "and include this too" in rendered
+
+    def test_queue_worker_drains_messages_in_order(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._worker_active = True
+        mode._pending_messages.append(("second", True))
+        mode._pending_messages.append(("third", True))
+        mode._async_agent_turn = AsyncMock()
+
+        asyncio.run(mode._async_agent_queue("first"))
+
+        assert [call.args[0] for call in mode._async_agent_turn.await_args_list] == [
+            "first",
+            "second",
+            "third",
+        ]
+        assert not mode._worker_active
+        assert list(mode._pending_messages) == []
+
+    def test_escape_cancels_active_work_and_clears_queue(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+        from xdog.tui.keys import KeyEvent
+        from xdog.tui.utils import strip_ansi
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._is_busy = True
+        mode._worker_active = True
+        mode._pending_messages.append(("queued", True))
+        mode._update_message_queue()
+
+        result = mode._handle_global_input(KeyEvent(key="escape"))
+
+        assert result == {"consume": True}
+        session.cancel.assert_called_once_with()
+        assert mode._cancel_requested
+        assert list(mode._pending_messages) == []
+        assert mode._message_queue_container.children == []
+        assert mode._editor.get_text() == "queued"
+
+        mode._handle_global_input(KeyEvent(key="escape"))
+        session.cancel.assert_called_once_with()
+        cancellation_notices = [
+            child
+            for child in mode._chat_log.children
+            if "cancelling active turn" in "\n".join(strip_ansi(line) for line in child.render(80))
+        ]
+        assert len(cancellation_notices) == 1
+
+    def test_ctrl_o_toggles_retained_details(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+        from xdog.tui.keys import KeyEvent
+        from xdog.tui.utils import strip_ansi
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._chat_log.add_assistant("answer", thinking="THINKING-DETAIL")
+
+        collapsed = "\n".join(strip_ansi(line) for line in mode._chat_log.render(80))
+        assert "THINKING-DETAIL" not in collapsed
+
+        assert mode._handle_global_input(KeyEvent(key="o", ctrl=True)) == {"consume": True}
+        expanded = "\n".join(strip_ansi(line) for line in mode._chat_log.render(80))
+        assert "THINKING-DETAIL" in expanded
+
     def test_message_end_displays_non_streamed_text(self):
         import queue
 
@@ -153,6 +353,49 @@ class TestInteractiveMessageHandling:
         assert event["type"] == "text_update"
         assert event["text"] == "final text"
 
+    def test_agent_end_surfaces_thrown_provider_error(self):
+        import queue
+
+        from xdog.agent import AgentEndEvent
+        from xdog.ai.types import AssistantMessage, TextContent
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        mode = object.__new__(InteractiveMode)
+        mode._event_queue = queue.Queue()
+        mode._dispatch_agent_event(AgentEndEvent(messages=(
+            AssistantMessage(
+                content=(TextContent(text="Agent error: network failed"),),
+                stop_reason="error",
+                error_message="network failed",
+            ),
+        )))
+
+        event = mode._event_queue.get_nowait()
+        assert event["type"] == "error"
+        assert event["message"] == "network failed"
+        assert event["stamp"].generation == 0
+
+    def test_message_end_surfaces_provider_error(self):
+        import queue
+
+        from xdog.agent import MessageEndEvent
+        from xdog.ai.types import AssistantMessage
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        mode = object.__new__(InteractiveMode)
+        mode._event_queue = queue.Queue()
+        mode._dispatch_agent_event(MessageEndEvent(
+            message=AssistantMessage(
+                content=(),
+                stop_reason="error",
+                error_message="No tool output found for function call call-1",
+            ),
+        ))
+
+        event = mode._event_queue.get_nowait()
+        assert event["type"] == "error"
+        assert event["message"] == "No tool output found for function call call-1"
+
     def test_each_agent_turn_queues_footer_refresh(self):
         import queue
 
@@ -163,7 +406,51 @@ class TestInteractiveMessageHandling:
         mode._event_queue = queue.Queue()
         mode._dispatch_agent_event(TurnEndEvent())
 
-        assert mode._event_queue.get_nowait() == {"type": "turn_footer_update"}
+        event = mode._event_queue.get_nowait()
+        assert event["type"] == "turn_footer_update"
+        assert event["stamp"].generation == 0
+
+    def test_stale_turn_end_does_not_mark_new_worker_idle(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._worker_generation = 2
+        mode._worker_active = True
+        mode._is_busy = True
+
+        mode._handle_ui_event({"type": "turn_end", "generation": 1})
+
+        assert mode._is_busy is True
+        assert mode._worker_active is True
+
+    def test_stale_worker_error_does_not_cancel_new_turn(self):
+        from unittest.mock import MagicMock
+
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        session = MagicMock()
+        session.agent.subscribe.return_value = lambda: None
+        session.permissions.mode = "ask"
+        mode = InteractiveMode(session)
+        mode._worker_generation = 2
+        mode._worker_active = True
+        mode._is_busy = True
+        mode._streaming_text = "new response"
+
+        mode._handle_ui_event({
+            "type": "error",
+            "message": "old worker failed",
+            "generation": 1,
+        })
+
+        assert mode._is_busy is True
+        assert mode._worker_active is True
+        assert mode._streaming_text == "new response"
 
     def test_turn_footer_event_updates_footer_immediately(self):
         from unittest.mock import Mock
@@ -241,6 +528,25 @@ class TestInteractiveMessageHandling:
             strip_ansi(line) for line in mode._chat_log.render(80)
         )
         assert rendered.index("/workspace") < rendered.index("latest answer")
+
+    def test_completed_tool_event_retains_full_output_for_expansion(self):
+        import queue
+
+        from xdog.agent import AgentToolResult, ToolExecutionEndEvent
+        from xdog.ai.types import TextContent
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        mode = object.__new__(InteractiveMode)
+        mode._event_queue = queue.Queue()
+        result = f"first\n{'x' * 700}\nEVENT-TAIL"
+        mode._dispatch_agent_event(ToolExecutionEndEvent(
+            tool_call_id="call-a",
+            tool_name="bash",
+            result=AgentToolResult(content=(TextContent(text=result),)),
+        ))
+
+        event = mode._event_queue.get_nowait()
+        assert event["result"] == result
 
     def test_tool_events_keep_their_call_ids(self):
         import queue
@@ -387,6 +693,21 @@ class TestCustomEditor:
         assert any("abcdef" in line for line in visible)
         assert any("ghij" in line for line in visible)
 
+    def test_editor_moves_across_wrapped_visual_rows(self):
+        from xdog.coding.modes.interactive.components.custom_editor import (
+            CustomEditorComponent,
+        )
+        from xdog.tui.keys import KeyEvent
+
+        editor = CustomEditorComponent(create_default_theme())
+        editor.render(8)
+        editor.set_text("abcdefghij")
+
+        assert editor.handle_input(KeyEvent(key="up"))
+        assert editor._cursor == 4
+        assert editor.handle_input(KeyEvent(key="down"))
+        assert editor._cursor == 10
+
     def test_editor_supports_multiline_input(self):
         from xdog.coding.modes.interactive.components.custom_editor import CustomEditorComponent
         from xdog.tui.keys import KeyEvent
@@ -413,7 +734,7 @@ class TestCustomEditor:
         assert editor.handle_input(KeyEvent(key="up"))
         assert editor._cursor == 3
         assert editor.handle_input(KeyEvent(key="down"))
-        assert editor._cursor == 7
+        assert editor._cursor == 9
 
 class TestSlashSelectList:
     """Tests for the slash command select list."""
@@ -454,15 +775,41 @@ class TestToolExecutionState:
 
     def test_expand_collapse_large_output(self):
         from xdog.coding.modes.interactive.components.tool_execution import ToolExecutionComponent
-        theme = create_default_theme()
-        comp = ToolExecutionComponent("bash", None, theme)
-        # Generate large output (>500 chars)
-        big_output = "x" * 600
+        from xdog.tui.utils import strip_ansi
+
+        comp = ToolExecutionComponent("bash", None, create_default_theme())
+        big_output = f"first line\n{'x' * 600}\nEND-OF-TOOL-OUTPUT"
         comp.set_result(big_output)
-        lines = comp.render(80)
-        rendered = " ".join(lines)
-        # Should show collapsed summary
-        assert "more chars" in rendered
+
+        comp.set_expanded(False)
+        collapsed = "\n".join(strip_ansi(line) for line in comp.render(80))
+        assert "more chars" in collapsed
+        assert "END-OF-TOOL-OUTPUT" not in collapsed
+
+        comp.set_expanded(True)
+        expanded = "\n".join(strip_ansi(line) for line in comp.render(80))
+        assert "first line" in expanded
+        assert "END-OF-TOOL-OUTPUT" in expanded
+
+        comp.set_expanded(False)
+        recollapsed = "\n".join(strip_ansi(line) for line in comp.render(80))
+        assert "more chars" in recollapsed
+        assert "END-OF-TOOL-OUTPUT" not in recollapsed
+
+    def test_empty_final_result_clears_streaming_preview(self):
+        from xdog.coding.modes.interactive.components.tool_execution import (
+            ToolExecutionComponent,
+        )
+        from xdog.tui.utils import strip_ansi
+
+        component = ToolExecutionComponent("bash", None, create_default_theme())
+        component.set_streaming("still working")
+        component.set_result("")
+        rendered = "\n".join(strip_ansi(line) for line in component.render(80))
+
+        assert "still working" not in rendered
+        assert "(no output)" in rendered
+
 
 class TestToolExecutionDiffDetection:
     """Tests for diff detection in tool_execution.py."""

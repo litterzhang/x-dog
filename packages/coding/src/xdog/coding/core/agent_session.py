@@ -188,6 +188,12 @@ class AgentSession:
         """Cancel the current agent turn."""
         self.agent.abort()
 
+    def cancel(self) -> None:
+        """Cancel active work and discard agent-level queued messages."""
+        self.agent.clear_all_queues()
+        self.permissions.deny_all()
+        self.agent.abort()
+
     # -- Model / thinking --
 
     def set_model(self, model: str) -> None:

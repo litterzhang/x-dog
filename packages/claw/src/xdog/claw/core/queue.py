@@ -22,6 +22,7 @@ class MessageQueue:
         self._group_locks: dict[str, asyncio.Lock] = {}
         self._queues: dict[str, list[GroupInput]] = {}
         self._running: set[str] = set()
+        self._reserved: set[str] = set()
 
     def _get_lock(self, group_id: str) -> asyncio.Lock:
         if group_id not in self._group_locks:
@@ -63,7 +64,20 @@ class MessageQueue:
         return []
 
     def is_running(self, group_id: str) -> bool:
-        return group_id in self._running
+        return group_id in self._running or group_id in self._reserved
+
+    def try_reserve(self, group_id: str) -> bool:
+        """Atomically reserve an idle group before asynchronous dispatch."""
+        if self.is_running(group_id):
+            return False
+        self._reserved.add(group_id)
+        return True
+
+    def claim_reservation(self, group_id: str) -> None:
+        self._reserved.discard(group_id)
+
+    def release_reservation(self, group_id: str) -> None:
+        self._reserved.discard(group_id)
 
     @asynccontextmanager
     async def acquire(self, group_id: str, *, is_user: bool = False) -> AsyncIterator[None]:

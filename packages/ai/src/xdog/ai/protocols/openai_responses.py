@@ -106,7 +106,44 @@ def context_to_responses_input(
                 "content": sanitize_unicode(text),
             })
 
+    pending_tool_calls: list[str] = []
+    resolved_tool_calls: set[str] = set()
+
+    def _flush_unmatched_tool_calls() -> None:
+        for call_id in pending_tool_calls:
+            if call_id not in resolved_tool_calls:
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": "Tool execution cancelled",
+                })
+                resolved_tool_calls.add(call_id)
+        pending_tool_calls.clear()
+
     for msg in (context.messages or ()):
+        if isinstance(msg, AssistantMessage):
+            _flush_unmatched_tool_calls()
+            assistant_items = _convert_assistant_message(msg)
+            if assistant_items is not None:
+                items.extend(assistant_items)
+            if assistant_items is not None:
+                pending_tool_calls.extend(
+                    _responses_call_id(block.id)
+                    for block in msg.content
+                    if isinstance(block, ToolCall)
+                    and _responses_call_id(block.id) not in resolved_tool_calls
+                )
+            continue
+
+        if isinstance(msg, ToolResultMessage):
+            call_id = _responses_call_id(msg.tool_call_id)
+            if call_id in pending_tool_calls and call_id not in resolved_tool_calls:
+                pending_tool_calls.remove(call_id)
+                resolved_tool_calls.add(call_id)
+                items.append(_convert_tool_result(msg))
+            continue
+
+        _flush_unmatched_tool_calls()
         converted = _convert_message(msg, model)
         if converted is not None:
             if isinstance(converted, list):
@@ -114,7 +151,13 @@ def context_to_responses_input(
             else:
                 items.append(converted)
 
+    _flush_unmatched_tool_calls()
     return items
+
+
+def _responses_call_id(call_id: str) -> str:
+    """Return the Responses API call id from the internal composite id."""
+    return call_id.split("|", 1)[0]
 
 
 def _convert_message(
@@ -186,9 +229,7 @@ def _convert_assistant_message(
                 "status": "completed",
             })
         elif isinstance(block, ToolCall):
-            call_id = block.id
-            if "|" in call_id:
-                call_id = call_id.split("|")[0]
+            call_id = _responses_call_id(block.id)
             items.append({
                 "type": "function_call",
                 "call_id": call_id,
@@ -208,9 +249,7 @@ def _convert_tool_result(msg: ToolResultMessage) -> dict[str, Any]:
     ]
     text = "\n".join(text_parts) if text_parts else ""
 
-    call_id = msg.tool_call_id
-    if "|" in call_id:
-        call_id = call_id.split("|")[0]
+    call_id = _responses_call_id(msg.tool_call_id)
 
     return {
         "type": "function_call_output",
@@ -343,11 +382,10 @@ async def _stream_impl(
     if "Authorization" not in headers and auth.api_key:
         headers["Authorization"] = f"Bearer {auth.api_key}"
 
-    yield StartEvent(partial=output.snapshot())
-
     # Track current streaming block state
     current_block_type: str | None = None
     partial_args: str = ""
+    started = False
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
@@ -369,6 +407,10 @@ async def _stream_impl(
                     # The event_type from SSE may differ from the JSON "type" field.
                     # OpenAI Responses API puts the actual type in the JSON data.
                     api_type = data.get("type", event_type)
+
+                    if api_type not in ("error", "response.failed") and not started:
+                        started = True
+                        yield StartEvent(partial=output.snapshot())
 
                     if api_type == "response.created":
                         resp = data.get("response", {})
@@ -621,7 +663,14 @@ async def _stream_impl(
                         )
                         return
 
+                if not started:
+                    raise httpx.RemoteProtocolError(
+                        "Upstream stream ended before producing an event",
+                    )
+
     except httpx.HTTPError as exc:
+        if not started:
+            raise
         output.stop_reason = "error"
         output.error_message = f"HTTP error: {exc}"
         output.mark_dirty()

@@ -78,6 +78,83 @@ def test_openai_responses_restores_reasoning_item_from_thinking_signature():
     assert items == [reasoning_item]
 
 
+def test_openai_responses_inserts_output_for_unmatched_tool_calls():
+    context = Context(messages=(
+        AssistantMessage(content=(
+            ToolCall(id="call_1|item_1", name="bash", arguments={}),
+            ToolCall(id="call_2|item_2", name="bash", arguments={}),
+        )),
+        ToolResultMessage(
+            tool_call_id="call_2|item_2",
+            tool_name="bash",
+            content=(TextContent(text="second completed"),),
+        ),
+    ))
+
+    items = context_to_responses_input(
+        context,
+        Model(api="openai-responses"),
+    )
+
+    outputs = {
+        item["call_id"]: item["output"]
+        for item in items
+        if item.get("type") == "function_call_output"
+    }
+    assert outputs == {
+        "call_1": "Tool execution cancelled",
+        "call_2": "second completed",
+    }
+
+
+def test_openai_responses_skips_duplicate_tool_results():
+    context = Context(messages=(
+        AssistantMessage(content=(
+            ToolCall(id="call_1|item_1", name="bash", arguments={}),
+        )),
+        ToolResultMessage(
+            tool_call_id="call_1|item_1",
+            tool_name="bash",
+            content=(TextContent(text="first"),),
+        ),
+        ToolResultMessage(
+            tool_call_id="call_1|stale-item",
+            tool_name="bash",
+            content=(TextContent(text="duplicate"),),
+        ),
+    ))
+
+    items = context_to_responses_input(
+        context,
+        Model(api="openai-responses"),
+    )
+
+    outputs = [
+        item for item in items
+        if item.get("type") == "function_call_output"
+    ]
+    assert outputs == [{
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "first",
+    }]
+
+
+def test_openai_responses_does_not_repair_suppressed_error_assistant():
+    context = Context(messages=(
+        AssistantMessage(
+            content=(ToolCall(id="call_1|item_1", name="bash", arguments={}),),
+            stop_reason="error",
+            error_message="request failed",
+        ),
+    ))
+
+    assert context_to_responses_input(
+        context,
+        Model(api="openai-responses"),
+    ) == []
+
+
 def test_anthropic_normalizes_tool_call_and_result_ids_together():
     context = Context(messages=(
         AssistantMessage(content=(

@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import json
 import logging
+import ssl
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+import httpx
 from xdog.ai.types import (
     AssistantMessage,
     AuthExpiredError,
@@ -52,6 +55,18 @@ from xdog.ai.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_INITIAL_STREAM_RETRY_DELAYS = (0.05, 0.15)
+_UPSTREAM_TRANSPORT_ERROR = "Upstream connection failed; retry later"
+_RETRYABLE_NETWORK_ERRNOS = {
+    errno.ECONNABORTED,
+    errno.ECONNREFUSED,
+    errno.ECONNRESET,
+    errno.EHOSTUNREACH,
+    errno.ENETUNREACH,
+    errno.ETIMEDOUT,
+    errno.EPIPE,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +476,7 @@ async def stream_to_sse(
             assert isinstance(event, ErrorEvent)
             _, error = _parse_upstream_error(event.error)
             yield _sse_line("error", error)
+            return
 
 
 def format_non_streaming_response(
@@ -577,17 +593,65 @@ def _http_response(
 
 
 def _sse_response_headers() -> bytes:
-    """Build HTTP headers for an SSE streaming response."""
+    """Build HTTP headers for an SSE streaming response closed at EOF."""
     headers = [
         "HTTP/1.1 200 OK",
         "Content-Type: text/event-stream",
         "Cache-Control: no-cache",
-        "Connection: keep-alive",
+        "Connection: close",
         "Access-Control-Allow-Origin: *",
         "Access-Control-Allow-Headers: *",
         "Access-Control-Allow-Methods: POST, OPTIONS",
     ]
     return ("\r\n".join(headers) + "\r\n\r\n").encode()
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield an exception and its explicit or implicit causes once."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_retryable_transport_error(exc: BaseException) -> bool:
+    """Return whether an initial upstream connection failure can be retried."""
+    for current in _exception_chain(exc):
+        if isinstance(current, (httpx.TransportError, ssl.SSLError)):
+            return True
+        if isinstance(current, OSError) and current.errno in _RETRYABLE_NETWORK_ERRNOS:
+            return True
+    return False
+
+
+async def _prepend_events(
+    first_events: tuple[Any, ...],
+    remainder: AsyncIterator[Any],
+) -> AsyncIterator[Any]:
+    """Replay primed events before the rest of their stream."""
+    for event in first_events:
+        yield event
+    async for event in remainder:
+        yield event
+
+
+def _error_response(status: int, status_text: str, message: str) -> bytes:
+    body = json.dumps({
+        "type": "error",
+        "error": {"type": "api_error", "message": message},
+    }).encode()
+    return _http_response(status, status_text, body)
+
+
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close a response writer and wait for socket cleanup."""
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
 
 
 async def _handle_connection(
@@ -801,32 +865,90 @@ async def _handle_messages(
     logger.info("Proxy request: model=%s stream=%s", model_id, is_stream)
 
     if is_stream:
-        event_stream = provider.stream(model_id, context, options)
+        primed_events: tuple[Any, ...] = ()
+        iterator: AsyncIterator[Any] | None = None
+
+        for attempt in range(len(_INITIAL_STREAM_RETRY_DELAYS) + 1):
+            try:
+                event_stream = provider.stream(model_id, context, options)
+                iterator = event_stream.__aiter__()
+                pending: list[Any] = []
+                while True:
+                    event = await anext(iterator)
+                    pending.append(event)
+                    if event.type != "start":
+                        break
+                primed_events = tuple(pending)
+                break
+            except StopAsyncIteration:
+                writer.write(_error_response(
+                    502,
+                    "Bad Gateway",
+                    "Upstream stream ended before producing a response",
+                ))
+                await writer.drain()
+                await _close_writer(writer)
+                return
+            except AuthExpiredError:
+                raise
+            except Exception as exc:
+                if not _is_retryable_transport_error(exc):
+                    raise
+                if attempt >= len(_INITIAL_STREAM_RETRY_DELAYS):
+                    logger.error("Initial upstream stream failed after retries: %s", exc)
+                    writer.write(_error_response(
+                        502,
+                        "Bad Gateway",
+                        _UPSTREAM_TRANSPORT_ERROR,
+                    ))
+                    await writer.drain()
+                    await _close_writer(writer)
+                    return
+                delay = _INITIAL_STREAM_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "Initial upstream stream failed; retrying in %.2fs: %s",
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+
+        assert primed_events
+        assert iterator is not None
+
+        admitted_event = primed_events[-1]
+        if isinstance(admitted_event, ErrorEvent):
+            status, error = _parse_upstream_error(admitted_event.error)
+            response = json.dumps(error).encode()
+            writer.write(_http_response(status, "Upstream Error", response))
+            await writer.drain()
+            await _close_writer(writer)
+            return
 
         writer.write(_sse_response_headers())
         await writer.drain()
 
         try:
-            async for chunk in stream_to_sse(event_stream, model_id):
+            replay = _prepend_events(primed_events, iterator)
+            async for chunk in stream_to_sse(replay, model_id):
                 writer.write(chunk)
                 await writer.drain()
-        except ConnectionResetError:
+        except (BrokenPipeError, ConnectionResetError):
             logger.debug("Client disconnected during stream")
         except Exception as exc:
             logger.error("Stream error: %s", exc)
             try:
                 writer.write(_sse_line("error", {
                     "type": "error",
-                    "error": {"type": "api_error", "message": str(exc)},
+                    "error": {
+                        "type": "api_error",
+                        "message": _UPSTREAM_TRANSPORT_ERROR,
+                    },
                 }))
                 await writer.drain()
-            except Exception:
+            except (BrokenPipeError, ConnectionResetError):
                 pass
         finally:
-            try:
-                writer.close()
-            except Exception:
-                pass
+            await _close_writer(writer)
 
     else:
         msg = await provider.complete(model_id, context, options)

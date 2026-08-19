@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -279,8 +280,13 @@ class Agent:
         self._steering_mode = cfg.steering_mode
         self._follow_up_mode = cfg.follow_up_mode
 
-        # Cancellation
+        # Cancellation. The TUI may abort from another thread; the event itself
+        # is always set on its owning loop and guarded by a run token.
         self._cancel = asyncio.Event()
+        self._cancel_lock = threading.RLock()
+        self._cancel_loop: asyncio.AbstractEventLoop | None = None
+        self._cancel_token = 0
+        self._pending_abort = False
 
         # Message queues
         self._steering_queue: list[AgentMessage] = []
@@ -312,6 +318,11 @@ class Agent:
     def is_streaming(self) -> bool:
         """Whether the agent is currently in a streaming loop."""
         return self._state.is_streaming
+
+    @property
+    def cancellation_requested(self) -> bool:
+        """Whether the current run has observed an abort request."""
+        return self._cancel.is_set()
 
     @property
     def stream_fn(self) -> StreamFn:
@@ -619,13 +630,33 @@ class Agent:
     # -- Abort ---------------------------------------------------------------
 
     def abort(self) -> None:
-        """Cancel the current agent loop."""
-        self._cancel.set()
-        self._update_state(is_streaming=False)
+        """Request cancellation safely from any thread."""
+        with self._cancel_lock:
+            loop = self._cancel_loop
+            token = self._cancel_token
+            if loop is None:
+                # The intended run has already settled (or has not started).
+                # Never carry a stale UI cancellation into a successor turn.
+                return
+
+        def _cancel_current() -> None:
+            with self._cancel_lock:
+                if token != self._cancel_token:
+                    return
+                self._cancel.set()
+
+        try:
+            loop.call_soon_threadsafe(_cancel_current)
+        except RuntimeError:
+            # The owning run settled and closed its loop after we released the
+            # lock. Treat this abort as stale, not as cancellation of a future run.
+            return
 
     def reset_abort(self) -> None:
-        """Reset the cancellation flag so a new loop can start."""
-        self._cancel = asyncio.Event()
+        """Clear a pending pre-run abort without replacing an active event."""
+        with self._cancel_lock:
+            if self._cancel_loop is None:
+                self._pending_abort = False
 
     # -- Wait for idle -------------------------------------------------------
 
@@ -682,7 +713,16 @@ class Agent:
         skip_initial_steering_poll: bool = False,
     ) -> AgentEventStream[AgentEvent]:
         """Build the loop config and start the agent loop."""
-        self._cancel = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        with self._cancel_lock:
+            self._cancel_token += 1
+            cancel_token = self._cancel_token
+            self._cancel = asyncio.Event()
+            self._cancel_loop = loop
+            if self._pending_abort:
+                self._pending_abort = False
+                self._cancel.set()
+            cancel_event = self._cancel
         self._idle_event.clear()
 
         self._update_state(
@@ -707,7 +747,7 @@ class Agent:
 
         # Inject cancel event into StreamOptions for this run
         from dataclasses import replace as _replace
-        options = _replace(self._options, cancel=self._cancel)
+        options = _replace(self._options, cancel=cancel_event)
 
         # Wrap steering callback to support skipInitialSteeringPoll
         skip_steering = skip_initial_steering_poll
@@ -743,7 +783,7 @@ class Agent:
                         self._stream_fn,
                         self._state.model,
                         options,
-                        self._cancel,
+                        cancel_event,
                         self._tool_ctx,
                     )
                 else:
@@ -754,7 +794,7 @@ class Agent:
                         self._stream_fn,
                         self._state.model,
                         options,
-                        self._cancel,
+                        cancel_event,
                         self._tool_ctx,
                     )
             except Exception as exc:
@@ -775,6 +815,9 @@ class Agent:
                 self._emit(error_end)
                 await stream.send(error_end)
             finally:
+                with self._cancel_lock:
+                    if cancel_token == self._cancel_token:
+                        self._cancel_loop = None
                 self._update_state(
                     is_streaming=False,
                     stream_message=None,

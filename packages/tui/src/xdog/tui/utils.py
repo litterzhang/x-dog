@@ -6,6 +6,7 @@ Includes both legacy utilities and new TypeScript-ported ANSI-aware functions.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable
 
@@ -24,6 +25,33 @@ _ANSI_RE = re.compile(
 def strip_ansi(text: str) -> str:
     """Remove all ANSI escape sequences from *text*."""
     return _ANSI_RE.sub("", text)
+
+
+def sanitize_terminal_text(text: str) -> str:
+    """Remove terminal commands and unsafe controls from untrusted text."""
+    plain = strip_ansi(text)
+    return "".join(
+        char
+        for char in plain
+        if char in ("\n", "\t") or not unicodedata.category(char).startswith("C")
+    )
+
+
+_SENSITIVE_TEXT_PATTERNS = (
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
+    re.compile(
+        r"(?i)((?:api[_-]?key|token|password|passwd|secret|credential)\s*[=:]\s*)"
+        r"[^\s,;]+"
+    ),
+)
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Sanitize terminal text and redact common inline credential forms."""
+    redacted = sanitize_terminal_text(text)
+    for pattern in _SENSITIVE_TEXT_PATTERNS:
+        redacted = pattern.sub(r"\1<redacted>", redacted)
+    return redacted
 
 
 def string_width(text: str) -> int:

@@ -1,5 +1,7 @@
 """Tests for agent built-in tools (current_time, bash, filesystem with grep/find)."""
 
+import asyncio
+import time
 
 import pytest
 from xdog.agent.tools import (
@@ -31,6 +33,27 @@ async def test_bash_timeout():
     tool = create_bash_tool()
     result = await tool.execute("c1", {"command": "sleep 10", "timeout_ms": 1000})
     assert "timed out" in _text(result).lower()
+
+
+@pytest.mark.asyncio
+async def test_bash_observes_cancel_event():
+    tool = create_bash_tool()
+    cancel = asyncio.Event()
+
+    async def trigger_cancel() -> None:
+        await asyncio.sleep(0.05)
+        cancel.set()
+
+    started = time.monotonic()
+    asyncio.create_task(trigger_cancel())
+    with pytest.raises(asyncio.CancelledError):
+        await tool.execute(
+            "c1",
+            {"command": "sleep 10", "timeout_ms": 30_000},
+            cancel,
+        )
+    assert time.monotonic() - started < 2
+
 
 # -- filesystem: read, write, delete --
 

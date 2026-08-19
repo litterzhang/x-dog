@@ -96,7 +96,9 @@ class Orchestrator:
         self,
         message: GroupInput,
         *,
+        on_display_event: Any = None,
         on_text_delta: Any = None,
+        reserved: bool = False,
     ) -> TurnResult | None:
         """Single entry point for all messages."""
         group_id = message.group_id
@@ -113,7 +115,7 @@ class Orchestrator:
         max_queued = group.config.max_queued_messages if group.config else 50
         debounce_ms = group.config.debounce_ms if group.config else 0
 
-        if self._queue.is_running(group_id):
+        if self._queue.is_running(group_id) and not reserved:
             async def _on_steer(msg: GroupInput) -> None:
                 runtime.steer(msg.content)
 
@@ -127,7 +129,9 @@ class Orchestrator:
             return None
 
         result = await self._execute_with_queue(
-            message, on_text_delta=on_text_delta,
+            message,
+            on_display_event=on_display_event,
+            on_text_delta=on_text_delta,
         )
 
         queued = await self._queue.collect_with_debounce(group_id, debounce_ms)
@@ -144,6 +148,7 @@ class Orchestrator:
         self,
         message: GroupInput,
         *,
+        on_display_event: Any = None,
         on_text_delta: Any = None,
     ) -> TurnResult | None:
         """Execute a message with concurrency control."""
@@ -156,7 +161,9 @@ class Orchestrator:
         async with self._queue.acquire(group_id, is_user=is_user):
             session = runtime.get_or_create_session()
             result: TurnResult | None = await session.run_turn(
-                message, on_text_delta=on_text_delta,
+                message,
+                on_display_event=on_display_event,
+                on_text_delta=on_text_delta,
             )
             return result
 
@@ -184,6 +191,31 @@ class Orchestrator:
             return False
         runtime.reset_session()
         return True
+
+    def abort_group(self, group_id: str) -> bool:
+        """Abort the active session for a known group."""
+        runtime = self._runtimes.get(group_id)
+        if not runtime:
+            return False
+        runtime.abort()
+        return True
+
+    async def wait_group_idle(self, group_id: str) -> None:
+        runtime = self._runtimes.get(group_id)
+        if runtime:
+            await runtime.wait_for_idle()
+
+    def is_group_running(self, group_id: str) -> bool:
+        return self._queue.is_running(group_id)
+
+    def try_reserve_group(self, group_id: str) -> bool:
+        return self._queue.try_reserve(group_id)
+
+    def claim_group_reservation(self, group_id: str) -> None:
+        self._queue.claim_reservation(group_id)
+
+    def release_group_reservation(self, group_id: str) -> None:
+        self._queue.release_reservation(group_id)
 
     def get_group_ids(self) -> list[str]:
         return list(self._runtimes.keys())

@@ -33,16 +33,21 @@ import queue
 import random
 import threading
 import time
+import uuid
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from xdog.tui.components.details import set_details_expanded
 from xdog.tui.components.loader import Loader
 from xdog.tui.components.markdown import DefaultTextStyle, Markdown, MarkdownTheme
 from xdog.tui.components.spacer import Spacer
 from xdog.tui.components.text import Text
+from xdog.tui.editor_layout import layout_editor
 from xdog.tui.keys import KeyEvent
 from xdog.tui.tui import TUI, Component, Container
+from xdog.tui.utils import sanitize_terminal_text
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +304,7 @@ class UserMessage(Container):
         self.add_child(Spacer(1))
         self.add_child(
             Markdown(
-                text,
+                sanitize_terminal_text(text),
                 1,
                 1,
                 MD_THEME,
@@ -312,51 +317,141 @@ class UserMessage(Container):
 
 
 class AssistantMessage(Container):
-    """Assistant message: Spacer(1) + Markdown with default fg.
+    """Assistant message with retained optional reasoning."""
 
-    Matches OpenClaw's AssistantMessageComponent:
-    assistantText is identity function — keeps terminal default foreground.
-    """
-
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, thinking: str = "") -> None:
         super().__init__()
-        self._body = Markdown(text, 1, 0, MD_THEME)
+        self._thinking_content = sanitize_terminal_text(thinking)
+        self._expanded = False
+        self._thinking = Text("", 1, 0)
+        self._body = Markdown(sanitize_terminal_text(text), 1, 0, MD_THEME)
         self.add_child(Spacer(1))
+        self.add_child(self._thinking)
         self.add_child(self._body)
+        self._render_thinking()
 
-    def set_text(self, text: str) -> None:
-        self._body.set_text(text)
+    def set_text(self, text: str, *, thinking: str | None = None) -> None:
+        if thinking is not None:
+            self._thinking_content = sanitize_terminal_text(thinking)
+            self._render_thinking()
+        self._body.set_text(sanitize_terminal_text(text))
+
+    def set_expanded(self, expanded: bool) -> None:
+        if self._expanded == expanded:
+            return
+        self._expanded = expanded
+        self._render_thinking()
+
+    def _render_thinking(self) -> None:
+        thinking = self._thinking_content.strip()
+        if not thinking:
+            rendered = ""
+        elif self._expanded:
+            rendered = f"Thinking\n{self._thinking_content}"
+        else:
+            rendered = "Thinking (Ctrl+O to expand)"
+        self._thinking.set_text(theme_dim(rendered))
+
+
+class ToolMessage(Container):
+    """ID-keyed tool lifecycle retaining full output for expansion."""
+
+    def __init__(self, name: str, arguments: dict[str, Any] | None) -> None:
+        super().__init__()
+        self._name = sanitize_terminal_text(name)
+        self._arguments = {
+            sanitize_terminal_text(str(key)): sanitize_terminal_text(str(value))
+            for key, value in (arguments or {}).items()
+        }
+        self._result = ""
+        self._state = "running"
+        self._is_error = False
+        self._completed = False
+        self._expanded = False
+        self._header = Text("", 1, 0)
+        self._body = Text("", 1, 0)
+        self.add_child(Spacer(1))
+        self.add_child(self._header)
+        self.add_child(self._body)
+        self._render()
+
+    def set_streaming(self, result: str) -> None:
+        if self._state != "running":
+            return
+        self._result = sanitize_terminal_text(result)
+        self._render()
+
+    def set_canceled(self) -> None:
+        if self._state != "running":
+            return
+        self._state = "canceled"
+        self._completed = True
+        self._render()
+
+    def set_result(self, result: str, *, is_error: bool = False) -> None:
+        if self._state == "canceled":
+            return
+        self._result = sanitize_terminal_text(result)
+        self._is_error = is_error
+        self._state = "error" if is_error else "success"
+        self._completed = True
+        self._render()
+
+    def set_expanded(self, expanded: bool) -> None:
+        if self._expanded == expanded:
+            return
+        self._expanded = expanded
+        self._render()
+
+    def _render(self) -> None:
+        icons = {"running": "⚡", "success": "✓", "error": "✗", "canceled": "■"}
+        icon = icons[self._state]
+        header = f"  {icon} {self._name}"
+        if self._state == "error":
+            self._header.set_text(theme_error(header))
+        elif self._state == "canceled":
+            self._header.set_text(theme_dim(header))
+        else:
+            self._header.set_text(theme_accent(header))
+        if not self._result:
+            if self._completed:
+                self._body.set_text(theme_dim("    → (no output)"))
+            else:
+                arguments = ", ".join(f"{key}={value}" for key, value in self._arguments.items())
+                self._body.set_text(theme_dim(f"    {arguments}" if arguments else ""))
+            return
+        if self._expanded or len(self._result) <= 500:
+            display = self._result
+        else:
+            preview = self._result[:200].replace("\n", " ").replace("\r", "")
+            remaining = len(self._result) - 200
+            line_count = len(self._result.splitlines())
+            display = f"{preview} [...{remaining} more chars, {line_count} lines; Ctrl+O to expand]"
+        self._body.set_text(theme_error(f"    → {display}") if self._is_error else theme_dim(f"    → {display}"))
 
 
 # ── ChatLog (matching OpenClaw's ChatLog exactly) ─────────────────────
 
 
 class ChatLog(Container):
-    """Scrollable chat log with streaming support and component pruning.
-
-    Matches OpenClaw's ChatLog:
-    - addUser/addSystem
-    - startAssistant/updateAssistant/finalizeAssistant/dropAssistant
-    - pruneOverflow at 180 components
-    - streaming_runs tracking for run-based message updates
-    """
-
-    MAX_COMPONENTS = 180
+    """Retained chat history with ID-keyed streaming and tool state."""
 
     def __init__(self) -> None:
         super().__init__()
         self._streaming_runs: dict[str, AssistantMessage] = {}
+        self._tools: dict[str, ToolMessage] = {}
+        self._details_expanded = False
 
     def add_user(self, text: str) -> None:
         self._append(UserMessage(text))
 
-    def add_assistant(self, text: str) -> None:
+    def add_assistant(self, text: str, *, thinking: str = "") -> None:
         """Add a completed assistant message (for history replay)."""
-        self._append(AssistantMessage(text))
+        self._append(AssistantMessage(text, thinking=thinking))
 
     def add_system(self, text: str) -> None:
         self._append(Spacer(1))
-        self._append(Text(theme_system(text), 1, 0))
+        self._append(Text(theme_system(sanitize_terminal_text(text)), 1, 0))
 
     def start_assistant(self, text: str, run_id: str = "default") -> AssistantMessage:
         """Start a new assistant message for streaming (matching OpenClaw)."""
@@ -394,25 +489,52 @@ class ChatLog(Container):
         self.remove_child(existing)
         del self._streaming_runs[run_id]
 
+    def add_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None,
+        *,
+        tool_call_id: str,
+    ) -> ToolMessage:
+        existing = self._tools.get(tool_call_id)
+        if existing is not None:
+            return existing
+        component = ToolMessage(name, arguments)
+        self._tools[tool_call_id] = component
+        self._append(component)
+        return component
+
+    def finish_tool(
+        self,
+        tool_call_id: str,
+        name: str,
+        result: str,
+        *,
+        is_error: bool = False,
+    ) -> ToolMessage:
+        component = self._tools.get(tool_call_id)
+        if component is None:
+            component = self.add_tool(name, None, tool_call_id=tool_call_id)
+        component.set_result(result, is_error=is_error)
+        self._tools.pop(tool_call_id, None)
+        return component
+
+    def set_details_expanded(self, expanded: bool) -> None:
+        self._details_expanded = expanded
+        for child in tuple(self.children):
+            set_details_expanded(child, expanded)
+
+    def close_assistant(self, run_id: str = "default") -> None:
+        self._streaming_runs.pop(run_id, None)
+
     def clear_all(self) -> None:
         self.clear()
         self._streaming_runs.clear()
+        self._tools.clear()
 
     def _append(self, comp: Component) -> None:
+        set_details_expanded(comp, self._details_expanded)
         self.add_child(comp)
-        self._prune()
-
-    def _drop_component_refs(self, comp: Component) -> None:
-        """Clean up streaming run references when pruning (matching OpenClaw)."""
-        for run_id, msg in list(self._streaming_runs.items()):
-            if msg is comp:
-                del self._streaming_runs[run_id]
-
-    def _prune(self) -> None:
-        while len(self.children) > self.MAX_COMPONENTS:
-            oldest = self.children[0]
-            self.children.pop(0)
-            self._drop_component_refs(oldest)
 
 
 # ── CustomEditor (matching OpenClaw's CustomEditor) ───────────────────
@@ -572,14 +694,22 @@ class CustomEditor(Component):
         # Top border
         lines.append(border)
 
-        # Input line with cursor (matching OpenClaw's Editor render)
+        # Wrap by display cells using the shared coding/TUI layout.
         prompt = _bold(theme_accent("> "))
-        before = self._value[: self._cursor]
-        after = self._value[self._cursor :]
-        cursor_ch = after[0] if after else " "
-        rest = after[1:] if after else ""
-        input_line = prompt + before + f"\x1b[7m{cursor_ch}\x1b[27m" + rest
-        lines.append(input_line)
+        content_width = max(1, width - 2)
+        layout = layout_editor(self._value, content_width)
+        cursor_row, cursor_col = layout.position(self._cursor)
+        first_row = max(0, cursor_row - 7)
+        for row_index in range(first_row, min(len(layout.rows), first_row + 8)):
+            prefix = prompt if row_index == 0 else "  "
+            row_text = layout.rows[row_index].text
+            if row_index == cursor_row:
+                before = row_text[: max(0, self._cursor - layout.rows[row_index].start)]
+                after = row_text[len(before):]
+                cursor_ch = after[0] if after else " "
+                rest = after[1:] if after else ""
+                row_text = before + f"\x1b[7m{cursor_ch}\x1b[27m" + rest
+            lines.append(prefix + row_text)
 
         # Bottom border
         lines.append(border)
@@ -639,6 +769,12 @@ class CustomEditor(Component):
                         # Tab — just complete, update list for potential further typing
                         self._update_select_list()
                 return True
+
+        if event.key == "enter" and (event.alt or event.shift):
+            self._value = self._value[:self._cursor] + "\n" + self._value[self._cursor:]
+            self._cursor += 1
+            self._select_list = None
+            return True
 
         if event.key == "enter":
             raw = self._value
@@ -760,9 +896,14 @@ class ChatApp:
 
         # Active run tracking (matching OpenClaw)
         self._active_run_id: str | None = None
+        self._pending_messages: deque[str] = deque()
         self._last_ctrl_c_at: float = 0.0
         self._exit_requested = False
         self._has_connected = False
+        self._details_expanded = False
+        self._history_format = 1
+        self._history_tools: dict[str, ToolMessage] = {}
+        self._replaying_history = False
 
         # Token usage tracking (matching OpenClaw's footer)
         self._usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
@@ -813,6 +954,7 @@ class ChatApp:
 
         self._tui.add_child(root)
         self._tui.set_focus(self._editor)
+        self._tui.add_input_listener(self._handle_global_input)
 
         self._io_thread = threading.Thread(target=self._io_loop, daemon=True)
 
@@ -821,6 +963,15 @@ class ChatApp:
         self._editor.on_ctrl_c = self._handle_ctrl_c
         self._editor.on_ctrl_d = self._request_exit
         self._editor.on_escape = self._handle_escape
+
+    def _handle_global_input(self, event: KeyEvent) -> dict[str, object] | None:
+        """Toggle retained reasoning and tool output detail."""
+        if not event.matches("ctrl+o"):
+            return None
+        self._details_expanded = not self._details_expanded
+        self._chat_log.set_details_expanded(self._details_expanded)
+        self._tui.request_render()
+        return {"consume": True}
 
     def run(self) -> None:
         self._io_thread.start()
@@ -862,10 +1013,19 @@ class ChatApp:
                 "group_id": self._state.get("group_id", "main"),
                 "run_id": self._active_run_id,
             })
-            self._chat_log.add_system("run aborted")
+            queued = list(self._pending_messages)
+            self._pending_messages.clear()
+            if queued:
+                queued_text = "\n\n".join(queued)
+                draft = self._editor.get_text()
+                self._editor.set_text("\n\n".join(
+                    text for text in (queued_text, draft) if text.strip()
+                ))
+            self._chat_log.add_system("cancelling run")
             self._chat_log.drop_assistant(self._active_run_id)
-            self._active_run_id = None
-            self._set_waiting(False)
+            for tool in self._chat_log._tools.values():
+                tool.set_canceled()
+            self._set_activity_status("cancelling")
             self._tui.request_render()
 
     def _request_exit(self) -> None:
@@ -1198,10 +1358,17 @@ class ChatApp:
             self._tui.request_render()
             return
 
+        if self._active_run_id is not None:
+            self._pending_messages.append(value)
+            self._set_activity_status(f"queued messages: {len(self._pending_messages)}")
+            self._tui.request_render()
+            return
+
         # Regular message (matching OpenClaw's sendMessage flow)
         self._clear_todos()  # clear any finalized todos from previous turn
         self._clear_goal()   # clear goal widget from previous turn
         self._chat_log.add_user(value)
+        self._active_run_id = f"run-{uuid.uuid4().hex}"
         self._set_waiting(True)
         self._streaming_output_chars = 0
         # Estimate input for this turn: all prior session context + this message
@@ -1210,7 +1377,14 @@ class ChatApp:
             "type": "message",
             "group_id": self._state.get("group_id", "main"),
             "content": value,
+            "run_id": self._active_run_id,
         })
+
+    def _dispatch_next_pending(self) -> None:
+        if self._active_run_id is not None or not self._pending_messages:
+            return
+        next_message = self._pending_messages.popleft()
+        self._handle_submit(next_message)
 
     # ── Per-frame polling (matching OpenClaw's event loop) ──
 
@@ -1233,6 +1407,58 @@ class ChatApp:
             self._tui.request_render()
 
     # ── Response handling (matching OpenClaw's event handler patterns) ─
+
+    def _replay_history_entries(self, entries: list[Any]) -> None:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            role = entry.get("role")
+            raw_content = entry.get("content", "")
+            channel = entry.get("channel", "")
+            parts = raw_content if self._history_format >= 2 and isinstance(raw_content, list) else []
+            content = raw_content if isinstance(raw_content, str) else "".join(
+                str(part.get("text", ""))
+                for part in parts
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            if channel in ("goal_runner", "scheduler"):
+                continue
+            if role == "user" and _is_internal_prompt(content):
+                continue
+            if role == "user" and content:
+                self._chat_log.add_user(content)
+                self._editor.add_to_history(content)
+            elif role == "assistant":
+                thinking = "".join(
+                    str(part.get("thinking", ""))
+                    for part in parts
+                    if isinstance(part, dict) and part.get("type") == "thinking"
+                )
+                if content or thinking:
+                    self._chat_log.add_assistant(content, thinking=thinking)
+                for part in parts:
+                    if isinstance(part, dict) and part.get("type") == "toolCall":
+                        call_id = str(part.get("id", ""))
+                        self._history_tools[call_id] = self._chat_log.add_tool(
+                            str(part.get("name", "tool")),
+                            part.get("arguments") if isinstance(part.get("arguments"), dict) else None,
+                            tool_call_id=call_id,
+                        )
+            elif role == "toolResult":
+                call_id = str(entry.get("tool_call_id", ""))
+                result = "".join(
+                    str(part.get("text", ""))
+                    for part in parts
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+                tool = self._history_tools.get(call_id)
+                if tool is None:
+                    tool = self._chat_log.add_tool(
+                        str(entry.get("tool_name", "tool")),
+                        None,
+                        tool_call_id=call_id,
+                    )
+                tool.set_result(result, is_error=bool(entry.get("is_error", False)))
 
     def _handle_response(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
@@ -1277,33 +1503,15 @@ class ChatApp:
                 # Replay chat history from transcript (matching OpenClaw's
                 # renderInitialMessages / renderSessionContext)
                 history = msg.get("history", [])
-                if history:
+                history_count = int(msg.get("history_count", len(history)))
+                self._replaying_history = history_count > 0
+                if history_count:
                     self._chat_log.add_system(
                         f"resumed session: {sid} ({gateway_turn_count} turns)"
                     )
-                    for entry in history:
-                        role = entry.get("role")
-                        content = entry.get("content", "")
-                        channel = entry.get("channel", "")
-                        if not content:
-                            continue
-                        # Skip goal_runner/scheduler prompts — they're
-                        # internal and shouldn't appear in chat or editor
-                        # history (user would see "Continue working on
-                        # your active goals..." on up-arrow).
-                        if channel in ("goal_runner", "scheduler"):
-                            continue
-                        # Content-based fallback for old transcripts that
-                        # lack the channel tag
-                        if role == "user" and _is_internal_prompt(content):
-                            continue
-                        if role == "user":
-                            self._chat_log.add_user(content)
-                            # Populate editor history (matching OpenClaw's
-                            # populateHistory option)
-                            self._editor.add_to_history(content)
-                        elif role == "assistant":
-                            self._chat_log.add_assistant(content)
+                    self._history_format = int(msg.get("history_format", 1))
+                    if history:
+                        self._replay_history_entries(history)
                 else:
                     self._chat_log.add_system(f"new session: {sid}")
 
@@ -1311,6 +1519,17 @@ class ChatApp:
             self._update_footer()
             self._set_connection_status("connected")
             self._set_activity_status("idle")
+            return
+
+        if msg_type == "history_chunk":
+            entries = msg.get("entries")
+            if self._replaying_history and isinstance(entries, list):
+                self._replay_history_entries(entries)
+            return
+
+        if msg_type == "history_end":
+            self._replaying_history = False
+            self._history_tools.clear()
             return
 
         # Reconnect status update (internal, not from gateway)
@@ -1347,6 +1566,60 @@ class ChatApp:
                 self._render_goal(goal)
             return
 
+        run_scoped = {
+            "tool_call", "tool_update", "tool_result", "delta",
+            "response", "final", "aborted", "abort_ack", "error",
+        }
+        if msg_type in run_scoped:
+            run_id = str(msg.get("run_id", ""))
+            if self._active_run_id is None or run_id != self._active_run_id:
+                return
+
+        if msg_type in ("busy", "queued"):
+            run_id = str(msg.get("run_id", ""))
+            if run_id == self._active_run_id:
+                self._active_run_id = None
+                self._set_waiting(False)
+                self._chat_log.add_system("group is busy; message restored to editor")
+                # The submitted text is already in editor history; restore the
+                # newest entry as an editable draft rather than losing it.
+                if self._editor._history:
+                    self._editor.set_text(self._editor._history[-1])
+            return
+
+        if msg_type == "run_ack":
+            return
+
+        if msg_type == "abort_ack":
+            return
+
+        if msg_type == "tool_call":
+            self._chat_log.close_assistant(str(msg.get("run_id", "default")))
+            self._chat_log.add_tool(
+                str(msg.get("name", "tool")),
+                msg.get("arguments") if isinstance(msg.get("arguments"), dict) else None,
+                tool_call_id=str(msg.get("id", "")),
+            )
+            self._set_activity_status("running")
+            return
+
+        if msg_type == "tool_update":
+            tool_call_id = str(msg.get("id", ""))
+            tool = self._chat_log._tools.get(tool_call_id)
+            if tool is not None:
+                tool.set_streaming(str(msg.get("result", "")))
+            return
+
+        if msg_type == "tool_result":
+            self._chat_log.finish_tool(
+                str(msg.get("id", "")),
+                str(msg.get("name", "tool")),
+                str(msg.get("result", "")),
+                is_error=bool(msg.get("is_error", False)),
+            )
+            self._set_activity_status("running")
+            return
+
         # Streaming delta (matching OpenClaw's chat event: state=delta)
         if msg_type == "delta":
             run_id = msg.get("run_id", "default")
@@ -1379,9 +1652,7 @@ class ChatApp:
             else:
                 # Streamed deltas already delivered the content — just
                 # close the streaming run without appending a new component.
-                existing = self._chat_log._streaming_runs.get(run_id)
-                if existing is not None:
-                    del self._chat_log._streaming_runs[run_id]
+                self._chat_log.close_assistant(run_id)
                 # If no existing run found, nothing to finalize — the
                 # content was already rendered via deltas.
 
@@ -1403,6 +1674,7 @@ class ChatApp:
             if "model" in msg:
                 self._state["model"] = msg["model"]
             self._update_footer()
+            self._dispatch_next_pending()
             return
 
         # Aborted (matching OpenClaw's chat event: state=aborted)
@@ -1424,6 +1696,7 @@ class ChatApp:
             err = msg.get("message", msg.get("content", "Unknown error"))
             self._chat_log.add_system(theme_error(f"Error: {err}"))
             self._chat_log.drop_assistant(run_id)
+            self._dispatch_next_pending()
             return
 
         if msg_type == "reset_ack":
@@ -1500,7 +1773,8 @@ class ChatApp:
 
             try:
                 reader, writer = await asyncio.open_unix_connection(
-                    str(sock_path)
+                    str(sock_path),
+                    limit=4 * 1024 * 1024,
                 )
             except Exception as e:
                 if attempt == 0:
