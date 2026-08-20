@@ -27,6 +27,7 @@ Event protocol (matching OpenClaw's chat/agent events):
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import queue
@@ -39,9 +40,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from xdog.ai.types import ImageContent
 from xdog.tui.components.details import set_details_expanded
+from xdog.tui.components.image import Image
 from xdog.tui.components.loader import Loader
 from xdog.tui.components.markdown import DefaultTextStyle, Markdown, MarkdownTheme
+from xdog.tui.components.prompt_editor import PromptEditor
 from xdog.tui.components.spacer import Spacer
 from xdog.tui.components.text import Text
 from xdog.tui.editor_layout import layout_editor
@@ -375,6 +379,13 @@ class ToolMessage(Container):
         self.add_child(self._body)
         self._render()
 
+    def set_image(self, image: ImageContent) -> None:
+        try:
+            data = base64.b64decode(image.data, validate=True)
+        except (ValueError, TypeError):
+            return
+        self.add_child(Image(data=data, alt=image.mime_type))
+
     def set_streaming(self, result: str) -> None:
         if self._state != "running":
             return
@@ -631,7 +642,7 @@ class _SelectList:
         return lines
 
 
-class CustomEditor(Component):
+class CustomEditor(PromptEditor):
     """Input editor with borders, slash command select list[Any], and Ctrl+C/D/Escape.
 
     Matches OpenClaw's CustomEditor which extends pi-tui's Editor:
@@ -642,11 +653,10 @@ class CustomEditor(Component):
     """
 
     def __init__(self) -> None:
-        self._value = ""
-        self._cursor = 0
-        self._history: list[str] = []
-        self._hist_idx = -1
-        self._hist_stash = ""
+        super().__init__(
+            command_provider=lambda: dict(SLASH_COMMANDS),
+            max_rows=8,
+        )
         # Select list state
         self._select_list: _SelectList | None = None
         # Callbacks (matching OpenClaw's CustomEditor fields)
@@ -720,6 +730,13 @@ class CustomEditor(Component):
             lines.extend(self._select_list.render(width))
 
         return lines
+
+    def handle_paste(self, text: str) -> bool:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        self._value = self._value[:self._cursor] + normalized + self._value[self._cursor:]
+        self._cursor += len(normalized)
+        self._select_list = None
+        return True
 
     def handle_input(self, event: KeyEvent) -> bool:
         # Escape — cancel select list if showing, otherwise abort request
@@ -1611,6 +1628,15 @@ class ChatApp:
             return
 
         if msg_type == "tool_result":
+            tool_call_id = str(msg.get("id", ""))
+            tool = self._chat_log._tools.get(tool_call_id)
+            if tool is not None:
+                for image in msg.get("images", []):
+                    if isinstance(image, dict):
+                        tool.set_image(ImageContent(
+                            data=str(image.get("data", "")),
+                            mime_type=str(image.get("mime_type", "image/png")),
+                        ))
             self._chat_log.finish_tool(
                 str(msg.get("id", "")),
                 str(msg.get("name", "tool")),

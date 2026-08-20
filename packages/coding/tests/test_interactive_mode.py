@@ -529,6 +529,25 @@ class TestInteractiveMessageHandling:
         )
         assert rendered.index("/workspace") < rendered.index("latest answer")
 
+    def test_tool_result_preserves_image_content_for_rendering(self):
+        import queue
+
+        from xdog.agent import AgentToolResult, ToolExecutionEndEvent
+        from xdog.ai.types import ImageContent
+        from xdog.coding.modes.interactive.interactive_mode import InteractiveMode
+
+        mode = object.__new__(InteractiveMode)
+        mode._event_queue = queue.Queue()
+        image = ImageContent(data="aGVsbG8=", mime_type="image/png")
+        mode._dispatch_agent_event(ToolExecutionEndEvent(
+            tool_call_id="call-image",
+            tool_name="filesystem",
+            result=AgentToolResult(content=(image,)),
+        ))
+
+        event = mode._event_queue.get_nowait()
+        assert event["content"] == (image,)
+
     def test_completed_tool_event_retains_full_output_for_expansion(self):
         import queue
 
@@ -707,6 +726,21 @@ class TestCustomEditor:
         assert editor._cursor == 4
         assert editor.handle_input(KeyEvent(key="down"))
         assert editor._cursor == 10
+
+    def test_editor_pastes_multiline_text_without_submitting(self):
+        from xdog.coding.modes.interactive.components.custom_editor import (
+            CustomEditorComponent,
+        )
+
+        editor = CustomEditorComponent(create_default_theme())
+        submitted: list[str] = []
+        editor.on_submit = submitted.append
+        editor.set_text("before-after")
+        editor._cursor = len("before-")
+
+        assert editor.handle_paste("first\r\nsecond")
+        assert editor.get_text() == "before-first\nsecondafter"
+        assert submitted == []
 
     def test_editor_supports_multiline_input(self):
         from xdog.coding.modes.interactive.components.custom_editor import CustomEditorComponent

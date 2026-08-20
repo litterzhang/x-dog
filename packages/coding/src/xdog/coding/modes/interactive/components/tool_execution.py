@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from typing import Any
 
+from xdog.ai.types import ImageContent, ToolResultContentPart
 from xdog.coding.modes.interactive.theme import Theme
 from xdog.tui.components.diff import Diff
+from xdog.tui.components.image import Image
 from xdog.tui.components.text import Text
 from xdog.tui.tui import Container
 from xdog.tui.utils import redact_sensitive_text, sanitize_terminal_text
@@ -102,6 +105,15 @@ class ToolExecutionComponent(Container):
                 0,
             )
             self.add_child(self._result_text)
+
+    def set_content(self, content: tuple[ToolResultContentPart, ...]) -> None:
+        for part in content:
+            if isinstance(part, ImageContent):
+                try:
+                    data = base64.b64decode(part.data, validate=True)
+                except (ValueError, TypeError):
+                    continue
+                self.add_child(Image(data=data, alt=part.mime_type))
 
     def set_result(self, result: str, *, is_error: bool = False) -> None:
         """Retain a complete tool result and render its selected detail level."""

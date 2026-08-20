@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from xdog.tui.markdown_transforms import apply_markdown_transforms
 from xdog.tui.tui import Component
 from xdog.tui.utils import (
     apply_background_to_line,
@@ -498,7 +499,7 @@ class Markdown(Component):
         default_text_style: DefaultTextStyle | None = None,
     ) -> None:
         super().__init__()
-        self._text = text
+        self._text = apply_markdown_transforms(text)
         self._padding_x = padding_x
         self._padding_y = padding_y
         self._theme = theme or _default_theme()
@@ -520,7 +521,7 @@ class Markdown(Component):
 
     def set_text(self, text: str) -> None:
         """Set the markdown text content."""
-        self._text = text
+        self._text = apply_markdown_transforms(text)
         self.invalidate()
 
     def invalidate(self) -> None:

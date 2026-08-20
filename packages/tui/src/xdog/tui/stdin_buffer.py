@@ -10,8 +10,14 @@ from __future__ import annotations
 import os
 import select
 import sys
-import termios
-import tty
+import time
+
+try:
+    import termios
+    import tty
+except ImportError:  # Windows
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -124,6 +130,19 @@ def is_complete_sequence(data: bytes) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class KeyBytes:
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class Paste:
+    text: str
+
+
+InputFrame = KeyBytes | Paste
+
+
 @dataclass
 class StdinBuffer:
     """Non-blocking stdin reader with buffering and sequence detection.
@@ -136,16 +155,103 @@ class StdinBuffer:
     _buffer: bytearray = field(default_factory=bytearray)
     _fd: int = field(default=-1)
     on_data: Callable[[bytes], None] | None = field(default=None, repr=False)
+    _paste: bytearray | None = field(default=None, repr=False)
+    _pending_since: float | None = field(default=None, repr=False)
+
+    def feed(self, data: bytes) -> list[InputFrame]:
+        """Incrementally frame key bytes and atomic bracketed paste payloads."""
+        self._buffer.extend(data)
+        if self._buffer and self._pending_since is None:
+            self._pending_since = time.monotonic()
+        frames: list[InputFrame] = []
+        paste_start = b"\x1b[200~"
+        paste_end = b"\x1b[201~"
+
+        while self._buffer:
+            if self._paste is not None:
+                end = self._buffer.find(paste_end)
+                if end < 0:
+                    # Preserve a possible split terminator suffix.
+                    keep = min(len(paste_end) - 1, len(self._buffer))
+                    if len(self._buffer) > keep:
+                        self._paste.extend(self._buffer[:-keep])
+                        del self._buffer[:-keep]
+                    break
+                self._paste.extend(self._buffer[:end])
+                del self._buffer[:end + len(paste_end)]
+                frames.append(Paste(self._paste.decode("utf-8", errors="replace")))
+                self._paste = None
+                continue
+
+            start = self._buffer.find(paste_start)
+            if start >= 0:
+                if start:
+                    frames.extend(self._emit_complete_prefix(start))
+                    if self._buffer and self._buffer.find(paste_start) != 0:
+                        break
+                if self._buffer.startswith(paste_start):
+                    del self._buffer[:len(paste_start)]
+                    self._paste = bytearray()
+                    continue
+
+            if paste_start.startswith(bytes(self._buffer)):
+                break
+            frames.extend(self._emit_complete_prefix(len(self._buffer)))
+            break
+
+        if not self._buffer:
+            self._pending_since = None
+        return frames
+
+    def flush_expired(
+        self,
+        *,
+        now: float | None = None,
+        escape_timeout: float | None = None,
+        sequence_timeout: float = 0.05,
+    ) -> list[InputFrame]:
+        """Flush a stalled partial sequence after terminal/SSH-safe timeout."""
+        if not self._buffer or self._pending_since is None:
+            return []
+        current = time.monotonic() if now is None else now
+        esc_timeout = (
+            0.1 if escape_timeout is None and os.environ.get("SSH_CONNECTION")
+            else (0.01 if escape_timeout is None else escape_timeout)
+        )
+        timeout = esc_timeout if self._buffer == b"\x1b" else sequence_timeout
+        if current - self._pending_since < timeout:
+            return []
+        data = bytes(self._buffer)
+        self._buffer.clear()
+        self._pending_since = None
+        return [KeyBytes(data)]
+
+    def _emit_complete_prefix(self, limit: int) -> list[InputFrame]:
+        candidate = bytes(self._buffer[:limit])
+        if not candidate:
+            return []
+        # UTF-8 and terminal escape sequences must remain buffered until whole.
+        try:
+            candidate.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.reason == "unexpected end of data":
+                return []
+        if not is_complete_sequence(candidate):
+            return []
+        del self._buffer[:limit]
+        return [KeyBytes(candidate)]
 
     def enter_raw(self) -> None:
         """Switch stdin to raw mode, saving the original terminal settings."""
         self._fd = sys.stdin.fileno()
+        if termios is None or tty is None:
+            return
         self._original_termios = termios.tcgetattr(self._fd)
         tty.setraw(self._fd)
 
     def restore(self) -> None:
         """Restore the original terminal settings."""
-        if self._original_termios is not None and self._fd >= 0:
+        if self._original_termios is not None and self._fd >= 0 and termios is not None:
             termios.tcsetattr(self._fd, termios.TCSAFLUSH, self._original_termios)
             self._original_termios = None
 

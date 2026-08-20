@@ -100,6 +100,42 @@ def test_shrinking_transient_panel_does_not_replay_input_box(monkeypatch) -> Non
     assert "\x1b[2J" not in rendered
 
 
+def test_suspend_reports_platform_support(monkeypatch) -> None:
+    from xdog.tui.tui import TUI
+
+    tui = TUI()
+    monkeypatch.setattr("xdog.tui.tui.os.name", "nt")
+    assert tui.suspend() is False
+    assert tui._suspend_requested is False
+
+
+def test_fullscreen_mode_uses_alternate_screen() -> None:
+    from xdog.tui.tui import TUI
+
+    tui = TUI(fullscreen=True)
+    assert tui.fullscreen is True
+    assert tui._terminal_enter_sequence().startswith("\x1b[?1049h")
+    assert tui._terminal_leave_sequence().endswith("\x1b[?1049l")
+
+
+def test_nested_overlay_restores_previous_focus() -> None:
+    from xdog.tui.components.text import Text
+    from xdog.tui.tui import TUI
+
+    tui = TUI()
+    original = Text("original")
+    first = Text("first")
+    second = Text("second")
+    tui.set_focus(original)
+
+    first_handle = tui.show_overlay(first)
+    second_handle = tui.show_overlay(second)
+    second_handle.hide()
+    assert tui._focused is first
+    first_handle.hide()
+    assert tui._focused is original
+
+
 def test_overlay_is_composited_into_visible_tail_viewport() -> None:
     tui = TUI()
     base_lines = [f"history-{index}" for index in range(30)]

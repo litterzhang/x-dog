@@ -1,4 +1,4 @@
-from xdog.tui.stdin_buffer import is_complete_sequence
+from xdog.tui.stdin_buffer import KeyBytes, Paste, StdinBuffer, is_complete_sequence
 
 
 def test_complete_csi_sequence():
@@ -19,3 +19,29 @@ def test_bare_escape_incomplete():
 def test_mixed_complete():
     """Mix of regular bytes and complete sequences is complete."""
     assert is_complete_sequence(b"hello\x1b[A") is True
+
+
+def test_feed_preserves_fragmented_csi_until_complete():
+    buffer = StdinBuffer()
+
+    assert buffer.feed(b"\x1b[") == []
+    assert buffer.feed(b"1;2A") == [KeyBytes(b"\x1b[1;2A")]
+
+
+def test_feed_emits_bracketed_paste_atomically():
+    buffer = StdinBuffer()
+
+    assert buffer.feed(b"before\x1b[200~first\n") == [KeyBytes(b"before")]
+    assert buffer.feed("二\nthird".encode()) == []
+    assert buffer.feed(b"\x1b[201~after") == [
+        Paste("first\n二\nthird"),
+        KeyBytes(b"after"),
+    ]
+
+
+def test_feed_keeps_split_utf8_character():
+    buffer = StdinBuffer()
+    encoded = "界".encode()
+
+    assert buffer.feed(encoded[:2]) == []
+    assert buffer.feed(encoded[2:]) == [KeyBytes(encoded)]

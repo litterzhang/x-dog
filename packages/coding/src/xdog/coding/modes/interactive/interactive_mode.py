@@ -206,6 +206,11 @@ class InteractiveMode:
         if event.matches("escape") and self._is_busy:
             self._handle_escape()
             return {"consume": True}
+        if event.matches("ctrl+z"):
+            if not self._tui.suspend():
+                self._set_status_text("suspend is not supported on this platform")
+                self._tui.request_render()
+            return {"consume": True}
         if event.matches("ctrl+o"):
             self._details_expanded = not self._details_expanded
             self._chat_log.set_details_expanded(self._details_expanded)
@@ -691,6 +696,7 @@ class InteractiveMode:
                 id=event.tool_call_id,
                 name=event.tool_name,
                 result=result_text,
+                content=event.result.content if event.result is not None else (),
                 is_error=is_error,
             )
 
@@ -800,6 +806,11 @@ class InteractiveMode:
             tool_call_id = event.get("id", "")
             name = event.get("name", "")
             arguments = event.get("arguments", {})
+            from xdog.coding.modes.interactive.tool_renderers import get_tool_renderer
+            renderer = get_tool_renderer(name)
+            custom = renderer("call", arguments) if renderer is not None else None
+            if custom is not None:
+                self._chat_log.add_child(custom)
             started_component = self._chat_log.add_tool(name, arguments)
             if tool_call_id:
                 self._tool_components[tool_call_id] = started_component
@@ -821,6 +832,9 @@ class InteractiveMode:
             tool_call_id = event.get("id", "")
             finished_component = self._tool_components.pop(tool_call_id, None)
             if finished_component is not None:
+                content = event.get("content", ())
+                if isinstance(content, tuple):
+                    finished_component.set_content(content)
                 finished_component.set_result(
                     event.get("result", ""),
                     is_error=event.get("is_error", False),

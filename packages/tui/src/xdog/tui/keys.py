@@ -437,26 +437,43 @@ def _parse_csi(buf: bytes, start: int, length: int) -> tuple[KeyEvent, int] | No
             if final == "u":
                 return _parse_kitty_u(params, consumed)
 
+            # xterm modifyOtherKeys: CSI 27;<modifiers>;<codepoint>~
+            if final == "~" and len(params) >= 3 and params[0] == "27":
+                try:
+                    codepoint = int(params[2])
+                except ValueError:
+                    return None
+                shift, alt, ctrl = _parse_modifiers(params[1])
+                key = decode_kitty_printable(codepoint)
+                if key:
+                    return KeyEvent(
+                        key=key,
+                        ctrl=ctrl,
+                        alt=alt,
+                        shift=shift,
+                    ), consumed
+                return None
+
             # Tilde sequences: CSI <n> ~
             if final == "~":
-                key = _CSI_TILDE.get(params[0]) if params else None
-                if key:
+                tilde_key = _CSI_TILDE.get(params[0]) if params else None
+                if tilde_key:
                     shift, alt, ctrl = False, False, False
                     event_type = KeyEventType.PRESS
                     if len(params) >= 2:
                         shift, alt, ctrl = _parse_modifiers(params[1])
-                    return KeyEvent(key=key, ctrl=ctrl, alt=alt, shift=shift, event_type=event_type), consumed
+                    return KeyEvent(key=tilde_key, ctrl=ctrl, alt=alt, shift=shift, event_type=event_type), consumed
                 return None
 
             # Arrow / home / end: CSI <modifier?> A/B/C/D/H/F
-            key = _CSI_SPECIAL.get(final)
-            if key:
+            special_key = _CSI_SPECIAL.get(final)
+            if special_key:
                 shift, alt, ctrl = False, False, False
                 if len(params) >= 2 and params[1]:
                     shift, alt, ctrl = _parse_modifiers(params[1])
                 elif len(params) >= 1 and params[0] == "1" and len(params) < 2:
                     pass  # CSI 1 A  -- just the key, no modifier
-                return KeyEvent(key=key, ctrl=ctrl, alt=alt, shift=shift), consumed
+                return KeyEvent(key=special_key, ctrl=ctrl, alt=alt, shift=shift), consumed
 
             # Backtab: CSI Z is Shift+Tab on legacy xterm-style terminals.
             if final == "Z":
@@ -511,16 +528,21 @@ def _parse_kitty_u(params: list[str], consumed: int) -> tuple[KeyEvent, int] | N
             except ValueError:
                 pass
 
-    # Resolve keycode to key name
-    key = decode_kitty_printable(keycode)
+    # Resolve keycode to key name. Kitty may supply shifted/base-layout
+    # alternatives as subparameters; prefer the shifted value when Shift is on.
+    resolved_code = keycode
+    if shift and len(keycode_parts) >= 2 and keycode_parts[1]:
+        try:
+            resolved_code = int(keycode_parts[1])
+        except ValueError:
+            pass
+    key = decode_kitty_printable(resolved_code)
     if not key:
         return None
 
-    # Normalize: if the key is a single char and shift is active, check case
-    if len(key) == 1 and key.isalpha():
-        if shift:
-            key = key.lower()  # Keep lowercase, shift flag conveys it
-        else:
-            key = key.lower()
+    # Legacy events without an alternate shifted codepoint keep lowercase plus
+    # the explicit shift flag.
+    if len(key) == 1 and key.isalpha() and shift and resolved_code == keycode:
+        key = key.lower()
 
     return KeyEvent(key=key, ctrl=ctrl, alt=alt, shift=shift, event_type=event_type), consumed

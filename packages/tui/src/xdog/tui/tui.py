@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -30,7 +31,8 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 from xdog.tui.keys import KeyEvent, is_key_release, parse_key_events
-from xdog.tui.stdin_buffer import StdinBuffer
+from xdog.tui.stdin_buffer import KeyBytes, Paste, StdinBuffer
+from xdog.tui.terminal_protocol import TerminalProtocol
 
 # ---------------------------------------------------------------------------
 # Focusable protocol and cursor marker
@@ -133,6 +135,10 @@ class Component(ABC):
         """Handle keyboard input. Return True if consumed."""
         return False
 
+    def handle_paste(self, text: str) -> bool:
+        """Handle an atomic bracketed-paste payload."""
+        return False
+
     def invalidate(self) -> None:
         """Clear cached rendering state."""
         pass
@@ -189,11 +195,20 @@ class OverlayHandle:
         self._entry = entry
 
     def hide(self) -> None:
-        """Permanently remove the overlay."""
+        """Permanently remove the overlay and restore its prior focus."""
         if self._entry in self._tui._overlay_stack:
+            was_focused = self._tui._focused is self._entry.component
             self._tui._overlay_stack.remove(self._entry)
+            if was_focused:
+                replacement = self._tui._get_topmost_visible_overlay()
+                self._tui.set_focus(
+                    replacement.component
+                    if replacement is not None
+                    else self._entry.previous_focus
+                )
             if not self._tui._overlay_stack:
                 sys.stdout.write("\x1b[?25l")  # Hide cursor
+            self._tui.request_render()
 
     def set_hidden(self, hidden: bool) -> None:
         """Temporarily hide or show the overlay."""
@@ -219,12 +234,18 @@ class OverlayHandle:
 class _OverlayEntry:
     """Internal overlay state."""
 
-    __slots__ = ("component", "options", "hidden")
+    __slots__ = ("component", "options", "hidden", "previous_focus")
 
-    def __init__(self, component: Component, options: OverlayOptions | None) -> None:
+    def __init__(
+        self,
+        component: Component,
+        options: OverlayOptions | None,
+        previous_focus: Component | None = None,
+    ) -> None:
         self.component = component
         self.options = options or OverlayOptions()
         self.hidden = False
+        self.previous_focus = previous_focus
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +260,9 @@ class TUI(Container):
     preserved.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, fullscreen: bool = False) -> None:
         super().__init__()
+        self.fullscreen = fullscreen
         self._previous_lines: list[str] = []
         self._previous_width: int = 0
         self._previous_height: int = 0
@@ -257,6 +279,15 @@ class TUI(Container):
         self._overlay_stack: list[_OverlayEntry] = []
         self._input_listeners: list[InputListener] = []
         self._full_redraw_counter: int = 0
+        self._suspend_requested = False
+
+    def _terminal_enter_sequence(self) -> str:
+        prefix = "\x1b[?1049h" if self.fullscreen else ""
+        return prefix + "\x1b[?7l\x1b[?25l\x1b[2J\x1b[H"
+
+    def _terminal_leave_sequence(self) -> str:
+        suffix = "\x1b[?1049l" if self.fullscreen else ""
+        return "\x1b[?7h\x1b[?25h" + suffix
 
     # -- overlay management --------------------------------------------------
 
@@ -266,7 +297,7 @@ class TUI(Container):
         options: OverlayOptions | None = None,
     ) -> OverlayHandle:
         """Show an overlay component on top of the main content."""
-        entry = _OverlayEntry(component, options)
+        entry = _OverlayEntry(component, options, self._focused)
         self._overlay_stack.append(entry)
         if not (options and options.non_capturing):
             self._focused = component
@@ -354,16 +385,24 @@ class TUI(Container):
 
     # -- main loop -----------------------------------------------------------
 
+    def suspend(self) -> bool:
+        """Request a controlled POSIX job-control suspend."""
+        if os.name == "nt" or not hasattr(signal, "SIGTSTP"):
+            return False
+        self._suspend_requested = True
+        self._running = False
+        return True
+
     def start(self) -> None:
         """Start the TUI main loop (blocking)."""
         self._running = True
         self._stopped = False
         stdin_buf = StdinBuffer()
+        protocol = TerminalProtocol()
         stdin_buf.enter_raw()
 
-        sys.stdout.write("\x1b[?7l")  # Disable linewrap
-        sys.stdout.write("\x1b[?25l")  # Hide cursor
-        sys.stdout.write("\x1b[2J\x1b[H")  # Clear screen
+        sys.stdout.write(protocol.startup())
+        sys.stdout.write(self._terminal_enter_sequence())
         sys.stdout.flush()
 
         frame_interval = 1.0 / self._frame_rate
@@ -377,15 +416,32 @@ class TUI(Container):
                 # Input
                 data = stdin_buf.read(timeout=frame_interval)
                 if data:
-                    events = parse_key_events(data)
-                    for event in events:
-                        # Filter key releases unless component wants them
-                        if is_key_release(event):
-                            if self._focused and getattr(self._focused, "wants_key_release", False):
-                                self._dispatch_input(event)
+                    data = protocol.filter_input(data)
+                    protocol_output = protocol.pending_output()
+                    if protocol_output:
+                        sys.stdout.write(protocol_output)
+                        sys.stdout.flush()
+                    consumed = False
+                    for frame in stdin_buf.feed(data):
+                        if isinstance(frame, Paste):
+                            consumed = self._dispatch_paste(frame.text) or consumed
                             continue
-                        self._dispatch_input(event)
-                    self._render_requested = True
+                        assert isinstance(frame, KeyBytes)
+                        for event in parse_key_events(frame.data):
+                            # Filter key releases unless component wants them.
+                            if is_key_release(event):
+                                if self._focused and getattr(self._focused, "wants_key_release", False):
+                                    consumed = self._dispatch_input(event) or consumed
+                                continue
+                            consumed = self._dispatch_input(event) or consumed
+                    if consumed:
+                        self._render_requested = True
+                else:
+                    for frame in stdin_buf.flush_expired():
+                        if isinstance(frame, KeyBytes):
+                            for event in parse_key_events(frame.data):
+                                if self._dispatch_input(event):
+                                    self._render_requested = True
 
                 # Detect terminal resize
                 cur_w = _terminal_width()
@@ -411,7 +467,10 @@ class TUI(Container):
                 if remaining > 0:
                     time.sleep(remaining)
         finally:
-            sys.stdout.write("\x1b[?7h\x1b[?25h")
+            suspended = self._suspend_requested
+            self._suspend_requested = False
+            sys.stdout.write(protocol.cleanup())
+            sys.stdout.write(self._terminal_leave_sequence())
             sys.stdout.flush()
 
             if self._previous_lines:
@@ -426,12 +485,30 @@ class TUI(Container):
             stdin_buf.restore()
             self._running = False
 
+        if suspended and os.name != "nt" and hasattr(signal, "SIGTSTP"):
+            os.killpg(os.getpgrp(), signal.SIGTSTP)
+            self._previous_width = 0
+            self._previous_height = 0
+            self.request_render(force=True)
+            self.start()
+
     def stop(self) -> None:
         """Signal the main loop to exit."""
         self._stopped = True
         self._running = False
 
     # -- input dispatch ------------------------------------------------------
+
+    def _dispatch_paste(self, text: str) -> bool:
+        overlay = self._get_topmost_visible_overlay()
+        if overlay is not None and overlay.component.handle_paste(text):
+            return True
+        if self._focused is not None and self._focused is not (
+            overlay.component if overlay is not None else None
+        ):
+            if self._focused.handle_paste(text):
+                return True
+        return self.handle_paste(text)
 
     def _dispatch_input(self, event: KeyEvent) -> bool:
         """Dispatch input and report whether a component consumed it."""

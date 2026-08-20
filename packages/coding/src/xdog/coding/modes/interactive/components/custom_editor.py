@@ -7,8 +7,9 @@ from typing import Callable
 from xdog.coding.core.slash_commands import list_commands
 from xdog.coding.modes.interactive.components.editor_layout import layout_editor
 from xdog.coding.modes.interactive.theme import Theme
+from xdog.tui.components.prompt_editor import PromptEditor
 from xdog.tui.keys import KeyEvent
-from xdog.tui.tui import CURSOR_MARKER, Component
+from xdog.tui.tui import CURSOR_MARKER
 from xdog.tui.utils import char_width
 
 _MAX_INPUT_ROWS = 8
@@ -118,20 +119,13 @@ class SlashSelectList:
         return lines
 
 
-class CustomEditorComponent(Component):
+class CustomEditorComponent(PromptEditor):
     """Input editor with borders, slash command autocomplete, and standard keybindings."""
 
     def __init__(self, theme: Theme) -> None:
+        super().__init__(command_provider=list_commands, max_rows=_MAX_INPUT_ROWS)
         self._theme = theme
-        self._value = ""
-        self._cursor = 0
-        self._history: list[str] = []
-        self._hist_idx = -1
-        self._hist_stash = ""
         self._select_list: SlashSelectList | None = None
-        self._render_width = 80
-        self._preferred_column: int | None = None
-        self._focused = False
 
         # Callbacks
         self.on_submit: Callable[[str], None] | None = None
@@ -222,6 +216,14 @@ class CustomEditorComponent(Component):
             lines.extend(self._select_list.render(width, t))
 
         return lines
+
+    def handle_paste(self, text: str) -> bool:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        self._value = self._value[:self._cursor] + normalized + self._value[self._cursor:]
+        self._cursor += len(normalized)
+        self._preferred_column = None
+        self._select_list = None
+        return True
 
     def handle_input(self, event: KeyEvent) -> bool:
         # Alt+Enter works in traditional terminals; Shift+Enter works when the

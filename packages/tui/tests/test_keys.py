@@ -1,4 +1,5 @@
 from xdog.tui.keys import (
+    KeyEvent,
     KeyEventType,
     is_key_release,
     is_key_repeat,
@@ -44,6 +45,11 @@ def test_backtab_csi_z():
     assert events[0].shift is True
     assert events[0].matches("shift+tab")
 
+def test_modify_other_keys_ctrl_enter():
+    events = parse_key_events(b"\x1b[27;5;13~")
+    assert events == [KeyEvent(key="enter", ctrl=True)]
+
+
 # ---------- Kitty keyboard protocol tests ----------
 
 
@@ -53,6 +59,11 @@ def test_kitty_simple_letter():
     assert len(events) == 1
     assert events[0].key == "a"
     assert events[0].event_type == KeyEventType.PRESS
+
+def test_kitty_shifted_alternate_codepoint():
+    events = parse_key_events(b"\x1b[97:65;2u")
+    assert events == [KeyEvent(key="A", shift=True)]
+
 
 def test_kitty_release_event():
     """CSI 97;1:3u  →  'a' key release (event type 3)."""

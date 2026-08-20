@@ -87,6 +87,7 @@ class ToolUpdated:
     tool_call_id: str
     name: str
     result: str
+    images: tuple[dict[str, str], ...] = ()
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -94,6 +95,7 @@ class ToolUpdated:
             "id": self.tool_call_id,
             "name": self.name,
             "result": display_result(self.result),
+            "images": list(self.images),
         }
 
 
@@ -103,6 +105,7 @@ class ToolFinished:
     name: str
     result: str
     is_error: bool
+    images: tuple[dict[str, str], ...] = ()
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -111,6 +114,7 @@ class ToolFinished:
             "name": self.name,
             "result": display_result(self.result),
             "is_error": self.is_error,
+            "images": list(self.images),
         }
 
 
